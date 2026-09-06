@@ -30,7 +30,7 @@ def parse_args():
         "-f",
         "--file",
         required=True,
-        help="Path to a current standard schema-3 benchmark JSON or console-text statistics file",
+        help="Path to a supported standard schema-3 benchmark JSON or console-text statistics file",
     )
     parser.add_argument(
         "--metric",
@@ -75,22 +75,24 @@ def resolve_input_path(raw_path: str) -> Path:
     raise RuntimeError(f"Input file not found: {raw_path}")
 
 
-def require_current_standard_result(data: object, source: str) -> dict:
-    """Require the complete standard schema emitted by the current producer."""
+def require_supported_standard_result(data: object, source: str) -> dict:
+    """Require the supported standard schema and methodology contract."""
     configuration = data.get("configuration") if isinstance(data, dict) else None
     if not (
         isinstance(configuration, dict)
-        and data.get("version") == "0.63.0"
+        and isinstance(data.get("version"), str)
+        and bool(data["version"])
         and configuration.get("mode") == "benchmark"
         and type(configuration.get("benchmark_schema_version")) is int
         and configuration["benchmark_schema_version"] == 3
+        and configuration.get("methodology_version") == "benchmark-v2-calibrated-seeded-balanced"
         and data.get("status") == "complete"
         and data.get("results_complete") is True
         and data.get("conclusions_valid") is True
         and isinstance(configuration.get("output_file"), str)
     ):
         raise RuntimeError(
-            f"{source} is not a complete current standard schema-3 benchmark result")
+            f"{source} is not a complete supported standard schema-3 benchmark result")
     return configuration
 
 
@@ -98,7 +100,7 @@ def pick_stat(metric_block: dict, metric: str, label: str) -> float:
     try:
         return float(metric_block["statistics"][metric])
     except (KeyError, TypeError, ValueError) as exc:
-        raise RuntimeError(f"Missing current '{metric}' statistic for '{label}'.") from exc
+        raise RuntimeError(f"Missing supported '{metric}' statistic for '{label}'.") from exc
 
 
 def infer_cpu_name_from_path(path: Path) -> str:
@@ -199,7 +201,7 @@ def load_latency_data(path: Path, metric: str):
     except json.JSONDecodeError:
         return parse_text_statistics(path, metric)
 
-    config = require_current_standard_result(data, str(path))
+    config = require_supported_standard_result(data, str(path))
     cpu_name = str(config.get("cpu_name", "Unknown CPU"))
     version = data["version"]
 
@@ -213,7 +215,7 @@ def load_latency_data(path: Path, metric: str):
     except (KeyError, TypeError) as exc:
         raise RuntimeError(
             "JSON is missing required fields for memory hierarchy plot. "
-            "Expected current standard schema-3 headline/locality fields."
+            "Expected supported standard schema-3 headline/locality fields."
         ) from exc
 
     categories = [

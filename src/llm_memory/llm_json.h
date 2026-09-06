@@ -51,6 +51,10 @@ struct LlmJsonPeakEstimate {
 
 /** Cold-path host and command metadata shared by every checkpoint snapshot. */
 struct LlmResultMetadata {
+  nlohmann::ordered_json build_manifest = {{"manifest_version", 1}, {"status", "unavailable"},
+      {"reason_code", "build-provenance-not-provided"}, {"binary_sha256", nullptr}, {"git_commit", nullptr},
+      {"git_dirty", nullptr}, {"compiler", nullptr}, {"compile_flags", nullptr}, {"link_flags", nullptr},
+      {"target_arch", nullptr}, {"sdk", nullptr}, {"min_os", nullptr}};
   std::string timestamp;
   std::string processor_name;
   std::string macos_version;

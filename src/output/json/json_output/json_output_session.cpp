@@ -118,7 +118,7 @@ int JsonOutputSession::checkpoint(
 
   try {
     const nlohmann::ordered_json payload = build_payload();
-    return write_json_to_file(target_.file_path, payload, announce_success);
+    return write_file(payload, announce_success);
   } catch (const std::exception& error) {
     report_payload_build_failure(target_.file_path, error.what());
   } catch (...) {
@@ -133,13 +133,20 @@ int JsonOutputSession::write_final(const nlohmann::ordered_json& payload,
     case JsonOutputKind::Disabled:
       return EXIT_SUCCESS;
     case JsonOutputKind::File:
-      return write_json_to_file(target_.file_path, payload, announce_success);
+      return write_file(payload, announce_success);
     case JsonOutputKind::Stdout:
       // A file-style save announcement is intentionally suppressed. Human
       // output already routes to stderr, while stdout remains JSON-only.
       return write_stdout(payload);
   }
   return EXIT_FAILURE;
+}
+
+int JsonOutputSession::write_file(const nlohmann::ordered_json& payload, bool announce_success) {
+  ++file_writer_attempts_;
+  const int status = write_json_to_file(target_.file_path, payload, announce_success);
+  if (status == EXIT_SUCCESS) ++successful_file_writes_;
+  return status;
 }
 
 int JsonOutputSession::write_stdout(

@@ -2,7 +2,7 @@
 # Copyright 2026 Timo Heimonen
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Entry-path tests for the bundled current-version script examples."""
+"""Entry-path tests for the bundled standard-memory script examples."""
 
 import csv
 import importlib.util
@@ -51,7 +51,7 @@ def load_plotter(path: Path, module_name: str):
 
 
 class PlotterEntryPathTest(unittest.TestCase):
-    def test_comparison_loader_accepts_current_full_result(self):
+    def test_comparison_loader_accepts_supported_full_result(self):
         with tempfile.TemporaryDirectory(prefix="script-example-plotter-") as temporary:
             _, script = copy_script(Path(temporary), "plot_M4vsM5_benchmark_comparison.py")
             plotter = load_plotter(script, "current_comparison_plotter")
@@ -63,7 +63,7 @@ class PlotterEntryPathTest(unittest.TestCase):
         self.assertAlmostEqual(result["l1_lat"], 1.1562554254729616)
         self.assertAlmostEqual(result["global_random"], 5.622018794239533)
 
-    def test_hierarchy_loader_accepts_current_full_result(self):
+    def test_hierarchy_loader_accepts_supported_full_result(self):
         with tempfile.TemporaryDirectory(prefix="script-example-plotter-") as temporary:
             _, script = copy_script(Path(temporary), "plot_benchmark-memory-latency-hierarchy.py")
             plotter = load_plotter(script, "current_hierarchy_plotter")
@@ -76,7 +76,7 @@ class PlotterEntryPathTest(unittest.TestCase):
         self.assertAlmostEqual(locality_delta, 0.6151600647670126)
         self.assertEqual(version, "0.63.0")
 
-    def test_hierarchy_loader_accepts_current_console_statistics(self):
+    def test_hierarchy_loader_accepts_supported_console_statistics(self):
         statistics = """\
 L1 Cache:
   Average: 1.25
@@ -103,35 +103,48 @@ Locality Latency Delta, Global - 16 KiB (ns):
         self.assertEqual(locality_delta, 25.25)
         self.assertIsNone(version)
 
-    def test_plotter_loaders_reject_noncurrent_results(self):
-        current = json.loads(CURRENT_FULL_FIXTURE.read_text(encoding="utf-8"))
-        wrong_schema = json.loads(json.dumps(current))
+    def test_plotter_loaders_enforce_supported_contract(self):
+        supported = json.loads(CURRENT_FULL_FIXTURE.read_text(encoding="utf-8"))
+        other_version = json.loads(json.dumps(supported))
+        other_version["version"] = "0.64.0"
+        wrong_schema = json.loads(json.dumps(supported))
         wrong_schema["configuration"]["benchmark_schema_version"] = 2
-        wrong_version = json.loads(json.dumps(current))
-        wrong_version["version"] = "0.61.0"
+        wrong_methodology = json.loads(json.dumps(supported))
+        wrong_methodology["configuration"]["methodology_version"] = "benchmark-v1"
+        wrong_shape = json.loads(json.dumps(supported))
+        wrong_shape["configuration"]["output_file"] = None
+        missing_provenance = json.loads(json.dumps(supported))
+        missing_provenance["version"] = ""
 
-        with tempfile.TemporaryDirectory(prefix="script-example-wrong-schema-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="script-example-contract-") as temporary:
             root = Path(temporary)
-            inputs = {
+            accepted_path = root / "other-version.json"
+            accepted_path.write_text(json.dumps(other_version), encoding="utf-8")
+            incompatible_inputs = {
                 "schema 2": wrong_schema,
-                "version 0.61.0": wrong_version,
+                "methodology benchmark-v1": wrong_methodology,
+                "non-string output_file": wrong_shape,
+                "empty provenance version": missing_provenance,
             }
             loaders = (
-                ("plot_M4vsM5_benchmark_comparison.py", "wrong_schema_comparison", "load_data"),
+                ("plot_M4vsM5_benchmark_comparison.py", "contract_comparison", "load_data"),
                 (
                     "plot_benchmark-memory-latency-hierarchy.py",
-                    "wrong_schema_hierarchy",
+                    "contract_hierarchy",
                     "load_latency_data",
                 ),
             )
             for filename, module_name, loader_name in loaders:
                 _, script = copy_script(root / module_name, filename)
                 plotter = load_plotter(script, module_name)
-                for name, data in inputs.items():
+                accepted = getattr(plotter, loader_name)(accepted_path, "average")
+                accepted_version = accepted["version"] if isinstance(accepted, dict) else accepted[-1]
+                self.assertEqual(accepted_version, "0.64.0")
+                for name, data in incompatible_inputs.items():
                     input_path = root / f"{module_name}-{name.replace(' ', '-')}.json"
                     input_path.write_text(json.dumps(data), encoding="utf-8")
                     with self.subTest(plotter=filename, input=name):
-                        with self.assertRaisesRegex(RuntimeError, "complete current standard schema-3"):
+                        with self.assertRaisesRegex(RuntimeError, "complete supported standard schema-3"):
                             getattr(plotter, loader_name)(input_path, "average")
 
 
@@ -210,7 +223,7 @@ fi
             )
 
     @unittest.skipUnless(shutil.which("jq"), "jq is optional and is not installed")
-    def test_latency_workflow_accepts_current_result_with_jq(self):
+    def test_latency_workflow_accepts_supported_result_with_jq(self):
         with tempfile.TemporaryDirectory(prefix="script-example-latency-jq-") as temporary:
             script_dir, completed = self.run_workflow(
                 Path(temporary), "latency_test_script.sh", CURRENT_CUSTOM_FIXTURE
@@ -222,7 +235,7 @@ fi
         self.assertEqual(final_output.count("TLB Locality:"), 120)
         self.assertIn('"average": 0.6893617567937856', final_output)
 
-    def test_latency_workflow_accepts_current_result_with_python(self):
+    def test_latency_workflow_accepts_supported_result_with_python(self):
         with tempfile.TemporaryDirectory(prefix="script-example-latency-python-") as temporary:
             script_dir, completed = self.run_workflow(
                 Path(temporary),
@@ -237,7 +250,7 @@ fi
         self.assertEqual(final_output.count("TLB Locality:"), 120)
         self.assertIn('"average": 0.6893617567937856', final_output)
 
-    def test_stride_tlb_workflow_accepts_current_result(self):
+    def test_stride_tlb_workflow_accepts_supported_result(self):
         with tempfile.TemporaryDirectory(prefix="script-example-stride-tlb-") as temporary:
             script_dir, completed = self.run_workflow(
                 Path(temporary), "latency_test_script_stride_tlb.sh", CURRENT_CUSTOM_FIXTURE
@@ -255,19 +268,19 @@ fi
         self.assertEqual(rows[0]["average"], "0.6893617567937856")
         self.assertEqual(rows[0]["chain_node_count"], "64")
 
-    def test_shell_workflows_do_not_extract_metrics_from_noncurrent_results(self):
-        current = json.loads(CURRENT_CUSTOM_FIXTURE.read_text(encoding="utf-8"))
-        wrong_schema_data = json.loads(json.dumps(current))
+    def test_shell_workflows_reject_incompatible_contracts(self):
+        supported = json.loads(CURRENT_CUSTOM_FIXTURE.read_text(encoding="utf-8"))
+        wrong_schema_data = json.loads(json.dumps(supported))
         wrong_schema_data["configuration"]["benchmark_schema_version"] = 2
-        wrong_version_data = json.loads(json.dumps(current))
-        wrong_version_data["version"] = "0.61.0"
+        wrong_methodology_data = json.loads(json.dumps(supported))
+        wrong_methodology_data["configuration"]["methodology_version"] = "benchmark-v1"
 
-        with tempfile.TemporaryDirectory(prefix="script-example-shell-wrong-schema-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="script-example-shell-contract-") as temporary:
             root = Path(temporary)
             wrong_schema = root / "wrong-schema.json"
             wrong_schema.write_text(json.dumps(wrong_schema_data), encoding="utf-8")
-            wrong_version = root / "wrong-version.json"
-            wrong_version.write_text(json.dumps(wrong_version_data), encoding="utf-8")
+            wrong_methodology = root / "wrong-methodology.json"
+            wrong_methodology.write_text(json.dumps(wrong_methodology_data), encoding="utf-8")
 
             latency_dir, latency = self.run_workflow(
                 root / "latency",
@@ -278,7 +291,7 @@ fi
             final_output = (latency_dir / "final_output.txt").read_text(encoding="utf-8")
 
             stride_dir, stride = self.run_workflow(
-                root / "stride", "latency_test_script_stride_tlb.sh", wrong_version
+                root / "stride", "latency_test_script_stride_tlb.sh", wrong_methodology
             )
             summaries = {
                 path.resolve()

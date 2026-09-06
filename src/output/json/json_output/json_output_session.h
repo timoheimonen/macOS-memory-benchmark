@@ -112,6 +112,12 @@ class JsonOutputSession {
   /** @return `true` only when logical checkpoints must be written to a file. */
   bool persists_checkpoints() const noexcept;
 
+  /** Completed host observations, read before preparing the next document.
+   * File writer entry is counted after payload construction. A successful
+   * no-op or stdout write does not increment either file counter. Single owner. */
+  size_t file_writer_attempts() const noexcept { return file_writer_attempts_; }
+  size_t successful_file_writes() const noexcept { return successful_file_writes_; }
+
   /**
    * Offer one logical checkpoint to the selected transport.
    *
@@ -150,6 +156,10 @@ class JsonOutputSession {
                   bool announce_success = true);
 
  private:
+  int write_file(const nlohmann::ordered_json& payload, bool announce_success);
+  size_t file_writer_attempts_ = 0;
+  size_t successful_file_writes_ = 0;
+
   int write_stdout(const nlohmann::ordered_json& payload) noexcept;
 
   JsonOutputTarget target_;

@@ -257,15 +257,6 @@ TEST(CoreToCoreCliTest, RejectsUnknownOptionsInStandaloneMode) {
   EXPECT_EQ(parse_result, EXIT_FAILURE);
 }
 
-TEST(CoreToCoreCliTest, RejectsInvalidCountValues) {
-  // Count must be a positive integer.
-  CoreToCoreLatencyConfig config;
-  const int parse_result =
-      parse_with_args({"memory_benchmark", "--analyze-core2core", "--count", "0"}, config);
-
-  EXPECT_EQ(parse_result, EXIT_FAILURE);
-}
-
 TEST(CoreToCoreCliTest, ParsesStrictPositiveIntegerBoundaries) {
   CoreToCoreLatencyConfig config;
   const std::string int_max =

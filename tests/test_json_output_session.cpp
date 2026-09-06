@@ -467,3 +467,40 @@ TEST(JsonOutputSessionTest, FileCheckpointBuilderExceptionIsContained) {
                   "injected builder exception")) +
           "\n");
 }
+
+TEST(JsonOutputSessionTest, FileObservationsCountWriterEntryAfterBuilderAndOnlySuccessfulReturns) {
+  TemporaryDirectory temporary("writer_observations");
+  JsonOutputSession session(make_json_output_target((temporary.path() / "result.json").string()));
+  EXPECT_EQ(session.file_writer_attempts(), 0u);
+  EXPECT_EQ(session.successful_file_writes(), 0u);
+  EXPECT_EQ(session.checkpoint([]() -> nlohmann::ordered_json { throw std::runtime_error("builder failure"); }),
+            EXIT_FAILURE);
+  EXPECT_EQ(session.file_writer_attempts(), 0u);
+  EXPECT_EQ(session.successful_file_writes(), 0u);
+  EXPECT_EQ(session.checkpoint([&]() {
+    EXPECT_EQ(session.file_writer_attempts(), 0u);
+    return nlohmann::ordered_json{{"prior_attempts", session.file_writer_attempts()},
+                                  {"prior_successes", session.successful_file_writes()}};
+  }), EXIT_SUCCESS);
+  EXPECT_EQ(session.file_writer_attempts(), 1u);
+  EXPECT_EQ(session.successful_file_writes(), 1u);
+  std::ifstream input(temporary.path() / "result.json");
+  const auto document = nlohmann::ordered_json::parse(input);
+  EXPECT_EQ(document["prior_attempts"], 0);
+  EXPECT_EQ(document["prior_successes"], 0);
+  JsonOutputSession failing(make_json_output_target(temporary.path().string()));
+  EXPECT_EQ(failing.checkpoint([]() { return nlohmann::ordered_json::object(); }), EXIT_FAILURE);
+  EXPECT_EQ(failing.file_writer_attempts(), 1u);
+  EXPECT_EQ(failing.successful_file_writes(), 0u);
+}
+
+TEST(JsonOutputSessionTest, DisabledAndStdoutNoOpsNeverReportFilePersistence) {
+  for (const std::string& target : {std::string{}, std::string{"-"}}) {
+    JsonOutputSession session(make_json_output_target(target));
+    size_t builders = 0;
+    EXPECT_EQ(session.checkpoint([&]() { ++builders; return nlohmann::ordered_json::object(); }), EXIT_SUCCESS);
+    EXPECT_EQ(builders, 0u);
+    EXPECT_EQ(session.file_writer_attempts(), 0u);
+    EXPECT_EQ(session.successful_file_writes(), 0u);
+  }
+}

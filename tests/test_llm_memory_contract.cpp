@@ -26,7 +26,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -53,73 +52,15 @@ constexpr size_t kCanonicalSegmentSlotsPerPool = 256;
 constexpr uint64_t kCanonicalPoolCapacityBytes =
     kCanonicalSegmentCapacityBytes * kCanonicalSegmentSlotsPerPool;
 
-enum class ContractBackend {
-  Cpu,
-  Metal,
-};
-
-enum class ContractPhase {
-  Decode,
-  Prefill,
-};
-
 enum class ContractKvLayout {
   Contiguous,
   Paged,
-};
-
-enum class ContractWorkUnitKind {
-  DecodeStep,
-  PrefillOperation,
-};
-
-enum class ContractKvWriteKind {
-  None,
-  CurrentTokenAppend,
-  FullPromptPopulation,
 };
 
 enum class ContractScenario {
   WeightsOnly,
   KvOnly,
   Mixed,
-};
-
-enum class ContractRunStatus {
-  NotStarted,
-  Complete,
-  Partial,
-  Interrupted,
-  Unsupported,
-  Failed,
-};
-
-enum class ContractMeasurementStatus {
-  NotRun,
-  Measured,
-  Interrupted,
-  Invalid,
-  Failed,
-};
-
-enum class SchemaValueKind {
-  Integer,
-  IntegerOrNull,
-  DecimalString,
-  DecimalStringOrNull,
-  Boolean,
-  String,
-  StringOrNull,
-  FiniteNumberOrNull,
-  Object,
-  ObjectOrNull,
-  Array,
-};
-
-struct SchemaFieldContract {
-  std::string_view section;
-  std::string_view name;
-  SchemaValueKind kind;
 };
 
 struct PrefillPayloadContract {
@@ -180,14 +121,6 @@ struct ComponentIdentityContract {
   std::optional<std::string_view> msl_source_sha256;
 };
 
-struct ProfileActivationContract {
-  ContractBackend backend;
-  ContractPhase phase;
-  ContractKvLayout layout;
-  std::optional<int> activation_phase;
-  bool preexisting_at_phase_zero;
-};
-
 struct ScenarioAccountingContract {
   uint64_t model_payload_bytes = 0;
   uint64_t layout_metadata_lookups = 0;
@@ -226,15 +159,6 @@ struct RunChecksum {
   uint64_t state_b = kRunInitialB;
 };
 
-struct PreExpansionDecodeIdentity {
-  std::string_view mode;
-  std::string_view backend;
-  int schema_version;
-  std::string_view methodology;
-  std::string_view descriptor_abi;
-  std::string_view append_identity;
-  std::string_view checksum_identity;
-};
 
 struct GenericResultIdentity {
   std::string_view mode;
@@ -248,7 +172,7 @@ struct GenericResultIdentity {
   std::string_view methodology_version;
   std::string_view status;
   bool results_complete;
-  bool conclusions_valid;
+  bool run_accepted;
   bool all_planned_measurements_measured;
 };
 
@@ -279,156 +203,6 @@ PayloadContract resolve_payload_contract(uint64_t weight_bytes,
   result.kv_only_total = result.kv_only_per_step * steps;
   result.mixed_total = result.mixed_per_step * steps;
   return result;
-}
-
-std::string_view contract_token(ContractBackend backend) {
-  switch (backend) {
-    case ContractBackend::Cpu:
-      return "cpu";
-    case ContractBackend::Metal:
-      return "metal";
-  }
-  return {};
-}
-
-std::string_view contract_token(ContractPhase phase) {
-  switch (phase) {
-    case ContractPhase::Decode:
-      return "decode";
-    case ContractPhase::Prefill:
-      return "prefill";
-  }
-  return {};
-}
-
-std::string_view contract_token(ContractKvLayout layout) {
-  switch (layout) {
-    case ContractKvLayout::Contiguous:
-      return "contiguous";
-    case ContractKvLayout::Paged:
-      return "paged";
-  }
-  return {};
-}
-
-std::string_view contract_token(ContractWorkUnitKind kind) {
-  switch (kind) {
-    case ContractWorkUnitKind::DecodeStep:
-      return "decode_step";
-    case ContractWorkUnitKind::PrefillOperation:
-      return "prefill_operation";
-  }
-  return {};
-}
-
-std::string_view contract_token(ContractKvWriteKind kind) {
-  switch (kind) {
-    case ContractKvWriteKind::None:
-      return "none";
-    case ContractKvWriteKind::CurrentTokenAppend:
-      return "current_token_append";
-    case ContractKvWriteKind::FullPromptPopulation:
-      return "full_prompt_population";
-  }
-  return {};
-}
-
-std::string_view contract_token(ContractScenario scenario) {
-  switch (scenario) {
-    case ContractScenario::WeightsOnly:
-      return "weights_only";
-    case ContractScenario::KvOnly:
-      return "kv_only";
-    case ContractScenario::Mixed:
-      return "mixed";
-  }
-  return {};
-}
-
-std::string_view contract_token(ContractRunStatus status) {
-  switch (status) {
-    case ContractRunStatus::NotStarted:
-      return "not_started";
-    case ContractRunStatus::Complete:
-      return "complete";
-    case ContractRunStatus::Partial:
-      return "partial";
-    case ContractRunStatus::Interrupted:
-      return "interrupted";
-    case ContractRunStatus::Unsupported:
-      return "unsupported";
-    case ContractRunStatus::Failed:
-      return "failed";
-  }
-  return {};
-}
-
-std::string_view contract_token(ContractMeasurementStatus status) {
-  switch (status) {
-    case ContractMeasurementStatus::NotRun:
-      return "not_run";
-    case ContractMeasurementStatus::Measured:
-      return "measured";
-    case ContractMeasurementStatus::Interrupted:
-      return "interrupted";
-    case ContractMeasurementStatus::Invalid:
-      return "invalid";
-    case ContractMeasurementStatus::Failed:
-      return "failed";
-  }
-  return {};
-}
-
-std::string_view schema_kind_token(SchemaValueKind kind) {
-  switch (kind) {
-    case SchemaValueKind::Integer:
-      return "integer";
-    case SchemaValueKind::IntegerOrNull:
-      return "integer_or_null";
-    case SchemaValueKind::DecimalString:
-      return "decimal_string";
-    case SchemaValueKind::DecimalStringOrNull:
-      return "decimal_string_or_null";
-    case SchemaValueKind::Boolean:
-      return "boolean";
-    case SchemaValueKind::String:
-      return "string";
-    case SchemaValueKind::StringOrNull:
-      return "string_or_null";
-    case SchemaValueKind::FiniteNumberOrNull:
-      return "finite_number_or_null";
-    case SchemaValueKind::Object:
-      return "object";
-    case SchemaValueKind::ObjectOrNull:
-      return "object_or_null";
-    case SchemaValueKind::Array:
-      return "array";
-  }
-  return {};
-}
-
-std::string methodology_token(ContractBackend backend,
-                              ContractPhase phase,
-                              ContractKvLayout layout) {
-  return "llm-memory-v1-" + std::string(contract_token(backend)) + "-" +
-         std::string(contract_token(phase)) + "-" +
-         std::string(contract_token(layout));
-}
-
-ContractWorkUnitKind work_unit_kind_for_phase(ContractPhase phase) {
-  return phase == ContractPhase::Decode
-             ? ContractWorkUnitKind::DecodeStep
-             : ContractWorkUnitKind::PrefillOperation;
-}
-
-ContractKvWriteKind kv_write_kind_for(ContractPhase phase,
-                                      ContractScenario scenario) {
-  if (scenario == ContractScenario::WeightsOnly) {
-    return ContractKvWriteKind::None;
-  }
-  return phase == ContractPhase::Decode
-             ? ContractKvWriteKind::CurrentTokenAppend
-             : ContractKvWriteKind::FullPromptPopulation;
 }
 
 uint64_t ceil_divide_small(uint64_t value, uint64_t divisor) {
@@ -757,37 +531,6 @@ std::string sha256_little_endian_entries(
   return encoded;
 }
 
-std::string sha256_text(std::string_view input) {
-  CC_SHA256_CTX context;
-  if (CC_SHA256_Init(&context) != 1) {
-    return {};
-  }
-  constexpr size_t kBytesPerUpdateCap = 4096;
-  size_t offset = 0;
-  while (offset < input.size()) {
-    const size_t byte_count =
-        std::min(kBytesPerUpdateCap, input.size() - offset);
-    if (CC_SHA256_Update(&context, input.data() + offset,
-                         static_cast<CC_LONG>(byte_count)) != 1) {
-      return {};
-    }
-    offset += byte_count;
-  }
-
-  std::array<unsigned char, CC_SHA256_DIGEST_LENGTH> digest{};
-  if (CC_SHA256_Final(digest.data(), &context) != 1) {
-    return {};
-  }
-  constexpr char kLowercaseHex[] = "0123456789abcdef";
-  std::string encoded(digest.size() * 2, '0');
-  for (size_t index = 0; index < digest.size(); ++index) {
-    encoded[index * 2] = kLowercaseHex[digest[index] >> 4U];
-    encoded[index * 2 + 1] =
-        kLowercaseHex[digest[index] & 0x0fU];
-  }
-  return encoded;
-}
-
 std::vector<uint64_t> contiguous_segment_lengths(uint64_t logical_bytes) {
   std::vector<uint64_t> lengths;
   uint64_t remaining = logical_bytes;
@@ -862,204 +605,6 @@ std::string serialize_component_identity(
   append_identity_component(identity, "msl_source_sha256",
                             components.msl_source_sha256);
   return identity;
-}
-
-std::vector<SchemaFieldContract> minimum_generic_schema_v1_vocabulary() {
-  return {
-      {"top_level", "schema_version", SchemaValueKind::Integer},
-      {"top_level", "mode", SchemaValueKind::String},
-      {"top_level", "backend", SchemaValueKind::String},
-      {"top_level", "phase", SchemaValueKind::String},
-      {"top_level", "kv_layout", SchemaValueKind::String},
-      {"top_level", "methodology_version", SchemaValueKind::String},
-      {"top_level", "software", SchemaValueKind::Object},
-      {"top_level", "configuration", SchemaValueKind::Object},
-      {"top_level", "resolved_plan", SchemaValueKind::Object},
-      {"top_level", "backend_evidence", SchemaValueKind::Object},
-      {"top_level", "memory_budget", SchemaValueKind::Object},
-      {"top_level", "calibration", SchemaValueKind::Object},
-      {"top_level", "measurements", SchemaValueKind::Array},
-      {"top_level", "aggregates", SchemaValueKind::Object},
-      {"top_level", "status", SchemaValueKind::String},
-      {"top_level", "reason_code", SchemaValueKind::String},
-      {"top_level", "results_complete", SchemaValueKind::Boolean},
-      {"top_level", "conclusions_valid", SchemaValueKind::Boolean},
-      {"top_level", "interpretation", SchemaValueKind::Object},
-
-      {"configuration", "argv", SchemaValueKind::Array},
-      {"configuration", "resolved_sources", SchemaValueKind::Object},
-
-      {"resolved_plan", "geometry", SchemaValueKind::Object},
-      {"resolved_plan", "layout", SchemaValueKind::Object},
-      {"resolved_plan", "resources", SchemaValueKind::Object},
-      {"resolved_plan", "component_identities", SchemaValueKind::Object},
-      {"resolved_plan.geometry", "decode", SchemaValueKind::ObjectOrNull},
-      {"resolved_plan.geometry", "prefill", SchemaValueKind::ObjectOrNull},
-
-      {"resolved_plan.geometry.decode", "visible_context_tokens",
-       SchemaValueKind::Integer},
-      {"resolved_plan.geometry.prefill", "prompt_tokens",
-       SchemaValueKind::Integer},
-      {"resolved_plan.geometry.prefill", "attention_query_tile_tokens",
-       SchemaValueKind::Integer},
-      {"resolved_plan.geometry.prefill", "tile_count",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.geometry.prefill",
-       "attention_prefix_token_visits_per_sequence",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.geometry.prefill", "causal_token_pairs_per_sequence",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.geometry.prefill", "logical_attention_pairs",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.geometry.prefill", "logical_attention_fma_terms",
-       SchemaValueKind::DecimalString},
-
-      {"resolved_plan.layout", "kv_layout", SchemaValueKind::String},
-      {"resolved_plan.layout", "kv_block_tokens",
-       SchemaValueKind::IntegerOrNull},
-      {"resolved_plan.layout", "blocks_per_sequence",
-       SchemaValueKind::DecimalStringOrNull},
-      {"resolved_plan.layout", "physical_blocks_per_layer",
-       SchemaValueKind::DecimalStringOrNull},
-      {"resolved_plan.layout", "last_block_tokens",
-       SchemaValueKind::DecimalStringOrNull},
-      {"resolved_plan.layout", "last_block_valid_bytes",
-       SchemaValueKind::DecimalStringOrNull},
-      {"resolved_plan.layout", "block_table_entries",
-       SchemaValueKind::DecimalStringOrNull},
-      {"resolved_plan.layout", "block_table_bytes",
-       SchemaValueKind::DecimalStringOrNull},
-      {"resolved_plan.layout", "permutation_domain_uint64_hex",
-       SchemaValueKind::StringOrNull},
-      {"resolved_plan.layout", "permutation_seed_uint64_decimal",
-       SchemaValueKind::DecimalStringOrNull},
-      {"resolved_plan.layout", "permutation_algorithm_version",
-       SchemaValueKind::StringOrNull},
-      {"resolved_plan.layout", "permutation_sha256",
-       SchemaValueKind::StringOrNull},
-
-      {"resolved_plan.resources", "weight_logical_bytes",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.resources", "k_logical_bytes",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.resources", "v_logical_bytes",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.resources", "k_physical_length_bytes",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.resources", "v_physical_length_bytes",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.resources", "k_layout_padding_bytes",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.resources", "v_layout_padding_bytes",
-       SchemaValueKind::DecimalString},
-      {"resolved_plan.resources", "block_table_bytes",
-       SchemaValueKind::DecimalStringOrNull},
-
-      {"memory_budget", "resource_rounding_bytes",
-       SchemaValueKind::DecimalString},
-      {"memory_budget", "transient_peak_bytes",
-       SchemaValueKind::DecimalString},
-      {"memory_budget", "known_owned_peak_bytes",
-       SchemaValueKind::DecimalString},
-      {"memory_budget", "admitted_budget_bytes",
-       SchemaValueKind::DecimalString},
-
-      {"resolved_plan.component_identities", "logical_profile_version",
-       SchemaValueKind::String},
-      {"resolved_plan.component_identities", "kv_layout_version",
-       SchemaValueKind::String},
-      {"resolved_plan.component_identities", "permutation_version",
-       SchemaValueKind::StringOrNull},
-      {"resolved_plan.component_identities", "backend_executor_version",
-       SchemaValueKind::String},
-      {"resolved_plan.component_identities", "resource_abi_version",
-       SchemaValueKind::String},
-      {"resolved_plan.component_identities", "schedule_version",
-       SchemaValueKind::String},
-      {"resolved_plan.component_identities", "timer_policy_version",
-       SchemaValueKind::String},
-      {"resolved_plan.component_identities", "buffer_pattern_version",
-       SchemaValueKind::String},
-      {"resolved_plan.component_identities", "write_pattern_version",
-       SchemaValueKind::String},
-      {"resolved_plan.component_identities", "checksum_pattern_version",
-       SchemaValueKind::String},
-      {"resolved_plan.component_identities", "msl_revision",
-       SchemaValueKind::StringOrNull},
-      {"resolved_plan.component_identities", "msl_source_sha256",
-       SchemaValueKind::StringOrNull},
-
-      {"measurements.*", "work_unit_kind", SchemaValueKind::String},
-      {"measurements.*", "planned_work_units", SchemaValueKind::Integer},
-      {"measurements.*", "completed_work_units",
-       SchemaValueKind::Integer},
-      {"measurements.*", "weight_read_bytes_per_work_unit",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "kv_read_bytes_per_work_unit",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "kv_write_bytes_per_work_unit",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "kv_write_kind", SchemaValueKind::String},
-      {"measurements.*", "effective_model_payload_bytes_per_work_unit",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "layout_metadata_lookup_count_per_work_unit",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "layout_metadata_read_bytes_per_work_unit",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "accounted_bytes_per_work_unit",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "planned_effective_model_payload_bytes",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "completed_effective_model_payload_bytes",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "planned_layout_metadata_lookup_count",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "completed_layout_metadata_lookup_count",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "planned_layout_metadata_read_bytes",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "completed_layout_metadata_read_bytes",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "planned_task_accounted_bytes",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "completed_task_accounted_bytes",
-       SchemaValueKind::DecimalString},
-      {"measurements.*", "synthetic_work_unit_latency_seconds",
-       SchemaValueKind::FiniteNumberOrNull},
-      {"measurements.*", "synthetic_memory_work_units_per_second",
-       SchemaValueKind::FiniteNumberOrNull},
-      {"measurements.*", "effective_model_payload_gb_s",
-       SchemaValueKind::FiniteNumberOrNull},
-
-      {"backend_evidence", "cpu", SchemaValueKind::ObjectOrNull},
-      {"backend_evidence", "metal", SchemaValueKind::ObjectOrNull},
-  };
-}
-
-std::string serialize_schema_vocabulary(
-    const std::vector<SchemaFieldContract>& vocabulary) {
-  std::string result = "llm-memory-schema-v1";
-  for (const SchemaFieldContract& field : vocabulary) {
-    result += '|';
-    result += field.section;
-    result += '.';
-    result += field.name;
-    result += ':';
-    result += schema_kind_token(field.kind);
-  }
-  return result;
-}
-
-const SchemaFieldContract* find_schema_field(
-    const std::vector<SchemaFieldContract>& vocabulary,
-    std::string_view section,
-    std::string_view name) {
-  const auto found = std::find_if(
-      vocabulary.begin(), vocabulary.end(),
-      [section, name](const SchemaFieldContract& field) {
-        return field.section == section && field.name == name;
-      });
-  return found == vocabulary.end() ? nullptr : &*found;
 }
 
 uint64_t rotate_left(uint64_t value, unsigned int shift) {
@@ -1182,48 +727,6 @@ RunChecksum fold_components(
   return run;
 }
 
-struct alignas(16) LayerDescriptorAbiV1 {
-  const uint8_t* weight_ptr;
-  uint64_t weight_bytes;
-  uint64_t first_sequence_index;
-  uint64_t sequence_count;
-  uint64_t layer_index;
-  uint64_t reserved_zero;
-};
-
-struct alignas(16) KvSequenceDescriptorAbiV1 {
-  const uint8_t* k_visible_ptr;
-  uint64_t k_visible_bytes;
-  const uint8_t* v_visible_ptr;
-  uint64_t v_visible_bytes;
-  uint8_t* k_append_ptr;
-  uint64_t k_append_bytes;
-  uint8_t* v_append_ptr;
-  uint64_t v_append_bytes;
-  uint64_t batch_sequence_index;
-  uint64_t append_record_byte_offset;
-};
-
-bool matches_pre_expansion_decode_identity(
-    const PreExpansionDecodeIdentity& identity) {
-  return identity.mode == "llm_memory" && identity.backend == "cpu" &&
-         identity.schema_version == 1 &&
-         identity.methodology ==
-             "llm-memory-v1-cpu-fixed-context-warm-layer-interleaved" &&
-         identity.descriptor_abi == "llm-memory-descriptor-abi-v1" &&
-         identity.append_identity == "llm-kv-append-affine64-v1" &&
-         identity.checksum_identity == "llm-read-checksum-v1";
-}
-
-bool accepted_pre_expansion_completion(std::string_view mode,
-                                       int schema_version,
-                                       std::string_view status,
-                                       bool results_complete,
-                                       bool conclusions_valid) {
-  return mode == "llm_memory" && schema_version == 1 &&
-         status == "complete" && results_complete && conclusions_valid;
-}
-
 bool accepted_generic_result(const GenericResultIdentity& identity) {
   const bool backend_is_known =
       identity.backend == "cpu" || identity.backend == "metal";
@@ -1232,16 +735,16 @@ bool accepted_generic_result(const GenericResultIdentity& identity) {
   const bool layout_is_known = identity.kv_layout == "contiguous" ||
                                identity.kv_layout == "paged";
   const std::string expected_methodology =
-      "llm-memory-v1-" + std::string(identity.backend) + "-" +
+      "llm-memory-v2-" + std::string(identity.backend) + "-" +
       std::string(identity.phase) + "-" + std::string(identity.kv_layout);
-  return identity.mode == "llm_memory" && identity.schema_version == 1 &&
+  return identity.mode == "llm_memory" && identity.schema_version == 2 &&
          backend_is_known && phase_is_known && layout_is_known &&
          identity.backend == identity.requested_backend &&
          identity.phase == identity.requested_phase &&
          identity.kv_layout == identity.requested_kv_layout &&
          identity.methodology_version == expected_methodology &&
          identity.status == "complete" && identity.results_complete &&
-         identity.conclusions_valid &&
+         identity.run_accepted &&
          identity.all_planned_measurements_measured;
 }
 
@@ -1421,96 +924,17 @@ TEST(LlmMemoryContractTest,
   EXPECT_NE(wrong_order.state_b, folded.state_b);
 }
 
-TEST(LlmMemoryContractTest, DescriptorAbiLayoutGolden) {
-  static_assert(sizeof(void*) == 8, "LLM descriptor ABI requires ARM64 pointers");
-  static_assert(std::is_standard_layout_v<LayerDescriptorAbiV1>);
-  static_assert(std::is_standard_layout_v<KvSequenceDescriptorAbiV1>);
-
-  EXPECT_EQ(alignof(LayerDescriptorAbiV1), 16u);
-  EXPECT_EQ(sizeof(LayerDescriptorAbiV1), 48u);
-  EXPECT_EQ(offsetof(LayerDescriptorAbiV1, weight_ptr), 0u);
-  EXPECT_EQ(offsetof(LayerDescriptorAbiV1, weight_bytes), 8u);
-  EXPECT_EQ(offsetof(LayerDescriptorAbiV1, first_sequence_index), 16u);
-  EXPECT_EQ(offsetof(LayerDescriptorAbiV1, sequence_count), 24u);
-  EXPECT_EQ(offsetof(LayerDescriptorAbiV1, layer_index), 32u);
-  EXPECT_EQ(offsetof(LayerDescriptorAbiV1, reserved_zero), 40u);
-
-  EXPECT_EQ(alignof(KvSequenceDescriptorAbiV1), 16u);
-  EXPECT_EQ(sizeof(KvSequenceDescriptorAbiV1), 80u);
-  EXPECT_EQ(offsetof(KvSequenceDescriptorAbiV1, k_visible_ptr), 0u);
-  EXPECT_EQ(offsetof(KvSequenceDescriptorAbiV1, k_visible_bytes), 8u);
-  EXPECT_EQ(offsetof(KvSequenceDescriptorAbiV1, v_visible_ptr), 16u);
-  EXPECT_EQ(offsetof(KvSequenceDescriptorAbiV1, v_visible_bytes), 24u);
-  EXPECT_EQ(offsetof(KvSequenceDescriptorAbiV1, k_append_ptr), 32u);
-  EXPECT_EQ(offsetof(KvSequenceDescriptorAbiV1, k_append_bytes), 40u);
-  EXPECT_EQ(offsetof(KvSequenceDescriptorAbiV1, v_append_ptr), 48u);
-  EXPECT_EQ(offsetof(KvSequenceDescriptorAbiV1, v_append_bytes), 56u);
-  EXPECT_EQ(offsetof(KvSequenceDescriptorAbiV1, batch_sequence_index), 64u);
-  EXPECT_EQ(
-      offsetof(KvSequenceDescriptorAbiV1, append_record_byte_offset), 72u);
-}
-
-TEST(LlmMemoryContractTest,
-     PreExpansionDecodeIdentityAndCompletionRemainRegressionGoldens) {
-  const PreExpansionDecodeIdentity frozen = {
-      "llm_memory",
-      "cpu",
-      1,
-      "llm-memory-v1-cpu-fixed-context-warm-layer-interleaved",
-      "llm-memory-descriptor-abi-v1",
-      "llm-kv-append-affine64-v1",
-      "llm-read-checksum-v1",
-  };
-  EXPECT_TRUE(matches_pre_expansion_decode_identity(frozen));
-
-  PreExpansionDecodeIdentity candidate = frozen;
-  candidate.mode = "benchmark";
-  EXPECT_FALSE(matches_pre_expansion_decode_identity(candidate));
-  candidate = frozen;
-  candidate.backend = "gpu";
-  EXPECT_FALSE(matches_pre_expansion_decode_identity(candidate));
-  candidate = frozen;
-  candidate.schema_version = 2;
-  EXPECT_FALSE(matches_pre_expansion_decode_identity(candidate));
-  candidate = frozen;
-  candidate.methodology = "llm-memory-v2";
-  EXPECT_FALSE(matches_pre_expansion_decode_identity(candidate));
-  candidate = frozen;
-  candidate.descriptor_abi = "llm-memory-descriptor-abi-v2";
-  EXPECT_FALSE(matches_pre_expansion_decode_identity(candidate));
-  candidate = frozen;
-  candidate.append_identity = "llm-kv-append-affine64-v2";
-  EXPECT_FALSE(matches_pre_expansion_decode_identity(candidate));
-  candidate = frozen;
-  candidate.checksum_identity = "llm-read-checksum-v2";
-  EXPECT_FALSE(matches_pre_expansion_decode_identity(candidate));
-
-  EXPECT_TRUE(accepted_pre_expansion_completion(
-      "llm_memory", 1, "complete", true, true));
-  EXPECT_FALSE(
-      accepted_pre_expansion_completion("benchmark", 1, "complete", true,
-                                        true));
-  EXPECT_FALSE(accepted_pre_expansion_completion(
-      "llm_memory", 2, "complete", true, true));
-  EXPECT_FALSE(accepted_pre_expansion_completion(
-      "llm_memory", 1, "partial", true, true));
-  EXPECT_FALSE(accepted_pre_expansion_completion(
-      "llm_memory", 1, "complete", false, true));
-  EXPECT_FALSE(accepted_pre_expansion_completion(
-      "llm_memory", 1, "complete", true, false));
-}
-
-TEST(LlmMemoryContractTest, GenericV1AcceptancePredicateIsExact) {
+TEST(LlmMemoryContractTest, GenericV2AcceptancePredicateIsExact) {
   const GenericResultIdentity accepted = {
       "llm_memory",
-      1,
+      2,
       "metal",
       "metal",
       "prefill",
       "prefill",
       "paged",
       "paged",
-      "llm-memory-v1-metal-prefill-paged",
+      "llm-memory-v2-metal-prefill-paged",
       "complete",
       true,
       true,
@@ -1522,7 +946,7 @@ TEST(LlmMemoryContractTest, GenericV1AcceptancePredicateIsExact) {
   candidate.mode = "benchmark";
   EXPECT_FALSE(accepted_generic_result(candidate));
   candidate = accepted;
-  candidate.schema_version = 2;
+  candidate.schema_version = 1;
   EXPECT_FALSE(accepted_generic_result(candidate));
   candidate = accepted;
   candidate.backend = "cpu";
@@ -1536,21 +960,21 @@ TEST(LlmMemoryContractTest, GenericV1AcceptancePredicateIsExact) {
   candidate = accepted;
   candidate.requested_backend = "gpu";
   candidate.backend = "gpu";
-  candidate.methodology_version = "llm-memory-v1-gpu-prefill-paged";
+  candidate.methodology_version = "llm-memory-v2-gpu-prefill-paged";
   EXPECT_FALSE(accepted_generic_result(candidate));
   candidate = accepted;
   candidate.requested_phase = "train";
   candidate.phase = "train";
-  candidate.methodology_version = "llm-memory-v1-metal-train-paged";
+  candidate.methodology_version = "llm-memory-v2-metal-train-paged";
   EXPECT_FALSE(accepted_generic_result(candidate));
   candidate = accepted;
   candidate.requested_kv_layout = "sparse";
   candidate.kv_layout = "sparse";
-  candidate.methodology_version = "llm-memory-v1-metal-prefill-sparse";
+  candidate.methodology_version = "llm-memory-v2-metal-prefill-sparse";
   EXPECT_FALSE(accepted_generic_result(candidate));
   candidate = accepted;
   candidate.methodology_version =
-      "llm-memory-v1-cpu-fixed-context-warm-layer-interleaved";
+      "llm-memory-v2-cpu-fixed-context-warm-layer-interleaved";
   EXPECT_FALSE(accepted_generic_result(candidate));
   candidate = accepted;
   candidate.status = "partial";
@@ -1559,122 +983,11 @@ TEST(LlmMemoryContractTest, GenericV1AcceptancePredicateIsExact) {
   candidate.results_complete = false;
   EXPECT_FALSE(accepted_generic_result(candidate));
   candidate = accepted;
-  candidate.conclusions_valid = false;
+  candidate.run_accepted = false;
   EXPECT_FALSE(accepted_generic_result(candidate));
   candidate = accepted;
   candidate.all_planned_measurements_measured = false;
   EXPECT_FALSE(accepted_generic_result(candidate));
-}
-
-TEST(LlmMemoryContractTest,
-     GenericVocabularyAndMethodologyTokensAreCanonical) {
-  EXPECT_EQ(
-      (std::array<std::string_view, 2>{
-          contract_token(ContractBackend::Cpu),
-          contract_token(ContractBackend::Metal),
-      }),
-      (std::array<std::string_view, 2>{"cpu", "metal"}));
-  EXPECT_EQ(
-      (std::array<std::string_view, 2>{
-          contract_token(ContractPhase::Decode),
-          contract_token(ContractPhase::Prefill),
-      }),
-      (std::array<std::string_view, 2>{"decode", "prefill"}));
-  EXPECT_EQ(
-      (std::array<std::string_view, 2>{
-          contract_token(ContractKvLayout::Contiguous),
-          contract_token(ContractKvLayout::Paged),
-      }),
-      (std::array<std::string_view, 2>{"contiguous", "paged"}));
-  EXPECT_EQ(
-      (std::array<std::string_view, 2>{
-          contract_token(ContractWorkUnitKind::DecodeStep),
-          contract_token(ContractWorkUnitKind::PrefillOperation),
-      }),
-      (std::array<std::string_view, 2>{"decode_step",
-                                       "prefill_operation"}));
-  EXPECT_EQ(
-      (std::array<std::string_view, 3>{
-          contract_token(ContractKvWriteKind::None),
-          contract_token(ContractKvWriteKind::CurrentTokenAppend),
-          contract_token(ContractKvWriteKind::FullPromptPopulation),
-      }),
-      (std::array<std::string_view, 3>{"none", "current_token_append",
-                                       "full_prompt_population"}));
-  EXPECT_EQ(
-      (std::array<std::string_view, 3>{
-          contract_token(ContractScenario::WeightsOnly),
-          contract_token(ContractScenario::KvOnly),
-          contract_token(ContractScenario::Mixed),
-      }),
-      (std::array<std::string_view, 3>{"weights_only", "kv_only",
-                                       "mixed"}));
-  EXPECT_EQ(
-      (std::array<std::string_view, 6>{
-          contract_token(ContractRunStatus::NotStarted),
-          contract_token(ContractRunStatus::Complete),
-          contract_token(ContractRunStatus::Partial),
-          contract_token(ContractRunStatus::Interrupted),
-          contract_token(ContractRunStatus::Unsupported),
-          contract_token(ContractRunStatus::Failed),
-      }),
-      (std::array<std::string_view, 6>{
-          "not_started", "complete", "partial", "interrupted",
-          "unsupported", "failed"}));
-  EXPECT_EQ(
-      (std::array<std::string_view, 5>{
-          contract_token(ContractMeasurementStatus::NotRun),
-          contract_token(ContractMeasurementStatus::Measured),
-          contract_token(ContractMeasurementStatus::Interrupted),
-          contract_token(ContractMeasurementStatus::Invalid),
-          contract_token(ContractMeasurementStatus::Failed),
-      }),
-      (std::array<std::string_view, 5>{
-          "not_run", "measured", "interrupted", "invalid", "failed"}));
-
-  EXPECT_EQ(work_unit_kind_for_phase(ContractPhase::Decode),
-            ContractWorkUnitKind::DecodeStep);
-  EXPECT_EQ(work_unit_kind_for_phase(ContractPhase::Prefill),
-            ContractWorkUnitKind::PrefillOperation);
-  for (ContractPhase phase :
-       {ContractPhase::Decode, ContractPhase::Prefill}) {
-    EXPECT_EQ(kv_write_kind_for(phase, ContractScenario::WeightsOnly),
-              ContractKvWriteKind::None);
-  }
-  for (ContractScenario scenario :
-       {ContractScenario::KvOnly, ContractScenario::Mixed}) {
-    EXPECT_EQ(kv_write_kind_for(ContractPhase::Decode, scenario),
-              ContractKvWriteKind::CurrentTokenAppend);
-    EXPECT_EQ(kv_write_kind_for(ContractPhase::Prefill, scenario),
-              ContractKvWriteKind::FullPromptPopulation);
-  }
-
-  const std::array<ContractBackend, 2> backends = {
-      ContractBackend::Cpu, ContractBackend::Metal};
-  const std::array<ContractPhase, 2> phases = {
-      ContractPhase::Decode, ContractPhase::Prefill};
-  const std::array<ContractKvLayout, 2> layouts = {
-      ContractKvLayout::Contiguous, ContractKvLayout::Paged};
-  const std::array<std::string_view, 8> expected_methodologies = {
-      "llm-memory-v1-cpu-decode-contiguous",
-      "llm-memory-v1-cpu-decode-paged",
-      "llm-memory-v1-cpu-prefill-contiguous",
-      "llm-memory-v1-cpu-prefill-paged",
-      "llm-memory-v1-metal-decode-contiguous",
-      "llm-memory-v1-metal-decode-paged",
-      "llm-memory-v1-metal-prefill-contiguous",
-      "llm-memory-v1-metal-prefill-paged",
-  };
-  size_t methodology_index = 0;
-  for (ContractBackend backend : backends) {
-    for (ContractPhase phase : phases) {
-      for (ContractKvLayout layout : layouts) {
-        EXPECT_EQ(methodology_token(backend, phase, layout),
-                  expected_methodologies[methodology_index]);
-        ++methodology_index;
-      }
-    }
-  }
 }
 
 TEST(LlmMemoryContractTest,
@@ -2204,256 +1517,6 @@ TEST(LlmMemoryContractTest,
   ASSERT_NE(msl_suffix, std::string::npos);
   EXPECT_EQ(cpu_identity.substr(msl_suffix),
             "|msl_revision=null|msl_source_sha256=null");
-}
-
-TEST(LlmMemoryContractTest,
-     MinimumGenericSchemaV1FieldVocabularyAndTypesAreFrozen) {
-  const std::vector<SchemaFieldContract> vocabulary =
-      minimum_generic_schema_v1_vocabulary();
-  ASSERT_EQ(vocabulary.size(), 95u);
-
-  const auto names_in_section =
-      [&vocabulary](std::string_view section) {
-        std::vector<std::string_view> names;
-        for (const SchemaFieldContract& field : vocabulary) {
-          if (field.section == section) {
-            names.push_back(field.name);
-          }
-        }
-        return names;
-      };
-  EXPECT_EQ(
-      names_in_section("top_level"),
-      (std::vector<std::string_view>{
-          "schema_version", "mode", "backend", "phase", "kv_layout",
-          "methodology_version", "software", "configuration",
-          "resolved_plan", "backend_evidence", "memory_budget",
-          "calibration", "measurements", "aggregates", "status",
-          "reason_code", "results_complete", "conclusions_valid",
-          "interpretation"}));
-  EXPECT_EQ(names_in_section("configuration"),
-            (std::vector<std::string_view>{"argv", "resolved_sources"}));
-  EXPECT_EQ(names_in_section("resolved_plan"),
-            (std::vector<std::string_view>{
-                "geometry", "layout", "resources",
-                "component_identities"}));
-  EXPECT_EQ(names_in_section("resolved_plan.geometry"),
-            (std::vector<std::string_view>{"decode", "prefill"}));
-  EXPECT_EQ(names_in_section("resolved_plan.geometry.decode"),
-            (std::vector<std::string_view>{"visible_context_tokens"}));
-  EXPECT_EQ(
-      names_in_section("resolved_plan.geometry.prefill"),
-      (std::vector<std::string_view>{
-          "prompt_tokens", "attention_query_tile_tokens", "tile_count",
-          "attention_prefix_token_visits_per_sequence",
-          "causal_token_pairs_per_sequence", "logical_attention_pairs",
-          "logical_attention_fma_terms"}));
-  EXPECT_EQ(
-      names_in_section("resolved_plan.layout"),
-      (std::vector<std::string_view>{
-          "kv_layout", "kv_block_tokens", "blocks_per_sequence",
-          "physical_blocks_per_layer", "last_block_tokens",
-          "last_block_valid_bytes", "block_table_entries",
-          "block_table_bytes", "permutation_domain_uint64_hex",
-          "permutation_seed_uint64_decimal",
-          "permutation_algorithm_version", "permutation_sha256"}));
-  EXPECT_EQ(
-      names_in_section("resolved_plan.resources"),
-      (std::vector<std::string_view>{
-          "weight_logical_bytes", "k_logical_bytes", "v_logical_bytes",
-          "k_physical_length_bytes", "v_physical_length_bytes",
-          "k_layout_padding_bytes", "v_layout_padding_bytes",
-          "block_table_bytes"}));
-  EXPECT_EQ(names_in_section("memory_budget"),
-            (std::vector<std::string_view>{
-                "resource_rounding_bytes", "transient_peak_bytes",
-                "known_owned_peak_bytes", "admitted_budget_bytes"}));
-  EXPECT_EQ(
-      names_in_section("resolved_plan.component_identities"),
-      (std::vector<std::string_view>{
-          "logical_profile_version", "kv_layout_version",
-          "permutation_version", "backend_executor_version",
-          "resource_abi_version", "schedule_version",
-          "timer_policy_version", "buffer_pattern_version",
-          "write_pattern_version", "checksum_pattern_version",
-          "msl_revision", "msl_source_sha256"}));
-  EXPECT_EQ(
-      names_in_section("measurements.*"),
-      (std::vector<std::string_view>{
-          "work_unit_kind", "planned_work_units", "completed_work_units",
-          "weight_read_bytes_per_work_unit",
-          "kv_read_bytes_per_work_unit", "kv_write_bytes_per_work_unit",
-          "kv_write_kind", "effective_model_payload_bytes_per_work_unit",
-          "layout_metadata_lookup_count_per_work_unit",
-          "layout_metadata_read_bytes_per_work_unit",
-          "accounted_bytes_per_work_unit",
-          "planned_effective_model_payload_bytes",
-          "completed_effective_model_payload_bytes",
-          "planned_layout_metadata_lookup_count",
-          "completed_layout_metadata_lookup_count",
-          "planned_layout_metadata_read_bytes",
-          "completed_layout_metadata_read_bytes",
-          "planned_task_accounted_bytes", "completed_task_accounted_bytes",
-          "synthetic_work_unit_latency_seconds",
-          "synthetic_memory_work_units_per_second",
-          "effective_model_payload_gb_s"}));
-  EXPECT_EQ(names_in_section("backend_evidence"),
-            (std::vector<std::string_view>{"cpu", "metal"}));
-
-  for (size_t left = 0; left < vocabulary.size(); ++left) {
-    for (size_t right = left + 1; right < vocabulary.size(); ++right) {
-      EXPECT_FALSE(vocabulary[left].section == vocabulary[right].section &&
-                   vocabulary[left].name == vocabulary[right].name);
-    }
-  }
-
-  ASSERT_NE(find_schema_field(vocabulary, "resolved_plan.geometry.prefill",
-                              "prompt_tokens"),
-            nullptr);
-  EXPECT_EQ(find_schema_field(vocabulary, "resolved_plan.geometry.prefill",
-                              "prompt_tokens")
-                ->kind,
-            SchemaValueKind::Integer);
-  EXPECT_EQ(find_schema_field(vocabulary, "resolved_plan.geometry.prefill",
-                              "attention_prefix_token_visits_per_sequence")
-                ->kind,
-            SchemaValueKind::DecimalString);
-  EXPECT_EQ(find_schema_field(vocabulary, "resolved_plan.layout",
-                              "kv_block_tokens")
-                ->kind,
-            SchemaValueKind::IntegerOrNull);
-  EXPECT_EQ(find_schema_field(vocabulary, "resolved_plan.layout",
-                              "permutation_seed_uint64_decimal")
-                ->kind,
-            SchemaValueKind::DecimalStringOrNull);
-  EXPECT_EQ(find_schema_field(vocabulary, "measurements.*",
-                              "layout_metadata_lookup_count_per_work_unit")
-                ->kind,
-            SchemaValueKind::DecimalString);
-  EXPECT_EQ(find_schema_field(vocabulary, "measurements.*",
-                              "effective_model_payload_gb_s")
-                ->kind,
-            SchemaValueKind::FiniteNumberOrNull);
-  EXPECT_EQ(find_schema_field(vocabulary, "backend_evidence", "cpu")
-                ->kind,
-            SchemaValueKind::ObjectOrNull);
-  EXPECT_EQ(find_schema_field(vocabulary, "memory_budget",
-                              "known_owned_peak_bytes")
-                ->kind,
-            SchemaValueKind::DecimalString);
-  EXPECT_EQ(find_schema_field(vocabulary, "memory_budget",
-                              "resource_rounding_bytes")
-                ->kind,
-            SchemaValueKind::DecimalString);
-  EXPECT_EQ(find_schema_field(vocabulary, "top_level", "reason_code")
-                ->kind,
-            SchemaValueKind::String);
-  EXPECT_EQ(find_schema_field(vocabulary, "top_level",
-                              "conclusions_valid")
-                ->kind,
-            SchemaValueKind::Boolean);
-
-  const std::string serialized = serialize_schema_vocabulary(vocabulary);
-  EXPECT_EQ(serialized.substr(0, 20), "llm-memory-schema-v1");
-  EXPECT_EQ(sha256_text(serialized),
-            "77fbcf8e13b7399cff685c41854d5d93e36b18cb4103cb490cf52e52829b2442");
-}
-
-TEST(LlmMemoryContractTest,
-     FinalSupportMatrixAndPublicActivationOrderAreFrozen) {
-  constexpr std::array<ProfileActivationContract, 8> profiles = {{
-      {ContractBackend::Cpu, ContractPhase::Decode,
-       ContractKvLayout::Contiguous, std::nullopt, true},
-      {ContractBackend::Cpu, ContractPhase::Decode,
-       ContractKvLayout::Paged, 4, false},
-      {ContractBackend::Cpu, ContractPhase::Prefill,
-       ContractKvLayout::Contiguous, 6, false},
-      {ContractBackend::Cpu, ContractPhase::Prefill,
-       ContractKvLayout::Paged, 7, false},
-      {ContractBackend::Metal, ContractPhase::Decode,
-       ContractKvLayout::Contiguous, 9, false},
-      {ContractBackend::Metal, ContractPhase::Decode,
-       ContractKvLayout::Paged, 10, false},
-      {ContractBackend::Metal, ContractPhase::Prefill,
-       ContractKvLayout::Contiguous, 11, false},
-      {ContractBackend::Metal, ContractPhase::Prefill,
-       ContractKvLayout::Paged, 12, false},
-  }};
-  constexpr std::array<std::string_view, 8> expected_profiles = {
-      "cpu/decode/contiguous", "cpu/decode/paged",
-      "cpu/prefill/contiguous", "cpu/prefill/paged",
-      "metal/decode/contiguous", "metal/decode/paged",
-      "metal/prefill/contiguous", "metal/prefill/paged",
-  };
-  constexpr std::array<std::optional<int>, 8> expected_activation_phases = {
-      std::nullopt, 4, 6, 7, 9, 10, 11, 12};
-
-  size_t scenario_profile_count = 0;
-  for (size_t index = 0; index < profiles.size(); ++index) {
-    const ProfileActivationContract& profile = profiles[index];
-    const std::string serialized =
-        std::string(contract_token(profile.backend)) + "/" +
-        std::string(contract_token(profile.phase)) + "/" +
-        std::string(contract_token(profile.layout));
-    EXPECT_EQ(serialized, expected_profiles[index]);
-    EXPECT_EQ(profile.activation_phase, expected_activation_phases[index]);
-    EXPECT_EQ(profile.preexisting_at_phase_zero, index == 0);
-    scenario_profile_count += 3;
-    for (size_t other = index + 1; other < profiles.size(); ++other) {
-      EXPECT_FALSE(profile.backend == profiles[other].backend &&
-                   profile.phase == profiles[other].phase &&
-                   profile.layout == profiles[other].layout);
-    }
-  }
-  EXPECT_EQ(scenario_profile_count, 24u);
-
-  constexpr std::array<std::pair<int, std::string_view>, 7>
-      expected_new_profile_activation_order = {{
-          {4, "cpu/decode/paged"},
-          {6, "cpu/prefill/contiguous"},
-          {7, "cpu/prefill/paged"},
-          {9, "metal/decode/contiguous"},
-          {10, "metal/decode/paged"},
-          {11, "metal/prefill/contiguous"},
-          {12, "metal/prefill/paged"},
-      }};
-  size_t activation_index = 0;
-  for (const ProfileActivationContract& profile : profiles) {
-    if (!profile.activation_phase.has_value()) {
-      continue;
-    }
-    ASSERT_LT(activation_index,
-              expected_new_profile_activation_order.size());
-    const std::string profile_name =
-        std::string(contract_token(profile.backend)) + "/" +
-        std::string(contract_token(profile.phase)) + "/" +
-        std::string(contract_token(profile.layout));
-    EXPECT_EQ(*profile.activation_phase,
-              expected_new_profile_activation_order[activation_index].first);
-    EXPECT_EQ(profile_name,
-              expected_new_profile_activation_order[activation_index].second);
-    ++activation_index;
-  }
-  EXPECT_EQ(activation_index, expected_new_profile_activation_order.size());
-
-  constexpr int generic_schema_rename_phase = 1;
-  constexpr int capability_validation_pending_phase = 12;
-  constexpr int capability_production_supported_phase = 13;
-  EXPECT_EQ(generic_schema_rename_phase, 1);
-  EXPECT_EQ(capability_validation_pending_phase, 12);
-  EXPECT_EQ(capability_production_supported_phase, 13);
-  EXPECT_LT(capability_validation_pending_phase,
-            capability_production_supported_phase);
-
-  constexpr std::array<int, 7> phases_without_new_profile_activation = {
-      0, 1, 2, 3, 5, 8, 13};
-  for (int phase : phases_without_new_profile_activation) {
-    EXPECT_TRUE(std::none_of(
-        profiles.begin(), profiles.end(), [phase](const auto& profile) {
-          return profile.activation_phase.has_value() &&
-                 *profile.activation_phase == phase;
-        }));
-  }
 }
 
 namespace {

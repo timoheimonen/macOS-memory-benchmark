@@ -1,6 +1,5 @@
 # Project Structure — macOS-memory-benchmark
 
-**Version:** 0.63.0
 **Platform:** ARM64 / AArch64 (Apple Silicon, macOS 26 or later)
 **License:** GNU General Public License v3.0 or later
 
@@ -46,6 +45,7 @@ This document describes the layout of project files, organized by purpose. It is
 | `Makefile` | Primary build system; discovers C++/Objective-C++/assembly, targets sources and final links at macOS 26.0, accepts a configurable `GTEST_DIR`, compiles `.mm` with ARC, links Metal/Foundation, and produces release/test binaries |
 | `coverage.sh` | Runs isolated LLVM unit/all-test C++/Objective-C++ source coverage builds under `/tmp` without replacing normal workspace binaries |
 | `.clang-format` | Clang-Format style baseline for C++ sources |
+| `build-support/generate_provenance.py` | Python 3 build-time generator for `.build-provenance.h`; freezes Git, compiler, flags, target, SDK, and deployment-target metadata and updates the generated header only when inputs change |
 
 ### Root-level documentation
 
@@ -71,14 +71,15 @@ This document describes the layout of project files, organized by purpose. It is
 | `documents/LATENCY_WHITEPAPER.md` | Whitepaper: cache and memory latency measurement methodology |
 | `documents/CORE_TO_CORE_WHITEPAPER.md` | Whitepaper: calibrated two-thread token-handoff methodology, audit schema, and interpretation limits |
 | `documents/GPU_BANDWIDTH_WHITEPAPER.md` | Whitepaper: Metal compute bandwidth methodology, GPU schema 1, validation, capability limits, and maintenance policy |
-| `documents/LLM_MEMORY_PROFILE_WHITEPAPER.md` | Whitepaper: CPU and capability-gated Metal decode/prefill contiguous/paged methodologies, with exact payload formulas, resources, validation, schema 1, and interpretation limits |
+| `documents/LLM_MEMORY_PROFILE_WHITEPAPER.md` | Whitepaper: CPU and capability-gated Metal decode/prefill contiguous/paged methodologies, with exact payload formulas, resources, validation, schema 2, checksum evidence limits, and interpretation limits |
 | `documents/PROJECT_STRUCTURE.md` | This file |
 
 ---
 
 ## 2. src/ — Source code
 
-All production C++, Objective-C++, and ARM64 assembly lives under `src/`. Headers use include paths relative to `src/`
+Production C++, Objective-C++, and ARM64 assembly lives under `src/`, except for the root entry point `main.cpp`.
+Headers use include paths relative to `src/`
 (e.g., `#include "core/config/config.h"`). Metal/Objective-C types are confined to private `.mm` platform boundaries.
 
 ---
@@ -173,7 +174,7 @@ Core infrastructure for configuration, memory management, macOS system introspec
 |---|---|
 | `config.h` | `BenchmarkConfig` structure for standard, pattern, standalone TLB, and their common sweep settings; core-to-core, GPU, and LLM use separate config types |
 | `constants.h` | Named constants for CPU/GPU/LLM memory limits, calibration, grid/dispatch/payload guardrails, buffer sizing, and latency access counts |
-| `version.h` | `SOFTVERSION` macro (semantic version string, currently `"0.63.0"`) |
+| `version.h` | `SOFTVERSION` macro containing the semantic software-release provenance string |
 | `mode_selector.h` / `.cpp` | Pure primary-mode scan and conflict detection before mode-specific parsing; routes standard, pattern, TLB, core-to-core, GPU, and LLM deterministically while skipping one opaque output value |
 | `argument_parser.cpp` | Parses standard, pattern, and standalone TLB options into `BenchmarkConfig`; core-to-core, GPU, and LLM are pre-routed to dedicated parsers |
 | `config_validator.cpp` | Validates the parsed configuration; emits errors for out-of-range or conflicting settings |
@@ -208,7 +209,7 @@ Core infrastructure for configuration, memory management, macOS system introspec
 
 | File | Purpose |
 |---|---|
-| `timer.h` / `.cpp` | High-resolution Mach timer with exact tick conversion plus a deterministic clock/timebase provider seam |
+| `timer.h` / `.cpp` | High-resolution Mach timer with tick/timebase conversion, retained original start/stop/delta snapshots, and a deterministic clock/timebase provider seam |
 
 ---
 
@@ -277,7 +278,7 @@ Objective-C++ Metal backend so deterministic unit tests do not require GPU work.
 
 ### 2.6 src/llm_memory/ — Synthetic LLM memory profile
 
-Standalone generic schema-1 vocabulary with eight active backend/phase/layout profiles: four CPU profiles and four
+Standalone schema-2 implementation with eight active backend/phase/layout profiles: four CPU profiles and four
 capability-gated Metal profiles spanning decode/prefill and contiguous/paged KV. Pure logical phase planning,
 deterministic paged geometry/permutation, backend-specific execution planning/evidence, the Objective-C-free backend
 contract, CPU mapping and ARM64 execution, the Objective-C++ Metal boundary, environment capture, console composition,
@@ -296,10 +297,11 @@ hot kernels. Capability failures remain explicit, and no unsupported Metal reque
 | `llm_metal_backend.mm` | Objective-C++ Metal boundary for capability probing, selected-profile runtime compilation, Tier 2 argument encoding, private/shared allocation, table upload/validation, exact-tail dispatch, paged-prefill cyclic ownership, GPU timestamps, layout-aware dual-mod32 checksum, full-prompt K/V-write and padding validation, diagnostics, and idempotent cleanup |
 | `llm_metal_kernels_source.h` | Canonical embedded MSL 2.3 source with profile-specific decode/prefill contiguous/paged parameter ABIs, common foundation entrypoints, scenario-specialized workload entrypoints, named-lane volatile paged-table publication, and phase-specific K/V-write/padding validation; exact selected source bytes are hashed at runtime |
 | `llm_executor.h` / `.cpp` | CPU-specific full-size mappings, paged-table preparation, deterministic initialization/pre-touch, phase/layout descriptor materialization, independent checksum oracles, padding canaries, synchronized worker team, timer boundary, and ARM64 adapters retained behind `LlmCpuBackend` |
-| `llm_runner.h` / `.cpp` | Backend-independent lifecycle, per-scenario automatic calibration or exact-work planning, generic task acceptance, frozen plans, cyclic loop order, status/counters, task-boundary interruption, aggregates, warnings, and logical checkpoints; resources are released before the command-terminal checkpoint |
-| `llm_json.h` / `.cpp` | Ordered generic LLM schema-1 builder plus conservative output-peak estimator, with backend/phase/layout identity, resolved Metal segmentation, capability/resource/task evidence, decimal-string exact integers, nullable non-applicability, traffic diagnostics, environment evidence, and interpretation contract |
+| `llm_runner.h` / `.cpp` | Backend-independent lifecycle, per-scenario calibration or exact-work planning, canonical/frozen plans, named-check task acceptance, cyclic position balance, status/counters, interruption, accepted measurement populations, snapshot-time statistics, and bounded loop/terminal checkpoints; correctness acceptance is separate from comparison quality, and resources are released before the command-terminal checkpoint |
+| `llm_json.h` / `.cpp` | Ordered LLM schema-2 builder and conservative output-peak estimator; projects canonical plans and document-local references, expected versus observed checksums, named validation checks, accepted measurement IDs, raw timing, build provenance, backend/resource evidence, nullable states, and checkpoint writer observations |
+| `llm_validation.h` | Fixed, allocation-free structure/write/padding observation slots with independent applicability, evaluation, validity, and stable reasons for existing cold validation walks |
 | `llm_output.h` / `.cpp` | Human-readable work-unit/model-payload/accounted geometry, Metal device/resource/task evidence, scenario headlines, interpretation limits, and evidence-backed quality warnings through centralized message helpers |
-| `llm_environment.h` / `.mm` | Objective-C-free snapshot type plus macOS thermal-state and Low Power Mode capture through Foundation |
+| `llm_environment.h` / `.mm` | Objective-C-free host snapshot, macOS thermal-state/Low Power Mode and physical-memory capture, and streaming SHA-256 of the executable file on the cold command path |
 
 ---
 
@@ -347,7 +349,7 @@ bandwidth warm-up covers the full target buffer, and latency warm-up page-touche
 | `json_utils.h` / `.cpp` | JSON helper functions shared between the TLB, core-to-core, and standard output serializers |
 | `cyclic_order.h` / `.cpp` | Shared deterministic cyclic ordering used by CPU and GPU planners |
 | `seed_utils.h` / `.cpp` | Shared SplitMix64 derivation and generate-once seed helper with deterministic provider seam |
-| `hash_utils.h` / `.cpp` | CommonCrypto-based SHA-256 helper used for exact embedded MSL source provenance |
+| `hash_utils.h` / `.cpp` | CommonCrypto-based one-shot, incremental, and allocation-free SHA-256 helpers for MSL source, layout/identity evidence, and executable-file provenance |
 | `numeric_utils.h` / `.cpp` | Overflow-safe size arithmetic plus bounded pilot-count and duration-calibration helpers |
 | `descriptive_statistics.h` / `.cpp` | Canonical average, percentile, sample-deviation, coefficient-of-variation, and median-absolute-deviation calculations |
 
@@ -363,10 +365,10 @@ bandwidth warm-up covers the full target buffer, and latency warm-up page-touche
 
 ## 3. tests/ — Test suite
 
-GoogleTest-based unit and integration tests are supplemented by a focused Python script-example entry test.
-`make test-script-examples` exercises the current JSON-reading examples directly, and `make test-all` runs it after all
-GTest cases pass. Python 3 is required; `jq` is optional, and only its dedicated test branch is skipped when it is not
-installed. All `.cpp` files are picked up automatically by the Makefile. Tests named `*Integration*` are excluded from
+GoogleTest-based unit and integration tests are supplemented by Python example and LLM verifier tests.
+`make test-script-examples` exercises the current JSON-reading examples directly. `make test-llm-verifier` checks the
+independent schema-2 LLM reader, numeric goldens and semantic mutations. `make test-all` runs both after all GTest cases pass. Python 3 is required; `jq` is optional, and only its dedicated test branch is skipped when it is not
+installed. All test `.cpp` and `.mm` files are picked up automatically by the Makefile. Tests named `*Integration*` are excluded from
 `make test` (unit-only) and run through the integration or all-test targets.
 
 | File | Suite name | Coverage focus |
@@ -382,7 +384,8 @@ installed. All `.cpp` files are picked up automatically by the Makefile. Tests n
 | `test_llm_memory_work_plan.cpp` | `LlmMemoryWorkPlanTest` | Production checked decode/prefill geometry and payloads, physical/padding/table/lookup/accounted math including paged-prefill `N+2*M`, deterministic permutation/hash, CPU token/block ownership, Metal cyclic block-owner scheduling and component identities, memory budget, descriptor/range/layout invariants, worker reduction, scenario caps/calibration, and cyclic order |
 | `test_llm_memory_executor.cpp` | `LlmMemoryExecutorTest` | CPU phase/layout dispatch, atomic mapping/table-preparation failure seams, contiguous and paged decode/prefill descriptor materialization, independent checksums, padding canaries, synchronized timing, QoS, cancellation, and fake-kernel validation |
 | `test_llm_memory_runner.cpp` | `LlmMemoryRunnerTest` | Fake-backend lifecycle and generic decode/prefill task seams, lifecycle unsupported/failure handling, common identity/timing/completion/validation acceptance, exact calibration/single-unit/freeze/frozen-warmup order, cyclic measurements, status/counter/aggregate semantics, interruption, release/checkpoint precedence, auxiliary budgeting, and runner exception boundaries |
-| `test_llm_memory_json.cpp` | `LlmMemoryJsonTest` | Schema-1 identity for all eight CPU/Metal profiles, exact nullable geometry/workers, paged layout/permutation, prefill geometry, CPU ownership, Metal cyclic owner/per-threadgroup cost evidence, segmentation, capability/resource/task K/V-write/lookup/padding evidence, output-peak, status, interpretation, environment, and checkpoints |
+| `test_llm_memory_json.cpp` | `LlmMemoryJsonTest` | Schema-2 identities for all eight profiles, canonical plan references, expected/actual checksums, named validation, accepted populations, raw Mach timing, build manifest, nullable geometry/workers, paged and Metal resource/grid evidence, output-peak estimates, acceptance, environment, and bounded checkpoint observations |
+| `test_llm_metal_checksum.mm` | `LlmMetalChecksumHelperIntegrationTest` | Real-device checks of shared MSL affine checksum collision boundaries and six-component modulo reduction across partial SIMD/threadgroups |
 | `test_llm_memory_output.cpp` | `LlmMemoryOutputTest` | Exact decode/prefill, contiguous/paged, and Metal device/resource/table/task K/V-write/lookup/padding plus cyclic owner/per-threadgroup cost formatting, interpretation text, and deduplicated warnings |
 | `test_llm_memory_kernels.cpp` | `LlmMemoryKernelIntegrationTest` | Real contiguous/paged decode/prefill ARM64 descriptor/kernel scenarios, paged tails/lookups, full-prompt writes, exact partial tiled scans, checksum, padding, worker-count, and AAPCS64 coverage |
 | `test_llm_metal_backend.cpp` | `LlmMetalBackendTest`, `LlmMetalBackendIntegrationTest`, `LlmMetalBackendFailureInjectionIntegrationTest` | Pure capability, contiguous/paged segmentation, argument-buffer, decode/prefill ABIs, source-hash and prefill loop-order audit, phase-aware checksum/reason mapping, paged-prefill `N+2*M`, cyclic no-duplication ownership and per-threadgroup accounted-byte evidence, plus real-device selected-profile compilation, Tier-2 slots, private table/K/V initialization, exact-tail decode, full-prompt/tiled-prefix prefill, final-ordinal write/padding detection, interruption/failure cleanup, and idempotent release |
@@ -397,7 +400,8 @@ installed. All `.cpp` files are picked up automatically by the Makefile. Tests n
 | `test_hash_utils.cpp` | `HashUtilsTest` | CommonCrypto SHA-256 standard vectors and source-provenance helper behavior |
 | `test_analysis.cpp` | `AnalysisTest` | Injected TLB coordination, counters/status, boundary detection, validation, and paired analysis |
 | `test_json_schema.cpp` | `JsonSchemaTest` | Current standard schema-3 output structure, completion fields, and other mode schema contracts |
-| `test_script_examples.py` | Python script-example entry test | Current schema-3 JSON entry paths, local sanity checks, and metric extraction for the bundled standard-memory examples, including the optional jq-backed shell path when jq is installed |
+| `test_llm_result_verifier.py` | Independent LLM verifier | Eight current profiles, arithmetic goldens, status/population and semantic mutations, bounded input and build provenance |
+| `test_script_examples.py` | Python script-example entry test | Compatible standard schema-3/methodology inputs, provenance-version handling, completion and field-shape checks, and metric extraction for the bundled standard-memory examples, including the optional jq-backed shell path when jq is installed |
 | `test_json_output_session.cpp` | `JsonOutputTargetTest`, `JsonOutputSessionTest` | Exact sentinel/path classification, lazy checkpoint dispatch, atomic-file parity, stdout routing/restoration, and stream failure containment |
 | `test_json_utils.cpp` | `JsonUtilsTest`, `JsonFileWriterTest` | JSON parse/statistics and atomic writer success/failure contracts |
 | `test_output_printer.cpp` | `OutputPrinterTest`, `OutputPrinterCustomCacheUnitsTest` | Status-aware partial output, mode/cache composition, and custom-cache size-unit boundaries |
@@ -414,7 +418,7 @@ installed. All `.cpp` files are picked up automatically by the Makefile. Tests n
 | `test_statistics.cpp` | `StatisticsTest` | Standard multi-loop summary composition, mode filtering, loop/sample population separation, and rendered values |
 | `test_descriptive_statistics.cpp` | `DescriptiveStatisticsTest` | Canonical shared percentiles, deviation, CV, and MAD contracts |
 | `test_statistics_renderer.cpp` | `StatisticsRendererTest` | Shared console-summary ordering, precision, indentation, and diagnostics |
-| `test_timer.cpp` | `HighResTimerTest` | Deterministic Mach-time conversion, creation failures, seconds/nanoseconds results, and tick wraparound |
+| `test_timer.cpp` | `HighResTimerTest` | Deterministic Mach-time conversion, original boundary snapshots, creation failures, seconds/nanoseconds results, and tick wraparound |
 | `test_system_info.cpp` | `BenchmarkQosTest`, `SystemInfoTest`, `SystemInfoIntegrationTest` | Deterministic QoS and system-information success/failure contracts plus one real-provider integration smoke |
 | `test_tlb_chain.cpp` | `TlbChainTest` | Spread/packed planning, every traversal policy, explicit corruption statuses, and one ASM smoke |
 | `test_tlb_measurement_scheduler.cpp` | `TlbMeasurementSchedulerTest` | Seeded balance, stop/error boundaries, callback contracts, convergence, and exact pass accounting |
@@ -422,13 +426,14 @@ installed. All `.cpp` files are picked up automatically by the Makefile. Tests n
 | `test_tlb_sweep_planner.cpp` | `TlbSweepPlannerTest` | Page-aligned base/refinement planning, stride bounds, deduplication, and source tracking |
 | `test_utils.cpp` | `SeedUtilsTest`, `ProgressSpinnerTest`, `UtilsTest` | Seed-provider behavior, TTY-gated spinner rendering/cleanup, and worker-thread joining |
 
-### tests/fixtures/ — Script-example input fixtures
+### tests/fixtures/ — Script-example and LLM verifier input fixtures
 
 | File | Purpose |
 |---|---|
 | `standard-schema-v3-complete-current.json` | Minimized structurally faithful current full standard result for the two plotter JSON entry paths |
 | `standard-schema-v3-custom-complete-current.json` | Minimized structurally faithful current custom-cache standard result for shell jq/Python extraction and stride/TLB summaries |
-| `README.md` | Records source HEAD, capture commands, reduction policy, example ownership, and the current-only fixture refresh policy |
+| `llm-schema-v2/` | Eight captured CPU/Metal × decode/prefill × contiguous/paged schema-2 profiles plus `unsupported.json` for independent verifier coverage |
+| `README.md` | Records source HEAD, capture commands, reduction policy, example/verifier ownership, and fixture refresh policy |
 
 Volatile source/test counts and the authoritative generated inventory are maintained in `DRY_CHECK.md`.
 
@@ -450,17 +455,17 @@ Four shared helper headers support deterministic setup and output capture across
 ## 4. results/ — Benchmark result data
 
 Historical JSON, CSV, and text output from benchmark runs on specific hardware, organized by software-version
-subdirectory. The files are retained as examples and historical schema evidence; they are not current 0.63.0
-methodology baselines unless explicitly identified as such. Historical standard JSON is not an input to current
-bundled standard-result consumers; separately governed TLB tooling retains its documented legacy-input policy.
+subdirectory. The files are retained as examples and historical schema evidence; they are not baselines for the current
+methodology unless explicitly identified as such. Historical standard JSON is not an input to current bundled
+standard-result consumers; separately governed TLB tooling retains its documented legacy-input policy.
 
 ```
 results/
   0.63.0/
     AppleM5_LLM_working_set_scaling.md  — Apple M5 CPU decode working-set comparison note
     M4MacMiniVSM5MacbookAir_LLM.md  — Informal LLM CPU decode comparison
-    apple_m5_cpu_decode_contiguous_weights_256mib_context_32768.json  — Current LLM schema-1 sample
-    apple_m5_cpu_decode_contiguous_weights_1024mib_context_131072.json  — Current LLM schema-1 sample
+    apple_m5_cpu_decode_contiguous_weights_256mib_context_32768.json  — Recorded LLM schema-1 sample
+    apple_m5_cpu_decode_contiguous_weights_1024mib_context_131072.json  — Recorded LLM schema-1 sample
   0.53.7/
     MacMiniM4_analyzetlb.json       — TLB analysis run, Mac Mini M4
     MacMiniM4_benchmark.json        — Standard benchmark run, Mac Mini M4
@@ -475,7 +480,7 @@ results/
     *.json / *.csv / *.txt          — Pre-versioned historical results
 ```
 
-The current-version result notes include an
+The 0.63.0 result notes include an
 [Apple M5 CPU decode working-set comparison](../results/0.63.0/AppleM5_LLM_working_set_scaling.md) with links to its
 complete schema-1 JSON records, and an
 [informal M4 Mac mini versus M5 MacBook Air LLM CPU decode comparison](../results/0.63.0/M4MacMiniVSM5MacbookAir_LLM.md).
@@ -509,14 +514,18 @@ Tracked PNG chart archive generated from benchmark result data. Several files ar
 ## 6. script-examples/ — Run and plotting helpers
 
 Example shell workflows and Python/Matplotlib plotters for tracked benchmark outputs. The four standard-memory examples
-are maintained in lockstep with the current producer rather than as a compatibility library. Each of those JSON-reading
-entry points performs a small local release-version/schema-3/completion/field sanity check and then reads the current
-metric paths it needs. Version 0.63.0 therefore requires exact top-level `version: "0.63.0"`. Standard schema 2,
-unversioned historical layouts, alternative modes, and other explicit standard versions are unsupported by those four
-examples. Separately governed mode-specific tools retain only the history policy documented in their own row below.
+accept compatible producer releases rather than requiring an exact software version. Each JSON-reading entry point
+checks for a non-empty provenance version, standard mode, schema 3, methodology
+`benchmark-v2-calibrated-seeded-balanced`, completion state, and the shapes of the fields it consumes before reading
+those metric paths. Standard schema 2, unversioned historical layouts, alternative modes, and other methodology
+identities are not translated by those four examples. Separately governed mode-specific tools retain only the history
+policy documented in their own row below.
 
 | File | Purpose |
 |---|---|
+| `verify_llm_result.py` | Bounded standalone LLM schema-2 artifact verifier; separate consistency, acceptance and timing/build evidence levels |
+| `llm_verify_oracles.py` | Independent CPU and Metal arithmetic/checksum reconstruction for the verifier |
+| `llm_verify_profiles.py` | Supported LLM component identities for the eight verifier profiles |
 | `final_output.txt` | Small bundled sample of pooled latency statistics for `plot_cache_percentiles.py`; regenerated by `latency_test_script.sh` |
 | `latency_test_script.sh` | Sweeps custom cache size and configured latency-locality windows, writes per-run JSON, and extracts current pooled sample statistics into `final_output.txt` using jq when available or Python 3 otherwise |
 | `latency_test_script_stride_tlb.sh` | Sweeps cache size, configured locality, and latency stride; uses embedded Python 3 to read current pooled sample statistics, retains per-run JSON, and requires one complete CSV row per planned run |
@@ -534,3 +543,4 @@ examples. Separately governed mode-specific tools retain only the history policy
 |---|---|
 | `.github/pull_request_template.md` | Default pull request description template |
 | `.github/ISSUE_TEMPLATE/bug_report.md` | Structured bug report template |
+| `.github/workflows/pr-tests.yml` | Runs `make test-all` on `macos-26` after installing GoogleTest, for pushes to `development` and pull requests targeting `main` or `development` |

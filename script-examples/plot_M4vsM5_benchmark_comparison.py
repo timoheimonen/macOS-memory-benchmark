@@ -39,11 +39,11 @@ def parse_args():
     parser.add_argument(
         "-4", "--m4-file",
         required=True,
-        help="Path to a current standard schema-3 M4 benchmark JSON")
+        help="Path to a supported standard schema-3 M4 benchmark JSON")
     parser.add_argument(
         "-5", "--m5-file",
         required=True,
-        help="Path to a current standard schema-3 M5 benchmark JSON")
+        help="Path to a supported standard schema-3 M5 benchmark JSON")
     parser.add_argument(
         "--metric",
         default="average",
@@ -76,22 +76,24 @@ def resolve_input_path(raw_path: str) -> Path:
     raise RuntimeError(f"Input JSON file not found: {raw_path}")
 
 
-def require_current_standard_result(data: object, source: str) -> dict:
-    """Require the complete standard schema emitted by the current producer."""
+def require_supported_standard_result(data: object, source: str) -> dict:
+    """Require the supported standard schema and methodology contract."""
     configuration = data.get("configuration") if isinstance(data, dict) else None
     if not (
         isinstance(configuration, dict)
-        and data.get("version") == "0.63.0"
+        and isinstance(data.get("version"), str)
+        and bool(data["version"])
         and configuration.get("mode") == "benchmark"
         and type(configuration.get("benchmark_schema_version")) is int
         and configuration["benchmark_schema_version"] == 3
+        and configuration.get("methodology_version") == "benchmark-v2-calibrated-seeded-balanced"
         and data.get("status") == "complete"
         and data.get("results_complete") is True
         and data.get("conclusions_valid") is True
         and isinstance(configuration.get("output_file"), str)
     ):
         raise RuntimeError(
-            f"{source} is not a complete current standard schema-3 benchmark result")
+            f"{source} is not a complete supported standard schema-3 benchmark result")
     return configuration
 
 
@@ -112,7 +114,7 @@ def load_data(path: Path, metric: str) -> dict:
     with path.open("r", encoding="utf-8") as fh:
         data = json.load(fh)
 
-    config = require_current_standard_result(data, str(path))
+    config = require_supported_standard_result(data, str(path))
     cpu_name = str(config.get("cpu_name", "Unknown CPU"))
     version = data["version"]
 

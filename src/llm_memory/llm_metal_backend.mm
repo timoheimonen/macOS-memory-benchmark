@@ -50,6 +50,28 @@
 #include <string_view>
 #include <utility>
 
+LlmColdChecks interpret_llm_metal_cold_checks(LlmPhase phase, bool writes_kv,
+                                             bool padding, bool completed,
+                                             uint32_t flags) noexcept {
+  LlmColdChecks checks = make_llm_cold_checks(writes_kv,
+      phase == LlmPhase::Prefill ? LlmColdCheckKind::KvPrefillFinalSamples : LlmColdCheckKind::KvAppendFinal,
+      writes_kv, writes_kv && padding);
+  if (!completed || !writes_kv) return checks;
+  const bool structure_valid = (flags & LlmMetalKernelContract::kValidationInvalidParametersBit) == 0;
+  resolve_llm_cold_check(checks, 0, structure_valid,
+      structure_valid ? "valid" : "post-validation-invalid-parameters");
+  const uint32_t bits[] = {LlmMetalKernelContract::kKvWriteValidationMismatchBit,
+                           LlmMetalKernelContract::kPaddingCanaryMismatchBit};
+  const char* reasons[] = {LlmBackendReason::KV_WRITE_VALIDATION_MISMATCH,
+                           LlmBackendReason::PADDING_CANARY_MISMATCH};
+  for (size_t index = 0; index < 2; ++index) {
+    const bool mismatch = (flags & bits[index]) != 0;
+    if (mismatch || structure_valid)
+      resolve_llm_cold_check(checks, index + 1, !mismatch, mismatch ? reasons[index] : "valid");
+  }
+  return checks;
+}
+
 namespace {
 
 constexpr size_t kFoundationPipelineCount = 6;
@@ -3601,6 +3623,17 @@ class LlmMetalBackend final : public LlmBackend {
     }
   }
 
+  /** Initialize unresolved applicability without allocation, including exception exits. */
+  LlmColdChecks pending_cold_checks(const LlmMemoryWorkPlan& model_plan,
+                                    const LlmScenarioWorkPlan& scenario_plan) const noexcept {
+    const bool padding = model_plan.kv_layout == LlmKvLayout::Paged &&
+        resolved_execution_plan_.resources.paged_layout.has_value() &&
+        resolved_execution_plan_.resources.paged_layout->last_block_valid_bytes <
+            resolved_execution_plan_.resources.paged_layout->block_bytes;
+    return interpret_llm_metal_cold_checks(model_plan.phase,
+        scenario_plan.scenario != LlmScenario::WeightsOnly, padding, false, 0);
+  }
+
   LlmTaskExecutionResult execute_task(const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan& scenario_plan,
                                       const LlmRunnerTaskContext& context) noexcept override {
     @autoreleasepool {
@@ -3612,6 +3645,7 @@ class LlmMetalBackend final : public LlmBackend {
                                         LlmBackendReason::TIMED_COMMAND_BUFFER_ERROR};
           result.identity = metal_task_identity(model_plan, scenario_plan, context);
           LlmMetalTaskEvidence metal;
+          metal.cold_checks = pending_cold_checks(model_plan, scenario_plan);
           metal.error = internal_error(exception.what());
           result.backend_evidence = std::move(metal);
           return result;
@@ -3619,7 +3653,9 @@ class LlmMetalBackend final : public LlmBackend {
           LlmTaskExecutionResult result{LlmTaskExecutionStatus::Failed,
                                         LlmBackendReason::TIMED_COMMAND_BUFFER_ERROR};
           result.identity = metal_task_identity(model_plan, scenario_plan, context);
-          result.backend_evidence = LlmMetalTaskEvidence{};
+          LlmMetalTaskEvidence metal;
+          metal.cold_checks = pending_cold_checks(model_plan, scenario_plan);
+          result.backend_evidence = std::move(metal);
           return result;
         }
       } @catch (NSException* exception) {
@@ -3627,6 +3663,7 @@ class LlmMetalBackend final : public LlmBackend {
                                       LlmBackendReason::TIMED_COMMAND_BUFFER_ERROR};
         result.identity = metal_task_identity(model_plan, scenario_plan, context);
         LlmMetalTaskEvidence metal;
+          metal.cold_checks = pending_cold_checks(model_plan, scenario_plan);
         metal.error = internal_error(ns_string(exception.reason));
         result.backend_evidence = std::move(metal);
         return result;
@@ -6064,6 +6101,9 @@ class LlmMetalBackend final : public LlmBackend {
         resolved_execution_plan_.resources.paged_layout.has_value() &&
         resolved_execution_plan_.resources.paged_layout->last_block_valid_bytes <
             resolved_execution_plan_.resources.paged_layout->block_bytes;
+    // The acceptance-injection hook is deliberately excluded from observed bits.
+    task.cold_checks = interpret_llm_metal_cold_checks(active_phase_, validate_kv_writes,
+        padding_applicable, true, flags);
     task.padding_canary_applicable = padding_applicable;
     task.padding_canary_evaluated = padding_applicable;
     task.padding_canary_valid =
@@ -6083,6 +6123,7 @@ class LlmMetalBackend final : public LlmBackend {
     result.identity = metal_task_identity(model_plan, scenario_plan, context);
     result.completion.planned_work_units = scenario_plan.work_units;
     LlmMetalTaskEvidence task;
+    task.cold_checks = pending_cold_checks(model_plan, scenario_plan);
     task.checksum_algorithm_version =
         model_plan.component_identities.checksum_pattern_version;
     const bool supported_profile =

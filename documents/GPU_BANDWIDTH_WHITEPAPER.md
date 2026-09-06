@@ -1,6 +1,6 @@
 # Metal GPU Memory Bandwidth Whitepaper
 
-- **Software version:** 0.63.0
+- **Software version:** release provenance; not a compatibility selector
 - **JSON schema:** 1
 - **Methodology:** `gpu-bandwidth-v1-private-runtime-single-cmdbuf-calibrated-balanced`
 - **Platform:** macOS on Apple Silicon
@@ -134,6 +134,9 @@ The Objective-C++ backend is auto-discovered, compiled with `-fobjc-arc`, and li
 
 No third-party production dependency is added. CommonCrypto SHA-256 comes from the platform/libSystem API and needs no
 additional framework link. Coverage includes production `.mm` beside `.cpp`.
+
+Python 3 is required for both release and test builds, including ordinary `make`: the Makefile runs
+`build-support/generate_provenance.py` to generate build provenance before compiling objects.
 
 Runtime admission requires:
 
@@ -455,7 +458,7 @@ already-computed measurement state.
 ## 14. GPU JSON Schema 1
 
 The top-level discriminator is independent of current standard schema 3. Released standard schema 2 is historical and
-unsupported by the bundled standard-memory examples, which track the current producer:
+unsupported by the bundled standard-memory examples, which accept compatible standard schema-3 producer releases:
 
 ```json
 {
@@ -667,8 +670,9 @@ make test-all
 ./memory_benchmark --gpu-bandwidth --help
 ```
 
-The aggregate `make test-all` gate requires Python 3; it runs the focused script-example entry test after all GTest
-cases pass. `jq` is not required by this gate.
+The aggregate `make test-all` gate runs all GTest cases, followed by `make test-script-examples` and
+`make test-llm-verifier`. Both Python test drivers require Python 3; the latter checks the independent LLM schema-2
+artifact verifier. `jq` is not required by this gate.
 
 Real Metal tests may skip on an unsupported/no-device execution environment. That skip does not replace deterministic
 unsupported-path tests and does not create a performance-validation claim.

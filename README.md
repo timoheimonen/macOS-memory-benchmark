@@ -34,7 +34,7 @@ See [Measurement Capabilities](documents/CAPABILITIES.md) for the full measureme
 - macOS 26 or later on Apple Silicon (ARM64)
 - Xcode Command Line Tools for source builds
 - GoogleTest from Homebrew for the test suite
-- Python 3 for the script-example entry test included in the aggregate `make test-all` gate; `jq` is optional for JSON
+- Python 3 for build provenance and the Python tests included in the aggregate `make test-all` gate; `jq` is optional for JSON
   inspection and the jq-backed latency-script path
 - Metal modes: a unified-memory device with `MTLGPUFamilyApple7` or compatible later-family capability; LLM Metal also
   requires Tier 2 argument buffers and `maxBufferLength >= 256 MiB`
@@ -139,6 +139,9 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
   --kv-layout paged --kv-block-tokens 16 --iterations 1 --count 3 --seed 42
 ```
 
+Query heads classify the model; they do not add executed attention math. The prefill query tile
+defines synthetic prefix rereads, not a real inference kernel’s cache or SRAM tiling.
+
 Run one full-prompt prefill operation per scenario with two-token attention query tiles:
 
 ```bash
@@ -176,7 +179,7 @@ checkpoints are required; see the [Machine-Readable CLI API](documents/API.md) s
 | `--analyze-core2core` | Calibrated two-thread acquire/release token-protocol round-trip latency under best-effort macOS scheduler hints. |
 | `--gpu-bandwidth` | Standalone Metal GPU read/write/copy effective compute-payload bandwidth. |
 | `--llm-memory` | Standalone synthetic LLM memory profile: CPU or Metal decode/prefill with contiguous or paged KV. |
-| `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 and LLM schema 1 do not support sweeps. |
+| `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 and LLM schema 2 do not support sweeps. |
 
 Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](documents/MANUAL.md) for defaults, valid combinations, and the complete option reference.
 
@@ -243,7 +246,7 @@ memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output 
   >gpu_bandwidth.json 2>gpu_bandwidth.log
 ```
 
-Reproducible fixed-work LLM memory profile with atomic scenario and command-terminal file checkpoints:
+Reproducible fixed-work LLM memory profile with bounded completed-loop and command-terminal atomic file snapshots:
 
 ```bash
 caffeinate -i -d memory_benchmark --llm-memory --weight-size-mb 4096 --layers 32 \
@@ -265,7 +268,7 @@ For prefill, replace the decode context with explicit prompt/tile geometry:
 
 Add `--kv-layout paged --kv-block-tokens 16` to combine that prefill geometry with deterministic paged KV.
 
-The same schema 1 payload can be captured once from final-only stdout:
+The same LLM schema 2 payload can be captured once from final-only stdout:
 
 ```bash
 memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
@@ -305,7 +308,8 @@ Treat benchmark values as measurements of the configured workload under the obse
   prefix sharing, sliding-window KV, growing context, and model loading.
 - The LLM traffic classification version `llm-exact-weight-vs-kv-read-payload-v1` compares exact weight and KV-read
   bytes only. `near_crossover` means exact equality and is not a measured hardware-bottleneck claim.
-- The repository includes two current [Apple M5 CPU-decode working-set samples](results/0.63.0/AppleM5_LLM_working_set_scaling.md)
+- The repository includes two
+  [Apple M5 CPU-decode working-set samples recorded with 0.63.0](results/0.63.0/AppleM5_LLM_working_set_scaling.md)
   with links to their complete JSON records. They illustrate scaling across 384 MiB and 1,536 MiB data mappings.
 - TLB-locality controls pointer-chain construction, not hardware TLB residency. Standard locality comparisons combine cache, locality, and translation effects; use `--analyze-tlb` for controlled translation-boundary conclusions.
 - Core-to-core results are scheduler-influenced acquire/release token-protocol measurements. They do not directly observe
@@ -315,14 +319,17 @@ Treat benchmark values as measurements of the configured workload under the obse
 JSON output records completion and nullable measurement state instead of using zero for unavailable results. Current
 standard schema 3 requires `configuration.mode: "benchmark"`, a string `configuration.output_file` that preserves the
 raw output target, plus boolean `results_complete` and `conclusions_valid` fields. The bundled standard-memory examples
-track the current producer, require its exact top-level `version` (currently `0.63.0`), sanity-check the current
-result locally, and read current schema-3 paths directly. They do not provide compatibility for released standard
-schema 2, unversioned historical standard JSON layouts, or any other explicit standard version.
+accept compatible producer releases by checking the standard mode, schema 3, the exact
+`benchmark-v2-calibrated-seeded-balanced` methodology, completion state, and the shape of the fields they consume.
+They retain the top-level `version` as provenance but do not require a particular software release. They do not
+translate released standard schema 2, unversioned historical standard JSON layouts, or other methodology identities.
 Consumers making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields.
 Every result-producing direct command or CPU sweep using `--output -` reserves stdout for one final JSON document and
-routes its post-parse human transcript to stderr; file output is atomic. LLM file output checkpoints after each terminal
-scenario measurement and at command terminal, while its stdout checkpoints remain logical lazy transitions followed by
-one final document. Exact process acceptance rules are in the
+routes its post-parse human transcript to stderr; file output is atomic. LLM files receive a progress snapshot every
+`K=max(1,ceil(count/8))` completed loops plus a terminal snapshot: at most eight progress writes, with up to `3K`
+completed attempts potentially missing after abrupt termination. Stdout emits one final document. A correct complete
+one-loop LLM run can have `run_accepted: true` while position balance is incomplete and quality is insufficient for a
+comparison. Inspect sample count, observed CV, duration and environment separately. Exact process acceptance rules are in the
 [Machine-Readable CLI API](documents/API.md), with schema and checkpoint details in the
 [User Manual](documents/MANUAL.md), [Technical Specification](documents/TECHNICAL_SPECIFICATION.md), and mode
 whitepapers.
@@ -340,11 +347,11 @@ python3 script-examples/plot_cache_percentiles.py \
 
 The sweep script prefers the repository's local `./memory_benchmark`, then falls back to `memory_benchmark` from
 `PATH`; set `BENCHMARK_CMD=/path/to/memory_benchmark` to override either choice. Whichever producer is selected must
-emit complete current standard schema 3. The sweep helpers return a non-zero status if a planned run fails or does not
-produce a complete, parseable result.
+emit a complete compatible standard schema-3 result with the expected methodology. The sweep helpers return a non-zero
+status if a planned run fails or does not produce a complete, parseable result.
 
-The two standard-result plotters require explicit current inputs; archived 0.53.x standard JSON is retained as
-historical evidence and is not a valid current input:
+The two standard-result plotters require explicit compatible inputs; archived 0.53.x standard JSON is retained as
+historical evidence and is not a compatible input:
 
 ```bash
 python3 script-examples/plot_M4vsM5_benchmark_comparison.py \
@@ -367,10 +374,10 @@ recognizes the current console labels only and is neither JSON-schema nor histor
 - [TLB Analysis Whitepaper](documents/TLB_ANALYSIS_WHITEPAPER.md): paired analysis, boundary rules, confidence model, and JSON verification contract.
 - [Core-to-Core Whitepaper](documents/CORE_TO_CORE_WHITEPAPER.md): LDAR/STLR handoff protocol, scheduler-hint scenarios, and JSON schema.
 - [GPU Bandwidth Whitepaper](documents/GPU_BANDWIDTH_WHITEPAPER.md): Metal methodology, timing, validation, resource model, and interpretation limits.
-- [LLM Memory Profile Whitepaper](documents/LLM_MEMORY_PROFILE_WHITEPAPER.md): generic schema-v1 vocabulary plus the
+- [LLM Memory Profile Whitepaper](documents/LLM_MEMORY_PROFILE_WHITEPAPER.md): schema-2 vocabulary plus the
   active CPU and Metal decode/prefill traffic, timing, checksum, and interpretation contracts.
 - [Apple M5 LLM CPU-decode working-set samples](results/0.63.0/AppleM5_LLM_working_set_scaling.md): two complete
-  current-version JSON runs and their observed working-set scaling.
+  0.63.0 JSON runs and their observed working-set scaling.
 
 Runtime behavior and `memory_benchmark -h` are the authoritative sources when documentation differs.
 
@@ -391,7 +398,7 @@ make test-integration
 make test-all
 ```
 
-`make test-all` requires Python 3; it runs all GTest cases followed by the focused script-example entry test. `jq` is
+`make test-all` requires Python 3; it runs all GTest cases followed by the script-example and independent LLM verifier tests. `jq` is
 not required by the test gate.
 
 Generate isolated LLVM production-source coverage reports under `/tmp`:
@@ -401,8 +408,25 @@ make coverage-unit
 make coverage-all
 ```
 
-See [CONTRIBUTING.md](documents/CONTRIBUTING.md) for contribution guidance and [Project Structure](documents/PROJECT_STRUCTURE.md) for
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidance and [Project Structure](documents/PROJECT_STRUCTURE.md) for
 repository navigation and the current test-suite map. C++ reference documentation can be generated with `make docs`.
+
+CPU LLM results retain the original Mach tick boundaries and timebase for duration reconstruction.
+The build embeds compiler, flags, SDK/deployment target and Git provenance; the command hashes the
+executable once before tasks. These fields bind available artifacts and do not constitute signed
+execution attestation. See the [LLM process contract](documents/API.md) for availability and numeric rules.
+Python 3 is required to generate build provenance.
+
+Verify a saved LLM schema-2 result independently (standard library only):
+
+```bash
+python3 script-examples/verify_llm_result.py llm-result.json --binary ./memory_benchmark --require-raw-timing
+make test-llm-verifier
+```
+
+The verifier reports artifact consistency separately from run acceptance and identifies missing timing/build
+evidence. Its bounded arithmetic reconstructs logical work and checksums; it does not attest execution or measure
+physical DRAM traffic. See [the verifier contract](documents/API.md#independent-llm-artifact-verifier).
 
 ## Scope and Safety
 

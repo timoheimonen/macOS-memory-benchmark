@@ -2,7 +2,7 @@
 
 ## 1. Scope and Status
 
-This document specifies the current implementation in this repository (version `0.63.0`) for `memory_benchmark` on macOS Apple Silicon.
+This document specifies the current `memory_benchmark` implementation in this repository for macOS Apple Silicon.
 
 It is intentionally implementation-driven and reflects real behavior in code paths under `main.cpp`, `src/core`,
 `src/benchmark`, `src/pattern_benchmark`, `src/gpu_bandwidth`, `src/llm_memory`, `src/output`, and `src/asm`.
@@ -22,7 +22,7 @@ Out of scope:
 - `--analyze-core2core` methodology details (see [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md)).
 - Detailed `--gpu-bandwidth` methodology and schema field catalog (see
   [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md)).
-- Detailed `--llm-memory` generic schema-v1 vocabulary, active decode/prefill methodologies, and field catalog (see
+- Detailed `--llm-memory` schema-2 vocabulary, active decode/prefill methodologies, and field catalog (see
   [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md)).
 - Historical behavior from older releases.
 
@@ -32,8 +32,11 @@ Out of scope:
 - Target CPU architecture: ARM64 Apple Silicon.
 - Language: C++17 with ARM64 Apple Silicon assembly kernels, two Objective-C++ Metal backends, and one Objective-C++
   environment-capture unit.
-- Build: `Makefile` (`clang++`, `as`).
-- Test framework: GoogleTest (`test_runner`).
+- Build: `Makefile` (`clang++`, `as`), with Python 3 required to generate embedded build provenance.
+- Test frameworks: GoogleTest (`test_runner`) and Python `unittest` for script examples and the independent LLM
+  artifact verifier. Objective-C++ test sources are compiled with test flags and ARC.
+- Build provenance records Git revision/dirty state, compiler, target, SDK, deployment target, and build/link flags.
+  Make regenerates the manifest and invalidates objects when these inputs change; unavailable Git metadata remains null.
 - Deployment target: macOS 26.0 for production/test sources, assembly, and final links. External static archives must
   not require a newer OS. This is the oldest runtime family exercised by the current repeatable release gate.
 - First-party link dependencies: `-framework Metal -framework Foundation`; no new third-party production dependency.
@@ -140,8 +143,10 @@ or deterministic paged KV:
 5. Create the selected pure-C++ `LlmBackend` factory product. Build a preliminary pointer-free logical work plan and ask
    the backend and runner for their exact auxiliary backing, then add the conservative JSON DOM/serialization peak for a
    non-empty output target. Its checked variable-string term includes component/layout identities and all prefill
-   execution/scenario/scope identities. Frozen identities are charged once, while scenario-plan identities scale with
-   the maximum retained calibration attempts and planned measurement loops. Preliminary and finalized plans use the
+   execution/scenario/scope identities. Canonical scenario identities and expected checksums are retained once per
+   distinct plan; runtime evidence scales with planned measurements. Admission includes canonical-plan storage, expected reconstruction transients, accepted-ID
+   maps, exact-statistics workspaces, and the simultaneous DOM/serialization peak. Bounded snapshot frequency does not
+   reduce the single-snapshot peak allowance. Preliminary and finalized plans use the
    same canonical identity-size formula. Rebuild and admit
    the final plan with the full page-rounded weight/physical-K/physical-V
    mappings, paged table and validation transient when applicable, descriptor/planner storage, checksum storage, and
@@ -162,11 +167,11 @@ or deterministic paged KV:
    backend calls. Each call owns reset, timed work, correctness validation, and generic task evidence. A Metal call
    uses one reset command buffer, one timed command buffer/serial encoder/workload dispatch with its T loop in-kernel,
    authoritative `GPUStartTime`/`GPUEndTime`, dual-mod32 checksum comparison, and excluded phase-neutral K/V-write
-   validation. Each terminal
-   measurement is offered to the logical checkpoint hook while resources remain live.
+   validation. Stop remains observable at each task boundary. File progress snapshots are offered only after every Kth
+   completed loop, with `K=max(1,ceil(count/8))`; exact aggregate statistics are prepared at snapshots and terminal finalization.
 8. Release backend resources exactly once before offering the command-terminal checkpoint, then capture final
    environment state, render the centralized console report, and either retain the runner-owned atomic file cadence or
-   emit one final schema-1 stdout document. Execution status and output status remain separate.
+   emit one final schema-2 stdout document. Execution status and output status remain separate.
 
 Pre-run failures before runner-result initialization leave stdout empty. Once initialized,
 partial/interrupted/unsupported/failed evidence is representable; a file checkpoint failure is terminal and is not
@@ -691,8 +696,8 @@ reference cohort: the completed 0.61.0 automatic and fixed-work populations esta
 for their exact hardware, OS, compiler, kernel, and methodology identity. The frozen pre-remediation validation identity uses
 `gpu-linear-word-mod32-tg-reduce-v2`, the frozen 8192-threadgroup cap, canonical MSL SHA-256
 `b9a242d2b959c9c11f6f130a52afd66f111d6761be2193beec1f051baa094296`, and the exact executable identity retained
-with the local validation record. The current canonical source SHA-256 retained unchanged in 0.63.0 (introduced in
-0.61.2) is
+with the local validation record. The canonical source SHA-256 introduced in 0.61.2 and retained by the current
+implementation is
 `21def2d75d3545dba31aa4897ea57ec2fd0e4481cd86ce21725338ab0f322ac5` after removing three unread shared-parameter
 fields; runtime Metal integration revalidates compilation and correctness, while the performance population remains
 tied to the frozen pre-remediation identity. Automatic read/write/copy
@@ -716,10 +721,10 @@ CPU adapter, an Objective-C++ Metal capability/resource/task boundary, phase/lay
 ordered schema builder, and a Foundation-backed environment snapshot. Generic enums cover backend `cpu|metal`, phase
 `decode|prefill`, and KV layout `contiguous|paged`.
 All eight backend/phase/layout combinations are active. The CPU identities are
-`llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
-`llm-memory-v1-cpu-prefill-contiguous`, and `llm-memory-v1-cpu-prefill-paged`. The Metal identities are
-`llm-memory-v1-metal-decode-contiguous`, `llm-memory-v1-metal-decode-paged`,
-`llm-memory-v1-metal-prefill-contiguous`, and `llm-memory-v1-metal-prefill-paged`. Capability failure remains explicit;
+`llm-memory-v2-cpu-decode-contiguous`, `llm-memory-v2-cpu-decode-paged`,
+`llm-memory-v2-cpu-prefill-contiguous`, and `llm-memory-v2-cpu-prefill-paged`. The Metal identities are
+`llm-memory-v2-metal-decode-contiguous`, `llm-memory-v2-metal-decode-paged`,
+`llm-memory-v2-metal-prefill-contiguous`, and `llm-memory-v2-metal-prefill-paged`. Capability failure remains explicit;
 no Metal request receives fallback CPU execution.
 
 `LlmMemoryWorkPlan` keeps logical geometry, resources, accounting, seeds, and identities common while
@@ -810,7 +815,10 @@ backend auxiliary estimate includes its checksum and orchestration backing in co
 
 The prefill planner resolves prompt length `P` and query-tile length `Q`. It computes `C = ceil(P/Q)`, prefix visits
 `S = Q*triangular(P/Q) + (P%Q != 0 ? P : 0)`, causal pairs, logical
-attention audit counts, one weight pass, full-prompt K/V writes, tiled prefix reads, and checked per-scenario payloads.
+attention context counts, one weight pass, full-prompt K/V writes, tiled prefix reads, and checked per-scenario payloads.
+The theoretical causal-pair/attention/FMA context is nullable on arithmetic overflow; actual byte, prefix, lookup, and
+allocation overflow still rejects the workload. Query heads affect theoretical context, while query tile Q affects
+executed prefix reads. No attention or FMA computation is performed.
 For paged geometry it computes prefix block visits and the exact `N + 2*M` semantic lookup count with a logarithmic
 floor-sum. Its bounded semantic oracle freezes owner-local ascending-token writes with K then V for each token,
 followed for every tile by the complete owned K prefix and then the complete owned V prefix. Its affine64 checksum
@@ -953,9 +961,11 @@ Omitted iterations calibrate the three scenarios independently outside measureme
 warmed once; correction candidates do not receive general warmups, while the first irreducible one-work-unit candidate
 receives one confirmation warmup when that shape has not already been warmed. Explicit iterations are exact. All three
 plans freeze atomically before canonical same-shape frozen warmups, and loop order then cyclically rotates weights-only,
-KV-only, and mixed. No measured task begins until every frozen warmup succeeds. Only measured and checksum-valid results
-enter aggregates. Stop is checked between atomic backend tasks. File output checkpoints each terminal scenario;
-resources are released before the command-terminal checkpoint. Stdout emits one final schema-1 object. See
+KV-only, and mixed. No measured task begins until every frozen warmup succeeds. Only measured results with accepted timing, checksum,
+and required cold-check evidence enter aggregates. Stop is checked between atomic backend tasks. File progress snapshots occur after every Kth complete
+loop, where `K=max(1,ceil(count/8))`; resources are released before the command-terminal snapshot. Stdout emits one
+final schema-2 object. Scenario position balance is separate from run acceptance and does not balance directed
+predecessor pairs across loop or repeated-block boundaries. Frozen warmups run once before the measured loops. See
 [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md) for the complete formulas, ABI, schema, and
 interpretation contract.
 
@@ -1130,7 +1140,7 @@ measurement schema. [API.md](API.md) is the process-integration contract and sup
 - GPU schema 1: top-level mode/schema/methodology/status, exact counters and completeness, effective/copy/DRAM semantics,
   config/argv, environment, backend device/compile/allocation, memory budget, frozen plans, excluded calibration,
   status-bearing measurements/loop records, aggregates, and warnings.
-- LLM schema 1: top-level backend/phase/layout/methodology/status, `configuration`, generic `resolved_plan`, tagged
+- LLM schema 2: top-level backend/phase/layout/methodology/status, `configuration`, generic `resolved_plan`, tagged
   `backend_evidence`, memory-budget/calibration evidence, status-bearing generic work-unit measurements, measured-only
   aggregates, and interpretation, plus additive exact traffic, checksum, loop/checkpoint, environment, and warning
   evidence.
@@ -1143,7 +1153,7 @@ measurement schema. [API.md](API.md) is the process-integration contract and sup
   logical cadence but defers serialization until the terminal envelope. `completed_runs` requires current standard
   schema 3 to have nested `configuration.mode: "benchmark"`, `status: "complete"`, `results_complete: true`,
   `conclusions_valid: true`, and a string `configuration.output_file`. Nested standard schema 2 and every other
-  standard version are unsupported. Pattern requires nested
+  standard schema version are unsupported. Pattern requires nested
   `status: "complete"` and `results_complete: true` for pattern; `tlb_analysis.status: "complete"` and
   `tlb_analysis.conclusions_valid: true` for TLB; or
   `core_to_core_latency.status: "complete"` and `measurements_complete: true` for core-to-core. Partial, interrupted,
@@ -1162,10 +1172,11 @@ classifying the failure.
 
 Command completeness for current standard schema 3 requires `configuration.mode == "benchmark"`,
 `status == "complete" && results_complete == true && conclusions_valid == true`, with string
-`configuration.output_file`. Bundled standard-memory examples track this current schema-3 producer, perform local
-sanity checks (including exact top-level `version == "0.63.0"` for the current producer), and read the metric paths they
-need directly. They do not support released standard schema 2, unversioned historical standard JSON layouts, or any
-other explicit standard version. Pattern requires
+`configuration.output_file`. Bundled standard-memory examples accept compatible producer releases when
+`configuration.methodology_version == "benchmark-v2-calibrated-seeded-balanced"`, the command is complete, and each
+consumed field has the expected shape. They retain a non-empty top-level `version` string as provenance without
+requiring exact software-version equality. They do not translate released standard schema 2, unversioned historical
+standard JSON layouts, or other methodology identities. Pattern requires
 `status == "complete" && results_complete == true`. TLB requires
 `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true`; core-to-core requires
 `core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true`. Metric consumers must
@@ -1174,10 +1185,12 @@ can coexist with command completeness without being consumable as a measured val
 also requires `affinity_hint_comparison_interpretable == true`. GPU requires `status == "complete" &&
 results_complete == true && conclusions_valid == true`; position-balanced comparisons additionally require
 `operation_order_balance_complete == true`.
-LLM requires `mode == "llm_memory" && schema_version == 1`, top-level backend/phase/layout equal to the request,
-methodology equal to `llm-memory-v1-<backend>-<phase>-<layout>`, `status == "complete"`, `results_complete == true`,
-`conclusions_valid == true`, and every planned measurement to be `measured`. A selected LLM metric additionally
-requires non-null/checksum-accepted evidence; comparative validity already includes complete scenario-order balance.
+LLM requires `mode == "llm_memory" && schema_version == 2`, top-level backend/phase/layout equal to the request,
+methodology equal to `llm-memory-v2-<backend>-<phase>-<layout>`, `status == "complete"`, `results_complete == true`,
+`run_accepted == true`, the run-policy identity `llm-run-policy-bounded-loop-snapshots-v1`, and every planned
+measurement to be `measured`. A selected metric additionally requires accepted timing, checksum, and required
+post-validation evidence. Run acceptance is independent of position balance, sample count, CV, duration, and environment;
+comparison policy must assess those separately and match frozen work, seeds, component identities, and output cadence.
 
 ### 18.1 Configuration keys
 
@@ -1196,8 +1209,9 @@ In addition to standard fields (buffer size, iterations, loop count, thread coun
 - Calibration targets/windows and phase/operation schedule policies.
 
 Schema 3 makes `configuration.output_file` and top-level `conclusions_valid` mandatory without changing the standard
-methodology version. Bundled standard-memory examples identify the current producer explicitly rather than inferring
-standard identity from metric layout; schema 2 and unversioned historical standard JSON are unsupported inputs.
+methodology version. Bundled standard-memory examples identify compatible input from the standard mode, schema,
+methodology, completion fields, and consumed field shapes rather than inferring identity from metric layout or requiring
+an exact software version; schema 2 and unversioned historical standard JSON are unsupported inputs.
 
 ### 18.2 Main-memory latency keys
 
@@ -1257,24 +1271,26 @@ standard identity from metric layout; schema 2 and unversioned historical standa
   separate `timed_accumulator_algorithm` and `final_checksum_algorithm` identities plus expected/actual checksums.
 - See [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md) for the complete consumer/maintenance contract.
 
-### 18.6 LLM schema 1
+### 18.6 LLM schema 2
 
-- The prior CPU/step-specific schema-1 shape was unpublished. Generic v1 replaces it without compatibility aliases,
-  fallback reading, or a schema-version increment.
+- Schema 2 replaces the unpublished schema-1 contract without compatibility aliases or fallback reading.
 - Required top-level fields are `schema_version`, `mode`, `backend`, `phase`, `kv_layout`, `methodology_version`,
   `software`, `configuration`, `resolved_plan`, `backend_evidence`, `memory_budget`, `calibration`, `measurements`,
-  `aggregates`, `status`, `reason_code`, `results_complete`, `conclusions_valid`, and `interpretation`.
-- Methodology is exactly `llm-memory-v1-<backend>-<phase>-<layout>`. Active identities are
-  `llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
-  `llm-memory-v1-cpu-prefill-contiguous`, `llm-memory-v1-cpu-prefill-paged`,
-  `llm-memory-v1-metal-decode-contiguous`, `llm-memory-v1-metal-decode-paged`,
-  `llm-memory-v1-metal-prefill-contiguous`, and `llm-memory-v1-metal-prefill-paged`.
+  `aggregates`, `status`, `reason_code`, `results_complete`, `run_accepted`, `interpretation`, `diagnostic`,
+  `interruption_requested`, `scenario_order_balance_complete`, `seeds`, `counters`, `checkpoint_lifecycle`,
+  `loop_records`, `environment`, `quality_warnings`, and `build_manifest`.
+- Methodology is exactly `llm-memory-v2-<backend>-<phase>-<layout>`. Active identities are
+  `llm-memory-v2-cpu-decode-contiguous`, `llm-memory-v2-cpu-decode-paged`,
+  `llm-memory-v2-cpu-prefill-contiguous`, `llm-memory-v2-cpu-prefill-paged`,
+  `llm-memory-v2-metal-decode-contiguous`, `llm-memory-v2-metal-decode-paged`,
+  `llm-memory-v2-metal-prefill-contiguous`, and `llm-memory-v2-metal-prefill-paged`.
 - `configuration` retains exact `argv` and `resolved_sources`. `resolved_plan` owns phase-applicable `geometry`,
   layout-applicable `layout`, immutable logical/physical `resources`, and exact `component_identities`.
   Exactly one of `geometry.decode` and `.prefill` is populated. Prefill records integer P/Q and decimal-string
-  C/prefix-visit/causal-pair/logical-attention/FMA counts; decode-only crossover and weight/KV-read ratio fields are
-  null. Admitted paged plans populate block geometry; runtime permutation and combined layout-identity fields remain
-  null when Metal terminates before table preparation. Complete paged results populate them. Contiguous results use
+  C/prefix-visit counts. Theoretical causal-pair/logical-attention/FMA counts live in `model_context.prefill` as
+  decimal strings with individual `*_reason_code: "valid"`, or null with `arithmetic-overflow`. That object is null
+  for decode; decode-only crossover and weight/KV-read ratio fields are null for prefill. Admitted paged plans populate
+  block geometry; runtime permutation and combined layout-identity fields remain null when Metal terminates before table preparation. Complete paged results populate them. Contiguous results use
   null for paged-only values. Component identities include logical profile, KV layout, optional permutation, backend
   executor, resource ABI, schedule, timer, buffer, write, checksum, and nullable MSL identities under the canonical
   `llm-memory-components-v1` fixed-order serialization.
@@ -1303,13 +1319,30 @@ standard identity from metric layout; schema 2 and unversioned historical standa
   table bytes. Metal additionally records 256 MiB segmentation, exact segment lengths/tails, Tier-2 argument-buffer
   slots/encoded length/alignment, status/staging sizes, and resource-plan admission, while
   allocation/preparation/admission peaks live in `memory_budget`. Pointer/range values are not exposed.
-- `measurements[]` records frozen work identity, `work_unit_kind`, integer planned/completed work units,
-  `kv_write_kind`, per-work-unit and planned/completed model payload, layout metadata, accounted bytes, nullable
-  `synthetic_work_unit_latency_seconds`, nullable `synthetic_memory_work_units_per_second`, nullable
-  `effective_model_payload_gb_s`, working set, backend-specific lifecycle, and expected/actual checksum evidence. Metal
-  task evidence adds pipeline/grid, raw GPU timestamps and host envelope, command/encoder/dispatch counts,
-  dual-mod32 W/K/V values, and excluded phase-neutral validation fields `kv_write_evaluated` and `kv_write_valid`. Only
-  measured/checksum-valid records populate `aggregates.scenarios.weights_only`, `.kv_only`, and `.mixed`.
+- `resolved_plan.scenario_plans[]` owns each canonical scenario/work-policy/work-unit plan, its payload/accounting,
+  exact identity, and sole expected checksum witness. `resolved_plan.frozen_plan_refs` selects the frozen plans.
+  Measurements have explicit zero-based `measurement_id` and `plan_ref`; excluded calibration attempts also use
+  `plan_ref`. Runtime records retain actual observations rather than duplicate plan identities and expected checksums.
+- `measurements[]` retains status, order, completed work, working set, actual checksum, and backend execution evidence.
+  Accepted records expose `synthetic_work_unit_latency_seconds`, `synthetic_memory_work_units_per_second`, and
+  `effective_model_payload_gb_s`; invalid or unavailable metrics are null. Metal evidence retains pipeline/grid,
+  GPU timestamps, host envelope, and command/encoder/dispatch counts.
+- Measurement and calibration `execution.validation.checks[]` records named checks with independent `applicable`,
+  `evaluated`, `valid`, and `reason_code` fields. Names are `post-validation-structure`, `kv-append-final`,
+  `kv-prefill-final-samples`, `kv-append-unchanged`, and `kv-padding-canary`, selected by backend/phase/layout/scenario.
+  CPU decode validates the final append state outside timing. Inapplicable checks have null evaluated/valid values;
+  missing required observations cannot become successful checks. Prefill content validation remains sampled.
+  Checksum agreement is not exhaustive proof of contents, addresses, or visit multiplicity; a checksum-valid attempt
+  with a failed required cold check remains invalid and excluded from aggregates.
+- Each scenario aggregate owns `accepted_measurement_ids` shared by all three metrics. Rates are derived per
+  measurement before exact statistics; raw metric vectors are not duplicated in aggregates. Exact median/MAD/percentiles
+  are prepared only at snapshots or terminal, using reusable workspaces. `observed_cv_classification` is
+  `insufficient-samples` for n<3, `undefined` for undefined CV, `above-threshold` for payload CV strictly above 5%,
+  otherwise `below-threshold`. This is observed sample quality, not an acceptance or reproducibility guarantee.
+- `build_manifest` binds reported build inputs and a once-per-command executable SHA-256; missing evidence remains
+  null with an explicit unavailable/partial status. It is provenance, not signed runtime attestation.
+  CPU measurement and excluded-attempt `execution.timing.cpu_raw` retain original start/stop/delta ticks as decimal
+  strings and timebase numerator/denominator as integers. Metal has null CPU raw evidence and retains GPU timestamps.
 - For paged KV, `kv_block_tokens` is an integer input, while potentially large block/table/lookup/byte counts remain
   canonical decimal strings. `permutation_seed_uint64_decimal` is a decimal string and `permutation_sha256` is exactly
   64 lowercase hexadecimal characters. Decode KV-only and mixed report `L*B*(2*N+1)` lookups; prefill KV-only and mixed
@@ -1322,10 +1355,11 @@ standard identity from metric layout; schema 2 and unversioned historical standa
   `weight_payload_dominant`, `near_crossover`, and `kv_read_payload_dominant`. Near means exact equality, and
   `classification_is_payload_only` prevents a hardware-bottleneck interpretation.
 - The complete-result predicate also requires backend/phase/layout to match the request, exact derived methodology,
-  `status == "complete"`, `results_complete == true`, `conclusions_valid == true`, and every planned measurement to be
-  measured. Paged comparison/acceptance additionally matches `G`, `N`, tail, logical/physical/padding/table resources,
-  permutation version/domain/seed/hash, lookup/accounting, schedule, timer, and checksum identities. A count-one result
-  may be complete yet fail conclusions because scenario positions are not balanced.
+  `status == "complete"`, `results_complete == true`, `run_accepted == true`, the exact run policy, and every planned
+  measurement to be measured. Paged comparison/acceptance additionally matches `G`, `N`, tail, logical/physical/padding/table
+  resources, permutation version/domain/seed/hash, lookup/accounting, schedule, timer, and checksum identities.
+  A correct count-one result may be accepted while `scenario_order_balance_complete` is false. Position balance requires complete loops and equal
+  nonzero first/middle/last counts for every scenario; it does not establish predecessor-pair balance.
 - See [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md) for the field groups and consumer boundary.
 
 ### 18.7 Command-output transport boundary
@@ -1350,11 +1384,16 @@ before sweep execution, the runtime banner, and worker creation. GPU selects it 
 before its banner, QoS, signal scope, and backend factory. LLM selects it before banner, QoS, signal scope, work-plan
 admission, mappings, and workers. Direct pattern, TLB, and core-to-core files receive one atomic final write; standard
 and sweep files retain their existing intermediate checkpoints. GPU files retain terminal-measurement/failure
-checkpoints and their post-release replacement. LLM files checkpoint every terminal scenario measurement and, unless a
-measurement checkpoint itself fails, one post-release command terminal; failure is terminal and is not retried. Stdout
-boundaries perform lazy no-op persistence at every logical checkpoint and emit one terminal payload after orchestration;
-GPU and LLM still perform their checkpoint-boundary stop reads. The supported process contract, including help and
-pre-result-failure exceptions, is defined in [API.md](API.md).
+checkpoints and their post-release replacement. LLM files snapshot every Kth fully completed loop,
+where `K=max(1,ceil(planned_loops/8))`, at most eight progress writes plus one post-release command terminal. An abrupt
+exit can lose up to `3K` completed attempts, including while replacement is in progress; no file may exist before the
+first successful snapshot. Graceful interruption retains the finished prefix when terminal persistence succeeds.
+A late command exception after successful terminal persistence may produce one corrective failure snapshot. A failed
+checkpoint is terminal and is never retried. Atomic rename does not promise power-loss durability.
+LLM `checkpoint_lifecycle` reports prior actual file-writer attempts/successes before current snapshot preparation;
+`current_persistence_success` remains null because the snapshot cannot attest to its own future write. Stdout emits one
+terminal DOM, and disabled output builds none. Stop checks remain at task boundaries even when progress is skipped.
+The supported process contract, including help and pre-result-failure exceptions, is defined in [API.md](API.md).
 
 ### 18.8 Path behavior
 
@@ -1384,9 +1423,8 @@ This codebase uses boundary-aware mixed error handling:
   terminal `failed`/`invalid` schema evidence. Neither path falls back to another backend. The runner contains
   backend-task and checkpoint exceptions as stable status/reason evidence, finalizes untouched slots deterministically,
   gives real failures precedence over interruption, and keeps graceful task-boundary interruption separate from
-  conclusion validity. Backend release is attempted once before the command-terminal checkpoint; release failure
-  becomes terminal failure evidence. A file measurement-checkpoint failure is terminal, releases resources, and is not
-  retried.
+  run acceptance. Backend release is attempted once before the command-terminal checkpoint; release failure
+  becomes terminal failure evidence. A file progress-snapshot failure is terminal, releases resources, and is not retried.
 
 Principle: no uncaught exceptions should escape to `main()` control flow.
 
@@ -1437,6 +1475,7 @@ Recommended validation commands:
 - Build: `make`
 - Unit tests (non-integration): `make test`
 - Script-example JSON entry paths: `make test-script-examples`
+- Independent LLM schema-2 artifact contract and mutation tests: `make test-llm-verifier`
 - Integration-only: `make test-integration`
 - Full test set: `make test-all`
 - CLI help smoke check: `./memory_benchmark -h`
@@ -1455,16 +1494,28 @@ Recommended validation commands:
 - Deterministic GPU-focused tests:
   `./test_runner --gtest_filter='GpuBandwidthParserTest.*:GpuMemoryBudgetTest.*:GpuRunnerTest.*:GpuJsonTest.*:GpuWorkPlanTest.*:GpuTimedAccumulatorOracleTest.*:ModeSelectorTest.*:HashUtilsTest.*'`
 - Real Metal contract: `./test_runner '--gtest_filter=GpuMetalBackendIntegrationTest.*'`; unsupported hardware may skip
-  this integration suite but does not replace deterministic unsupported-path coverage.
+  this integration suite but does not replace deterministic unsupported-path coverage. On a supported host, sandbox
+  `metal-device-unavailable` skips require narrowly scoped unsandboxed probes and applicable real-device gates, as
+  specified in `AGENTS.md`; sandbox skips do not establish hardware unavailability.
 
 For narrow changes, prefer targeted `gtest` filters via `./test_runner --gtest_filter=...`.
 
 The aggregate `make test-all` gate requires Python 3; after all GTest cases pass, it runs the focused script-example
-entry test. `jq` is not required by this gate.
+entry test and independent LLM verifier tests. `jq` is not required by this gate.
+
+`python3 script-examples/verify_llm_result.py result.json` independently reconstructs the eight supported profiles
+without invoking producer helpers. It checks geometry, plan/checksum identities, timing, named validation, accepted
+populations, and exact statistics. Verdicts separate `artifact_consistent` from `run_accepted`: exit 0 means consistent
+and accepted, exit 1 means inconsistent or consistently unaccepted, and exit 2 means unsupported or bounded evidence
+is unavailable. `--require-raw-timing` requires original CPU timing; `--binary PATH` checks the manifest hash without
+running that file. Verification does not prove original process success, physical traffic, or runtime authenticity.
 
 ## 23. Source Map (Primary Entry Points)
 
 - Program entry: `main.cpp`
+- Build provenance: `build-support/generate_provenance.py`
+- Independent LLM verifier: `script-examples/verify_llm_result.py`, `script-examples/llm_verify_profiles.py`,
+  and `script-examples/llm_verify_oracles.py`.
 - LLM memory profile with all four CPU and all four Metal phase/layout profiles:
   - `src/llm_memory/llm_memory.cpp`
   - `src/llm_memory/llm_work_plan.cpp`

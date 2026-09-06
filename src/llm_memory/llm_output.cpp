@@ -160,7 +160,7 @@ void print_metal_task_evidence(const LlmMemoryWorkPlan& plan, const LlmMemoryRes
     if (index >= printed.size() || printed[index]) {
       continue;
     }
-    const LlmMetalTaskEvidence* const metal = get_llm_metal_task_evidence(measurement.execution);
+    const LlmMetalRuntimeEvidence* const metal = get_llm_metal_task_evidence(measurement.execution);
     if (metal == nullptr) {
       continue;
     }
@@ -169,7 +169,7 @@ void print_metal_task_evidence(const LlmMemoryWorkPlan& plan, const LlmMemoryRes
     std::cout << Messages::report_llm_memory_metal_task(
                      llm_scenario_to_string(measurement.scenario), metal->pipeline_label, threadgroups,
                      threads_per_threadgroup, metal->timing_evaluated,
-                     metal->timing_valid, metal->gpu_elapsed_seconds,
+                     metal->timing_valid, measurement.execution.timing.elapsed_seconds,
                      metal->checksum_evaluated,
                      metal->checksum_valid, measurement.scenario != LlmScenario::WeightsOnly,
                      metal->kv_write_validation_evaluated,
@@ -321,6 +321,11 @@ void print_llm_memory_console_report(const LlmMemoryWorkPlan& model_plan, const 
             << "\n\n";
   for (const LlmScenarioAggregate& aggregate : result.aggregates) {
     print_headline(aggregate, work_unit_name, plural_work_unit_name);
+    const auto& stats = aggregate.effective_model_payload_gb_s.statistics;
+    if (stats.sample_count != 0) {
+      std::cout << Messages::report_llm_memory_distribution(stats.sample_count, stats.median,
+          stats.min, stats.max, stats.coefficient_of_variation_pct, stats.median_absolute_deviation) << '\n';
+    }
   }
   print_metal_task_evidence(model_plan, result);
   std::cout << Messages::report_llm_memory_interpretation_note(

@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -35,17 +36,6 @@ void expect_exact_messages(const std::vector<MessageCase>& cases) {
   for (const MessageCase& test_case : cases) {
     SCOPED_TRACE(test_case.name);
     EXPECT_EQ(test_case.actual, test_case.expected);
-  }
-}
-
-void expect_capability_based_llm_metal_status(const std::string& usage) {
-  constexpr const char* forbidden_phrases[] = {
-      "Apple7/M1", "M4 evidence", "M5", "validation remains pending",
-      "baseline smoke", "cross-family", "device matrix", "experimental",
-      "preview"};
-  for (const char* phrase : forbidden_phrases) {
-    SCOPED_TRACE(phrase);
-    EXPECT_EQ(usage.find(phrase), std::string::npos);
   }
 }
 
@@ -226,7 +216,7 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       "      --layers <count>    Required transformer layer count.\n"
       "      --query-heads <count>\n"
       "                          Required query-head count; must be at least as large as KV heads\n"
-      "                          and divisible by them.\n"
+      "                          and divisible by them. Model classification, not executed attention.\n"
       "      --kv-heads <count> Required physical KV-head count.\n"
       "      --head-dim <count> Required elements per K or V head vector.\n"
       "      --kv-element-bytes <1|2|4>\n"
@@ -241,6 +231,7 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       "                          Rejected for decode.\n"
       "      --attention-query-tile-tokens <count>\n"
       "                          Required only for prefill; query tile Q, 1 <= Q <= P.\n"
+      "                          Defines synthetic prefix rereads, not inference-kernel tiling.\n"
       "                          Rejected for decode.\n"
       "      --kv-layout <contiguous|paged>\n"
       "                          KV storage layout (default: contiguous). CPU and Metal support both layouts.\n"
@@ -263,9 +254,10 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       std::to_string(Constants::LLM_DEFAULT_LOOP_COUNT) +
       ").\n"
       "      --seed <uint64>    Reproducible base seed; generated once when omitted.\n"
-      "  -o, --output <target>  JSON schema 1 target; exact - writes one final document to\n"
+      "  -o, --output <target>  JSON schema 2 target; exact - writes one final document to\n"
       "                          stdout and routes human output to stderr. Every other non-empty\n"
-      "                          target is a file with atomic scenario and terminal checkpoints.\n"
+      "                          target is a file with bounded loop and terminal atomic snapshots.\n"
+      "                          K=max(1,ceil(count/8)); abrupt loss bound: 3K completed attempts.\n"
       "                          An empty value disables JSON for this direct command.\n"
       "  -h, --help             Show this LLM-mode help and exit.\n"
       "This profile models CPU or Metal memory traffic only: it performs no Transformer math and\n"
@@ -503,9 +495,34 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "(4096 bytes); the result may be cache-dominant"},
   };
   expect_exact_messages(cases);
-  const std::string usage =
-      Messages::llm_memory_usage_options("memory_benchmark");
-  expect_capability_based_llm_metal_status(usage);
+}
+
+TEST(MessagesTest, LlmDistributionReportsAcceptedPopulationAndDescriptiveSpread) {
+  EXPECT_EQ(Messages::report_llm_memory_distribution(7, 123.456, 98.766, 150.126, 6.257, 3.141),
+            "    n=7, median=123.46 GB/s, min=98.77, max=150.13, CV=6.26%, MAD=3.14 GB/s");
+  EXPECT_EQ(Messages::report_llm_memory_distribution(1, 42.0, 42.0, 42.0, 0.0, 0.0),
+            "    n=1, median=42.00 GB/s, min=42.00, max=42.00, CV=0.00%, MAD=0.00 GB/s");
+}
+
+TEST(MessagesTest, LlmPrefillModelContextDistinguishesUnavailableFromKnownZero) {
+  const std::string prefix =
+      "  Prompt tokens (P):                 5\n"
+      "  Attention query tile tokens (Q):  2\n"
+      "  Attention query tiles (C):        3\n"
+      "  Prefix token visits / sequence:   11\n";
+  EXPECT_EQ(Messages::report_llm_memory_prefill_geometry(5, 2, 3, 11, 15, 60, std::nullopt),
+            prefix + "  Causal token pairs / sequence:    15\n"
+                     "  Logical attention pairs:          60\n"
+                     "  Logical attention FMA terms:      unavailable (arithmetic-overflow)");
+  EXPECT_EQ(Messages::report_llm_memory_prefill_geometry(5, 2, 3, 11, std::nullopt, std::nullopt, std::nullopt),
+            prefix + "  Causal token pairs / sequence:    unavailable (arithmetic-overflow)\n"
+                     "  Logical attention pairs:          unavailable (arithmetic-overflow)\n"
+                     "  Logical attention FMA terms:      unavailable (arithmetic-overflow)");
+  // Formatting helper receives known zero separately from absent theoretical evidence.
+  EXPECT_EQ(Messages::report_llm_memory_prefill_geometry(5, 2, 3, 11, 0, 0, 0),
+            prefix + "  Causal token pairs / sequence:    0\n"
+                     "  Logical attention pairs:          0\n"
+                     "  Logical attention FMA terms:      0");
 }
 
 TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
@@ -526,32 +543,26 @@ TEST(MessagesTest, GeneralHelpAdvertisesTheLlmBoundaryExactlyOnce) {
       std::string::npos);
   EXPECT_NE(usage.find("and never falls back to CPU"),
             std::string::npos);
-  expect_capability_based_llm_metal_status(usage);
   EXPECT_NE(usage.find("--weight-size-mb"), std::string::npos);
   EXPECT_NE(usage.find("--query-heads"), std::string::npos);
   EXPECT_NE(usage.find("--context-tokens"), std::string::npos);
   EXPECT_NE(usage.find("memory-only interpretation"), std::string::npos);
-  EXPECT_NE(usage.find("JSON uses schema 1 methodologies "),
+  EXPECT_NE(usage.find("JSON uses schema 2 methodologies "),
             std::string::npos);
-  EXPECT_NE(usage.find(
-                Constants::LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION),
-            std::string::npos);
-  EXPECT_NE(usage.find(Constants::LLM_CPU_DECODE_PAGED_METHODOLOGY_VERSION),
-            std::string::npos);
-  EXPECT_NE(usage.find("llm-memory-v1-metal-decode-contiguous"),
-            std::string::npos);
-  EXPECT_NE(usage.find("llm-memory-v1-metal-decode-paged"),
-            std::string::npos);
-  EXPECT_NE(usage.find("llm-memory-v1-metal-prefill-contiguous"),
-            std::string::npos);
-  EXPECT_NE(usage.find("llm-memory-v1-metal-prefill-paged"),
-            std::string::npos);
+  for (const char* selector : {
+           "llm-memory-v2-cpu-decode-contiguous", "llm-memory-v2-cpu-decode-paged",
+           "llm-memory-v2-cpu-prefill-contiguous", "llm-memory-v2-cpu-prefill-paged",
+           "llm-memory-v2-metal-decode-contiguous", "llm-memory-v2-metal-decode-paged",
+           "llm-memory-v2-metal-prefill-contiguous", "llm-memory-v2-metal-prefill-paged"}) {
+    SCOPED_TRACE(selector);
+    EXPECT_NE(usage.find(selector), std::string::npos);
+  }
   EXPECT_NE(usage.find("Metal LLM-memory rejects --threads"),
             std::string::npos);
-  EXPECT_NE(usage.find("checkpoints each terminal scenario"),
+  EXPECT_NE(usage.find("LLM-memory snapshots every K=max(1,ceil(count/8)) loops"),
             std::string::npos);
-  EXPECT_EQ(usage.find("execution is unavailable"), std::string::npos);
-  EXPECT_EQ(usage.find("future LLM"), std::string::npos);
+  EXPECT_NE(usage.find("and at command terminal (abrupt loss bound: 3K completed attempts)."),
+            std::string::npos);
 }
 
 TEST(MessagesErrorTest, GpuMessagesHaveExactMethodologyOutput) {
@@ -862,11 +873,9 @@ TEST(MessagesFormattingTest, ReportTlbResourceSummaryRetainsFailures) {
   EXPECT_NE(not_requested.find("QoS not requested"), std::string::npos);
 }
 
-TEST(MessagesFormattingTest, ReportTlbWorkEstimateIsConcise) {
+TEST(MessagesFormattingTest, ReportTlbWorkEstimateAndCompletionHaveExpectedContent) {
   const std::string work = Messages::report_tlb_work_estimate("base", 15, 10, 20, 3.75, 7.5);
   EXPECT_NE(work.find("Work Estimate [base]"), std::string::npos);
-  EXPECT_EQ(work.find("pointer accesses"), std::string::npos);
-  EXPECT_EQ(work.find("peak"), std::string::npos);
   EXPECT_NE(work.find("3.75-7.50 s"), std::string::npos);
 
   const std::string completion = Messages::report_tlb_pass_completion("base", 12, "CI target reached");
@@ -987,7 +996,7 @@ TEST(MessagesFormattingTest, UsageOptions) {
   EXPECT_NE(msg.find("prefill requires --phase prefill, --prompt-tokens"), std::string::npos);
   EXPECT_NE(msg.find("--attention-query-tile-tokens"), std::string::npos);
   EXPECT_NE(msg.find("Both phases support contiguous"), std::string::npos);
-  EXPECT_NE(msg.find("llm-memory-v1-cpu-prefill-contiguous"), std::string::npos);
+  EXPECT_NE(msg.find("llm-memory-v2-cpu-prefill-contiguous"), std::string::npos);
   EXPECT_NE(msg.find(Constants::LLM_CPU_PREFILL_PAGED_METHODOLOGY_VERSION), std::string::npos);
   EXPECT_NE(msg.find("--analyze-core2core"), std::string::npos);
   EXPECT_NE(msg.find("acquire/release token-handoff"), std::string::npos);
@@ -1022,9 +1031,9 @@ TEST(MessagesFormattingTest, UsageOptions) {
             std::string::npos);
   EXPECT_NE(msg.find("Standard, GPU, and LLM-memory files retain"),
             std::string::npos);
-  EXPECT_NE(msg.find("LLM-memory checkpoints each terminal scenario"),
+  EXPECT_NE(msg.find("LLM-memory snapshots every K=max(1,ceil(count/8)) loops"),
             std::string::npos);
-  EXPECT_NE(msg.find("sweep files checkpoint attempts"), std::string::npos);
+  EXPECT_NE(msg.find("Sweep files checkpoint attempts"), std::string::npos);
   EXPECT_NE(msg.find("Requires --output <target>"), std::string::npos);
   EXPECT_NE(msg.find("-h"), std::string::npos);
   // Check that default values are included

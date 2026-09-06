@@ -14,8 +14,8 @@ JSON_DIR="${RUN_DIR}/json"
 SUMMARY_CSV="${RUN_DIR}/latency_summary.csv"
 
 DEFAULT_BENCHMARK="${SCRIPT_DIR}/../memory_benchmark"
-# Whichever BENCHMARK_CMD/PATH producer is selected must emit complete current
-# standard schema 3; summary extraction intentionally rejects older contracts.
+# Whichever BENCHMARK_CMD/PATH producer is selected must emit the supported
+# standard schema 3 and methodology; extraction rejects incompatible contracts.
 if [ -x "${DEFAULT_BENCHMARK}" ]; then
   BENCHMARK_CMD="${BENCHMARK_CMD:-${DEFAULT_BENCHMARK}}"
 else
@@ -125,20 +125,22 @@ import sys
 from pathlib import Path
 
 
-def require_current_standard_result(data):
+def require_supported_standard_result(data):
     configuration = data.get("configuration") if isinstance(data, dict) else None
     if not (
         isinstance(configuration, dict)
-        and data.get("version") == "0.63.0"
+        and isinstance(data.get("version"), str)
+        and bool(data["version"])
         and configuration.get("mode") == "benchmark"
         and type(configuration.get("benchmark_schema_version")) is int
         and configuration["benchmark_schema_version"] == 3
+        and configuration.get("methodology_version") == "benchmark-v2-calibrated-seeded-balanced"
         and data.get("status") == "complete"
         and data.get("results_complete") is True
         and data.get("conclusions_valid") is True
         and isinstance(configuration.get("output_file"), str)
     ):
-        raise RuntimeError("not a complete current standard schema-3 benchmark result")
+        raise RuntimeError("not a complete supported standard schema-3 benchmark result")
     return configuration
 
 
@@ -151,7 +153,7 @@ errors = []
 for path in sorted(json_dir.glob("*.json")):
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        cfg = require_current_standard_result(data)
+        cfg = require_supported_standard_result(data)
         headline = data["cache"]["custom"]["latency"]["headline_ns"]
         stats = headline["pooled_sample_distribution"]["statistics"]
         measurements = headline.get("measurements", []) or []

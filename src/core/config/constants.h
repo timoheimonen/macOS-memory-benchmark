@@ -175,19 +175,19 @@ namespace Constants {
   constexpr size_t LLM_MAX_ACCOUNTED_BYTES_PER_TASK =
       64ULL * 1024ULL * BYTES_PER_MB;
   constexpr double LLM_STREAMING_CV_WARNING_PCT = 5.0;
-  constexpr int LLM_JSON_SCHEMA_VERSION = 1;
+  constexpr int LLM_JSON_SCHEMA_VERSION = 2;
   constexpr size_t LLM_JSON_MAX_SAFE_INTEGER = (1ULL << 53) - 1;
   constexpr const char* LLM_JSON_MODE_NAME = "llm_memory";
   constexpr size_t LLM_WEIGHT_PASSES_PER_WORK_UNIT = 1;
   constexpr size_t LLM_KV_REPLAY_FACTOR = 1;
   constexpr const char* LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION =
-      "llm-memory-v1-cpu-decode-contiguous";
+      "llm-memory-v2-cpu-decode-contiguous";
   constexpr const char* LLM_CPU_DECODE_PAGED_METHODOLOGY_VERSION =
-      "llm-memory-v1-cpu-decode-paged";
+      "llm-memory-v2-cpu-decode-paged";
   constexpr const char* LLM_CPU_PREFILL_CONTIGUOUS_METHODOLOGY_VERSION =
-      "llm-memory-v1-cpu-prefill-contiguous";
+      "llm-memory-v2-cpu-prefill-contiguous";
   constexpr const char* LLM_CPU_PREFILL_PAGED_METHODOLOGY_VERSION =
-      "llm-memory-v1-cpu-prefill-paged";
+      "llm-memory-v2-cpu-prefill-paged";
   constexpr const char* LLM_WORK_PLAN_IDENTITY_VERSION =
       "llm-memory-work-plan-v1";
   constexpr const char* LLM_COMPONENT_IDENTITY_VERSION =
@@ -276,6 +276,13 @@ namespace Constants {
   constexpr const char* LLM_PAGED_READ_CHECKSUM_VERSION =
       "llm-paged-read-checksum-v1";
   constexpr size_t LLM_KV_BLOCK_TABLE_HASH_CHUNK_ENTRIES = 1024;
+  // Canonical Metal oracle reconstruction owns a temporary table/bitset (charged
+  // separately) and fixed scratch: the layout hasher's 4 KiB serialization
+  // buffer, at most 4 KiB for fixed uint64/hex permutation strings and their
+  // construction copies, and 8 KiB for SHA state, table/summary objects and
+  // fixed call-frame headroom. This conservative envelope is shared by both
+  // runner estimates; it is not a claim of additional persistent resources.
+  constexpr size_t LLM_CANONICAL_PAGED_EXPECTED_FIXED_SCRATCH_BYTES = 16 * 1024;
   constexpr const char* LLM_METAL_SEGMENT_LAYOUT_VERSION =
       "whole-element-segments-v1";
 

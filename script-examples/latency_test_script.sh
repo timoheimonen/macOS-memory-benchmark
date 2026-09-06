@@ -13,8 +13,8 @@ mkdir -p "${TMP_DIR}"
 
 # Prefer the binary built in the repository; allow an explicit override or an
 # installed memory_benchmark from PATH when the local binary is unavailable.
-# Whichever producer is selected must emit complete current standard schema 3;
-# extraction below intentionally rejects older standard JSON contracts.
+# Whichever producer is selected must emit the supported standard schema 3 and
+# methodology; extraction below intentionally rejects incompatible contracts.
 DEFAULT_BENCHMARK="${SCRIPT_DIR}/../memory_benchmark"
 if [ -x "${DEFAULT_BENCHMARK}" ]; then
     BENCHMARK_CMD="${BENCHMARK_CMD:-${DEFAULT_BENCHMARK}}"
@@ -139,7 +139,7 @@ final_output="${SCRIPT_DIR}/final_output.txt"
 # Clear/create the final output file
 > "${final_output}"
 
-# Function to extract current standard schema-3 pooled sample statistics.
+# Function to extract supported standard schema-3 pooled sample statistics.
 extract_with_jq() {
     local json_file=$1
     local cache_size=$2
@@ -148,14 +148,16 @@ extract_with_jq() {
     if ! jq '
              if type != "object"
                   or (.configuration | type) != "object"
-                  or .version != "0.63.0"
+                  or (.version | type) != "string"
+                  or (.version | length) == 0
                   or .configuration.mode != "benchmark"
                   or .configuration.benchmark_schema_version != 3
+                  or .configuration.methodology_version != "benchmark-v2-calibrated-seeded-balanced"
                   or .status != "complete"
                   or .results_complete != true
                   or .conclusions_valid != true
                   or (.configuration.output_file | type) != "string"
-               then error("not a complete current standard schema-3 benchmark result")
+               then error("not a complete supported standard schema-3 benchmark result")
                else .cache.custom.latency.headline_ns.pooled_sample_distribution.statistics
                end
              | if type == "object"
@@ -177,7 +179,7 @@ extract_with_jq() {
     rm -f "${extracted_file}"
 }
 
-# Function to extract current standard schema-3 pooled sample statistics.
+# Function to extract supported standard schema-3 pooled sample statistics.
 extract_with_python() {
     local json_file=$1
     local cache_size=$2
@@ -188,26 +190,28 @@ import json
 import sys
 
 
-def require_current_standard_result(data):
+def require_supported_standard_result(data):
     configuration = data.get("configuration") if isinstance(data, dict) else None
     if not (
         isinstance(configuration, dict)
-        and data.get("version") == "0.63.0"
+        and isinstance(data.get("version"), str)
+        and bool(data["version"])
         and configuration.get("mode") == "benchmark"
         and type(configuration.get("benchmark_schema_version")) is int
         and configuration["benchmark_schema_version"] == 3
+        and configuration.get("methodology_version") == "benchmark-v2-calibrated-seeded-balanced"
         and data.get("status") == "complete"
         and data.get("results_complete") is True
         and data.get("conclusions_valid") is True
         and isinstance(configuration.get("output_file"), str)
     ):
-        raise RuntimeError("not a complete current standard schema-3 benchmark result")
+        raise RuntimeError("not a complete supported standard schema-3 benchmark result")
 
 
 try:
     with open(sys.argv[1], 'r') as f:
         data = json.load(f)
-        require_current_standard_result(data)
+        require_supported_standard_result(data)
         latency = data['cache']['custom']['latency']
         stats = latency['headline_ns']['pooled_sample_distribution']['statistics']
         required_statistics = ('average', 'median', 'p90', 'p95', 'p99', 'min', 'max', 'stddev')
