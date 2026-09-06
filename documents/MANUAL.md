@@ -51,7 +51,7 @@ This manual focuses on practical usage and interpretation. For implementation de
 
 - Apple Silicon Mac running macOS 26 or later
 - Xcode Command Line Tools
-- GoogleTest for C++ tests; Python 3 for the script-example entry test in the aggregate `make test-all` gate. `jq` is
+- GoogleTest for C++ tests; Python 3 for build provenance and the Python tests in the aggregate `make test-all` gate. `jq` is
   optional for JSON inspection and the jq-backed latency-script path.
 - For `--gpu-bandwidth`: a unified-memory Metal device supporting `MTLGPUFamilyApple7` or a compatible later family.
   Capability support is distinct from a controlled performance-validation cohort.
@@ -99,7 +99,7 @@ production C++ and Objective-C++ only and excludes tests, GoogleTest, the bundle
 assembly. The macOS 26.0 build links the system Metal and Foundation frameworks. GPU kernels are embedded MSL 2.3
 source compiled at runtime; the optional offline Metal Toolchain is not required.
 
-`make test-all` requires Python 3 for its script-example entry test. It does not require `jq`.
+`make test-all` requires Python 3 for its script-example and LLM verifier tests. It does not require `jq`.
 
 ### First run
 
@@ -2815,6 +2815,23 @@ positive power-of-two
 page-rounded weight, physical K/V, optional table, transient, and auxiliary peak fits the reported available-memory
 policy.
 
+CPU LLM results retain the original Mach tick boundaries and timebase for duration reconstruction.
+The build embeds compiler, flags, SDK/deployment target and Git provenance; the command hashes the
+executable once before tasks. These fields bind available artifacts and do not constitute signed
+execution attestation. See the [LLM process contract](API.md) for availability and numeric rules.
+Python 3 is required to generate build provenance.
+
+A saved schema-2 artifact can be checked without running the benchmark:
+
+```bash
+python3 script-examples/verify_llm_result.py llm-result.json --binary ./memory_benchmark --require-raw-timing
+```
+
+The optional binary is hashed, never executed. The verdict distinguishes artifact consistency, run acceptance,
+independent checksum reconstruction, raw timing availability and binary binding. A consistent failed run exits 1;
+an unsupported schema or exceeded verifier work budget exits 2. Only a consistent accepted artifact exits 0.
+See the [bounded verifier contract](API.md#independent-llm-artifact-verifier) for limits and float tolerances.
+
 ### LLM result is incomplete, invalid, or not comparable
 
 Check top-level backend/phase/layout/methodology, status/reason, `results_complete`, `run_accepted`, scenario-order
@@ -2887,9 +2904,3 @@ Command help:
 ```bash
 memory_benchmark -h
 ```
-
-CPU LLM results retain the original Mach tick boundaries and timebase for duration reconstruction.
-The build embeds compiler, flags, SDK/deployment target and Git provenance; the command hashes the
-executable once before tasks. These fields bind available artifacts and do not constitute signed
-execution attestation. See the [LLM process contract](API.md) for availability and numeric rules.
-Python 3 is required to generate build provenance.

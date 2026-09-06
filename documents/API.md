@@ -727,6 +727,55 @@ Canonical plan/expected vector capacities, transient expected reconstruction, ac
 DOM and stdout serialized strings are charged together at their simultaneous peak; bounded snapshot count does not
 reduce the single-snapshot peak allowance.
 
+## Independent LLM artifact verifier
+
+`python3 script-examples/verify_llm_result.py result.json` reads exactly one schema-2 `llm_memory` document.
+It supports the eight current CPU/Metal × decode/prefill × contiguous/paged component sets. Other schemas,
+methodologies and profiles are unsupported; there is no migration or historical field fallback. The independent
+Python arithmetic never imports or invokes producer helpers or executes the optional binary.
+
+The JSON verdict separates `artifact_consistent` from `run_accepted`. Exit 0 means a consistent accepted artifact;
+exit 1 means inconsistency or a consistently described unaccepted run; exit 2 means unsupported schema/profile,
+a resource bound or a requested evidence level that is unavailable. `artifact_consistent` is null on unsupported
+cases. An artifact alone cannot establish the original process exit status; the process acceptance procedure below
+still applies to callers launching the producer.
+
+Checks reconstruct geometry, frozen work, payload/layout/lookup quantities, seed derivation and the canonical
+Fisher–Yates table digest; bind component, model, scenario, layout and nested identity evidence; derive independent
+CPU worker/run and Metal dual-mod32 expectations once per canonical plan; check original timing, rates, named
+validation, ordered measurement prefix, accepted populations, exact statistics, counters and run acceptance.
+The CPU oracle reconstructs owner ranges, including scenario-specific prefill prefix-cost partitions. Affine range
+sums avoid materializing weight or KV pools. The verifier does not reproduce allocator capacity, host admission
+samples or GPU traces; those remain reported implementation/environment evidence. Identity/hash agreement binds
+reported content and never authenticates a build or a runtime observation.
+
+`checks.checksum` is `independent-oracle` when expectations were available, otherwise `unavailable`.
+`checks.timing` is `cpu-raw-ticks`, `gpu-timestamps`, `elapsed-only`, or `unavailable`. Optional CPU raw evidence
+may be absent from earlier schema-2 artifacts; rates are still checked but duration reconstruction is limited.
+`--require-raw-timing` rejects missing CPU raw evidence with `unsupported-missing-raw-timing`.
+`checks.build` is `manifest-only`, `unavailable`, or `binary-bound`. `--binary PATH` streams the supplied file's
+SHA-256 and requires equality with the manifest. It does not run the file. A correctly described failed,
+partial, interrupted or unsupported run can be consistent while `run_accepted` is false.
+
+Counts use exact integers and the producer's canonical decimal representation. Derived floats use relative
+tolerance `1e-10` and absolute tolerance `1e-15`; integer equality never uses float tolerance. CPU conversion
+uses the documented double evaluation order. Zero/nonfinite accepted durations and invalid rates are rejected.
+Statistics use sample standard deviation (n−1; singleton zero), linearly interpolated quantiles at `(n−1)p`,
+median absolute deviation and the accepted measurement IDs only. Empty populations require null statistics.
+
+Input limits are 64 MiB UTF-8 JSON, depth 64, one million JSON nodes, 100,000 measurements, 1,024 canonical
+plans, 1 MiB per identity and one million charged oracle/partition steps across the artifact. Decimal uint64
+strings have at most 20 digits. Duplicate JSON keys, booleans used as integers and nonfinite JSON numbers
+are rejected. A limit produces an explicit unsupported verdict, never successful verification; large calibrated
+work can exceed this verifier's budget even when the benchmark itself supports it. Parsing errors do not become
+partial success. Exact acceptance claims remain subject to the checksum collision boundaries documented in the
+[LLM whitepaper](LLM_MEMORY_PROFILE_WHITEPAPER.md#checksum-fault-model-and-evidence-limits), and the verifier
+cannot replace kernel qualification tests, prove executed instructions or establish physical GPU/DRAM traffic.
+
+`make test-llm-verifier` runs independent small arithmetic goldens, all eight captured current profile fixtures,
+status fixtures, malformed input and specific artifact mutations. `make test-all` includes this separate gate
+alongside the existing standard-memory script-example gate.
+
 ## Consumer acceptance procedure
 
 A caller accepts a benchmark conclusion only after all of the following checks succeed:

@@ -34,7 +34,7 @@ See [Measurement Capabilities](documents/CAPABILITIES.md) for the full measureme
 - macOS 26 or later on Apple Silicon (ARM64)
 - Xcode Command Line Tools for source builds
 - GoogleTest from Homebrew for the test suite
-- Python 3 for the script-example entry test included in the aggregate `make test-all` gate; `jq` is optional for JSON
+- Python 3 for build provenance and the Python tests included in the aggregate `make test-all` gate; `jq` is optional for JSON
   inspection and the jq-backed latency-script path
 - Metal modes: a unified-memory device with `MTLGPUFamilyApple7` or compatible later-family capability; LLM Metal also
   requires Tier 2 argument buffers and `maxBufferLength >= 256 MiB`
@@ -395,7 +395,7 @@ make test-integration
 make test-all
 ```
 
-`make test-all` requires Python 3; it runs all GTest cases followed by the focused script-example entry test. `jq` is
+`make test-all` requires Python 3; it runs all GTest cases followed by the script-example and independent LLM verifier tests. `jq` is
 not required by the test gate.
 
 Generate isolated LLVM production-source coverage reports under `/tmp`:
@@ -408,6 +408,23 @@ make coverage-all
 See [CONTRIBUTING.md](documents/CONTRIBUTING.md) for contribution guidance and [Project Structure](documents/PROJECT_STRUCTURE.md) for
 repository navigation and the current test-suite map. C++ reference documentation can be generated with `make docs`.
 
+CPU LLM results retain the original Mach tick boundaries and timebase for duration reconstruction.
+The build embeds compiler, flags, SDK/deployment target and Git provenance; the command hashes the
+executable once before tasks. These fields bind available artifacts and do not constitute signed
+execution attestation. See the [LLM process contract](documents/API.md) for availability and numeric rules.
+Python 3 is required to generate build provenance.
+
+Verify a saved LLM schema-2 result independently (standard library only):
+
+```bash
+python3 script-examples/verify_llm_result.py llm-result.json --binary ./memory_benchmark --require-raw-timing
+make test-llm-verifier
+```
+
+The verifier reports artifact consistency separately from run acceptance and identifies missing timing/build
+evidence. Its bounded arithmetic reconstructs logical work and checksums; it does not attest execution or measure
+physical DRAM traffic. See [the verifier contract](documents/API.md#independent-llm-artifact-verifier).
+
 ## Scope and Safety
 
 This project intentionally does not target Intel Macs or other operating systems, provide a GUI, or host a public leaderboard/backend.
@@ -419,9 +436,3 @@ The benchmark performs sustained, intensive memory operations. Use it at your ow
 Copyright 2025-2026 Timo Heimonen \<timo.heimonen@proton.me\>
 
 Licensed under the [GNU General Public License v3.0 or later](LICENSE).
-
-CPU LLM results retain the original Mach tick boundaries and timebase for duration reconstruction.
-The build embeds compiler, flags, SDK/deployment target and Git provenance; the command hashes the
-executable once before tasks. These fields bind available artifacts and do not constitute signed
-execution attestation. See the [LLM process contract](documents/API.md) for availability and numeric rules.
-Python 3 is required to generate build provenance.

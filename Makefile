@@ -154,11 +154,16 @@ test-integration: $(TARGET) $(TEST_TARGET)
 test-script-examples:
 	python3 -m unittest -v tests/test_script_examples.py
 
-# All tests (unit tests + integration tests + bundled script examples)
+# Independent LLM artifact contract and mutation tests.
+test-llm-verifier:
+	python3 -m unittest -v tests/test_llm_result_verifier.py
+
+# All tests (unit, integration, bundled examples, and independent LLM verifier)
 test-all: $(TARGET) $(TEST_TARGET)
-	@echo "Running all tests (unit + integration + bundled script examples)..."
+	@echo "Running all tests (unit + integration + bundled examples + LLM verifier)..."
 	./$(TEST_TARGET)
 	$(MAKE) test-script-examples
+	$(MAKE) test-llm-verifier
 
 # Reproducible production C++ source coverage in an isolated /tmp build.
 coverage-unit:
@@ -236,7 +241,7 @@ uninstall:
 	@echo "$(TARGET) uninstalled successfully."
 
 # Define targets that don't correspond to files
-.PHONY: all clean test test-integration test-script-examples test-all \
+.PHONY: all clean test test-integration test-script-examples test-llm-verifier test-all \
 	coverage-unit coverage-all clean-test docs clean-docs install uninstall
 
 # Missing dependency files are expected on a clean tree. Existing files carry
