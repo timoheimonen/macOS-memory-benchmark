@@ -1100,8 +1100,8 @@ component cohorts must not be pooled as one distribution.
 
 The console identifies backend, phase/work unit, KV layout, phase geometry, warm/cacheable semantics, exact
 weight/KV-read/KV-write bytes, and up to one measured headline per scenario. Decode prints context and crossover;
-prefill prints P/Q/C, prefix visits, causal pairs, and logical attention/FMA audit counts. It uses phase-specific labels
-such as `ms/decode step` or `ms/prefill operation`; JSON remains backend-neutral with
+prefill prints P/Q/C, prefix visits, causal pairs, and theoretical logical attention/FMA model-context counts.
+It uses phase-specific labels such as `ms/decode step` or `ms/prefill operation`; JSON remains backend-neutral with
 `synthetic_work_unit_latency_seconds`, `synthetic_memory_work_units_per_second`, and
 `effective_model_payload_gb_s`. Metal task output uses `kv_write=valid|invalid|not-evaluated|not-applicable`, summarizing
 the phase-specific named JSON checks. The report never uses bare `tokens/s` and

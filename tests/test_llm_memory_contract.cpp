@@ -700,37 +700,6 @@ std::string sha256_little_endian_entries(
   return encoded;
 }
 
-std::string sha256_text(std::string_view input) {
-  CC_SHA256_CTX context;
-  if (CC_SHA256_Init(&context) != 1) {
-    return {};
-  }
-  constexpr size_t kBytesPerUpdateCap = 4096;
-  size_t offset = 0;
-  while (offset < input.size()) {
-    const size_t byte_count =
-        std::min(kBytesPerUpdateCap, input.size() - offset);
-    if (CC_SHA256_Update(&context, input.data() + offset,
-                         static_cast<CC_LONG>(byte_count)) != 1) {
-      return {};
-    }
-    offset += byte_count;
-  }
-
-  std::array<unsigned char, CC_SHA256_DIGEST_LENGTH> digest{};
-  if (CC_SHA256_Final(digest.data(), &context) != 1) {
-    return {};
-  }
-  constexpr char kLowercaseHex[] = "0123456789abcdef";
-  std::string encoded(digest.size() * 2, '0');
-  for (size_t index = 0; index < digest.size(); ++index) {
-    encoded[index * 2] = kLowercaseHex[digest[index] >> 4U];
-    encoded[index * 2 + 1] =
-        kLowercaseHex[digest[index] & 0x0fU];
-  }
-  return encoded;
-}
-
 std::vector<uint64_t> contiguous_segment_lengths(uint64_t logical_bytes) {
   std::vector<uint64_t> lengths;
   uint64_t remaining = logical_bytes;

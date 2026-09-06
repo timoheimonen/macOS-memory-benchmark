@@ -3021,57 +3021,11 @@ TEST(LlmMetalBackendTest,
 }
 
 TEST(LlmMetalBackendTest,
-     PrefillContiguousMslSourceLocksFullPromptThenPerTileKThenVContract) {
-  const std::string_view source = LlmMetalKernelContract::kSource;
-  EXPECT_EQ(canonical_llm_metal_kernel_source_sha256(),
-            kCanonicalKernelSourceSha256);
-  EXPECT_NE(source.find("#if LLM_METAL_PREFILL_CONTIGUOUS"),
-            std::string_view::npos);
-  EXPECT_NE(source.find("llm_metal_prefill_contiguous_weights_only"),
-            std::string_view::npos);
-  EXPECT_NE(source.find("llm_metal_prefill_contiguous_kv_only"),
-            std::string_view::npos);
-  EXPECT_NE(source.find("llm_metal_prefill_contiguous_mixed"),
-            std::string_view::npos);
-  EXPECT_NE(source.find("llm_metal_validate_prefill_contiguous_writes"),
-            std::string_view::npos);
-
-  const size_t run_start = source.find("inline void run_prefill_kv");
-  const size_t run_end = source.find(
-      "kernel void llm_metal_prefill_contiguous_weights_only", run_start);
-  ASSERT_NE(run_start, std::string_view::npos);
-  ASSERT_NE(run_end, std::string_view::npos);
-  const std::string_view run = source.substr(run_start, run_end - run_start);
-  const size_t token_loop = run.find(
-      "for (ulong prompt_token = 0ul; prompt_token < params.prompt_tokens;");
-  const size_t write_key = run.find("write_prefill_key_range", token_loop);
-  const size_t write_value = run.find("write_prefill_value_range", write_key);
-  const size_t remaining = run.find(
-      "ulong remaining_tokens = params.prompt_tokens", write_value);
-  const size_t tile_loop = run.find("while (remaining_tokens != 0ul)",
-                                    remaining);
-  const size_t remaining_distance = run.find(
-      "min(params.attention_query_tile_tokens,", tile_loop);
-  const size_t scan_key = run.find("scan_key_range", tile_loop);
-  const size_t scan_value = run.find("scan_value_range", scan_key);
-  ASSERT_NE(token_loop, std::string_view::npos);
-  ASSERT_LT(token_loop, write_key);
-  ASSERT_LT(write_key, write_value);
-  ASSERT_LT(write_value, remaining);
-  ASSERT_LT(remaining, tile_loop);
-  ASSERT_LT(tile_loop, remaining_distance);
-  ASSERT_LT(remaining_distance, scan_key);
-  ASSERT_LT(scan_key, scan_value);
-  EXPECT_EQ(run.find("(tile_ordinal + 1ul) *"), std::string_view::npos);
-  EXPECT_EQ(run.find("threadgroup_barrier(mem_flags::mem_device)"),
-            std::string_view::npos);
-  EXPECT_NE(source.find(
-                "const ulong remainder = first_vector % ulong(grid_size)"),
-            std::string_view::npos);
-  EXPECT_NE(source.find(
-                "return first_vector + delta;"),
-            std::string_view::npos);
-
+     PrefillContiguousSemanticTraceWritesFullPromptBeforePerTileKThenV) {
+  // This freezes the bounded schedule oracle. Actual MSL pipeline/layout,
+  // Q=1/Q=P/tail execution, and corruption rejection have real-device tests;
+  // the separate canonical source hash retains provenance. A trace alone
+  // does not attest the GPU's temporal access order.
   const LlmPrefillPlan plan = resolve_llm_prefill_plan(
       {64, 2, 1, 1, 1, 1, 1, 4, 0});
   ASSERT_TRUE(plan.valid) << plan.reason_code;

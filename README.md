@@ -139,6 +139,9 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
   --kv-layout paged --kv-block-tokens 16 --iterations 1 --count 3 --seed 42
 ```
 
+Query heads classify the model; they do not add executed attention math. The prefill query tile
+defines synthetic prefix rereads, not a real inference kernel’s cache or SRAM tiling.
+
 Run one full-prompt prefill operation per scenario with two-token attention query tiles:
 
 ```bash
@@ -405,7 +408,7 @@ make coverage-unit
 make coverage-all
 ```
 
-See [CONTRIBUTING.md](documents/CONTRIBUTING.md) for contribution guidance and [Project Structure](documents/PROJECT_STRUCTURE.md) for
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidance and [Project Structure](documents/PROJECT_STRUCTURE.md) for
 repository navigation and the current test-suite map. C++ reference documentation can be generated with `make docs`.
 
 CPU LLM results retain the original Mach tick boundaries and timebase for duration reconstruction.

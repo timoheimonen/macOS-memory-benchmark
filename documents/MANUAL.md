@@ -304,9 +304,9 @@ KV read / prefill operation  = B * S(P,Q) * K
 Prefill payload is `W`, `B*(P+S(P,Q))*K`, or `W+B*(P+S(P,Q))*K` for weights-only, KV-only, or mixed. Each owner writes
 its prompt tokens in ascending order, K then V for each token, before that owner's reads; no global worker barrier is
 implied. Each increasing tile then reads the complete owned K prefix followed by the complete owned V prefix. `Q=P`
-scans one full prefix; `Q=1` gives `S=triangular(P)`. Reported causal-pair and logical attention/FMA counts are audit
-metadata, not executed compute. The intended checksum accumulation includes each tile-read visit; equality alone
-does not establish every executed visit. For a KV-bearing CPU task, excluded
+scans one full prefix; `Q=1` gives `S=triangular(P)`. Reported causal-pair and logical attention/FMA counts are theoretical
+model context, not executed compute or measured memory traffic. The intended checksum accumulation includes each
+tile-read visit; equality alone does not establish every executed visit. For a KV-bearing CPU task, excluded
 post-validation checks each owner's deterministic first/middle/last canonical-word samples, including bytes clipped to
 owner boundaries, against the final operation ordinal `T-1`. For a KV-bearing Metal prefill task, it checks
 representative/boundary byte locations per layer/batch sequence in both K and V against that ordinal; paged Metal
