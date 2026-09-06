@@ -58,7 +58,7 @@ They support MHA, GQA, and MQA geometry through explicit query- and KV-head coun
 count, and 1-, 2-, or 4-byte KV elements. Paged KV adds timed table indirection, deterministic physical scatter,
 block-granular ownership, and full-block suffix padding.
 
-Schema-v1 vocabulary includes `cpu|metal`, `decode|prefill`, `contiguous|paged`,
+Schema-2 vocabulary includes `cpu|metal`, `decode|prefill`, `contiguous|paged`,
 `decode_step|prefill_operation`, and `none|current_token_append|full_prompt_population`. Contiguous and paged are public
 for both phases on both backends. The four Metal profiles never receive hidden fallback.
 
@@ -1078,10 +1078,14 @@ Indexes, bounded small inputs and work units are JSON integers below 2^53, never
 seeds and checksums are canonical unsigned decimal strings (`0` or `[1-9][0-9]*`), with the relevant uint64/uint32 bounds.
 Known zero is not null. Unavailable/inapplicable values retain null plus applicability/status/reason semantics.
 
-`build_manifest` reserves `manifest_version: 1`, `status: "unavailable"`,
-`reason_code: "build-provenance-not-provided"`, and null `binary_sha256`, `git_commit`, `git_dirty`, `compiler`,
-`compile_flags`, `link_flags`, `target_arch`, `sdk`, `min_os`. Optional CPU raw-tick evidence is not emitted in this
-revision. Neither this reservation nor software/MSL version identity is independent build attestation.
+`build_manifest` version 1 records build-time Git provenance, compiler, compile/link flags, target architecture,
+SDK and deployment target. The command captures `binary_sha256` once before tasks. Missing build fields or an
+unavailable binary hash produce partial evidence; a caller supplying no manifest retains `status: "unavailable"`,
+`reason_code: "build-provenance-not-provided"`, and null provenance fields.
+CPU measurement and excluded-attempt `execution.timing.cpu_raw` retain the original Mach `start_ticks`, `stop_ticks`,
+`delta_ticks` and timebase numerator/denominator. Missing snapshots and Metal CPU-timing evidence are null; older
+schema-2 artifacts may omit this optional field. See the [API contract](API.md#result-schemas-and-completion) for
+availability and numeric rules. Neither manifest/file binding nor software/MSL identity is signed execution attestation.
 
 Consumer acceptance requires successful process outcome, exact mode/schema2/backend/phase/layout/v2 methodology,
 `run_policy_version: "llm-run-policy-bounded-loop-snapshots-v1"`, complete status, `results_complete: true`,

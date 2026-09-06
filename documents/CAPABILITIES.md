@@ -40,11 +40,11 @@ CPU and GPU GB/s should not be compared as if they were the same workload: their
 ## Synthetic LLM Memory Profile
 
 Standalone `--llm-memory` uses generic backend/phase/layout/work-unit vocabulary. Eight profiles are active: CPU and
-Metal each support decode and prefill with contiguous or paged KV. Exact methodologies are
-`llm-memory-v1-cpu-decode-contiguous`, `llm-memory-v1-cpu-decode-paged`,
-`llm-memory-v1-cpu-prefill-contiguous`, `llm-memory-v1-cpu-prefill-paged`,
-`llm-memory-v1-metal-decode-contiguous`, `llm-memory-v1-metal-decode-paged`,
-`llm-memory-v1-metal-prefill-contiguous`, and `llm-memory-v1-metal-prefill-paged`. Metal is explicitly selected with
+Metal each support decode and prefill with contiguous or paged KV. Results use JSON schema 2. Exact methodologies are
+`llm-memory-v2-cpu-decode-contiguous`, `llm-memory-v2-cpu-decode-paged`,
+`llm-memory-v2-cpu-prefill-contiguous`, `llm-memory-v2-cpu-prefill-paged`,
+`llm-memory-v2-metal-decode-contiguous`, `llm-memory-v2-metal-decode-paged`,
+`llm-memory-v2-metal-prefill-contiguous`, and `llm-memory-v2-metal-prefill-paged`. Metal is explicitly selected with
 `--llm-memory-backend metal`, rejects `--threads`, and never receives an implicit CPU fallback.
 
 All four active Metal profiles are governed by runtime capability checks.
@@ -131,8 +131,11 @@ semantic visit kind, and work-unit ordinal. Decode current-token writes or prefi
 padding canaries, are validated after each task. Metal paged prefill therefore requires both full-prompt write validity
 and applicable terminal-padding validity before publishing a measured result.
 Permutation generation, initialization, expected-checksum construction, and post-validation remain outside the
-synchronized CPU timing interval or Metal GPU interval. Metal publishes the generic `kv_write_evaluated` and
-`kv_write_valid` validation fields for both phases.
+synchronized CPU timing interval or Metal GPU interval. Both backends publish independent observations in
+`execution.validation.checks[]`, with named structure, phase/scenario-specific write, and padding checks. Each check
+records applicability, evaluation, validity, and a reason; every applicable check must be evaluated and valid for a
+measurement to be accepted. These bounded checks and the timed checksum do not certify the complete memory-access
+trace or prove that every possible corruption would be detected.
 
 The reported decimal GB/s is exact logical effective model payload divided by backend-authoritative elapsed time:
 synchronized worker time for CPU or `GPUStartTime`/`GPUEndTime` for Metal. A synthetic work unit is one `decode_step`
@@ -148,18 +151,49 @@ resources reduce the risk of accidentally benchmarking a recycled proxy buffer, 
 service.
 
 The three scenarios are independently calibrated when `--iterations` is omitted and then frozen before loop zero.
-Their order rotates across count loops; the default count of three gives each scenario one first, middle, and last
-position. Only measured, validly timed, checksum-accepted records enter aggregates. A file target receives an atomic
-checkpoint after each terminal scenario measurement and at command terminal; exact `--output -` performs the same
-logical state transitions but emits only one final schema 1 document. See the
-[LLM Memory Profile Whitepaper](LLM_MEMORY_PROFILE_WHITEPAPER.md) for formulas, timing, validation, and interpretation.
+Canonical frozen-plan warmups run once before loop zero. Scenario order rotates across count loops; the default count
+of three gives each scenario one first, middle, and last position. This balances positions, not directed predecessor
+pairs or carryover effects across scenario and loop boundaries. Only measured records with accepted timing, checksum,
+applicable validation checks, and backend completion evidence enter aggregates. Each scenario's
+`accepted_measurement_ids` defines the shared population for all its metrics; rates are calculated per measurement
+before aggregation.
+
+For file output, let `K=max(1,ceil(count/8))`. An atomic progress snapshot is written after every Kth fully completed
+loop, at most eight times, followed by a command-terminal snapshot on success, graceful interruption, or representable
+failure. An abrupt exit can lose up to `3K` completed measurement attempts since the last successful snapshot.
+A failed checkpoint is terminal and is not retried. Exact `--output -` skips intermediate snapshot preparation,
+preserves task-boundary stop observations, and emits only one final schema 2 document.
+
+Schema 2 stores canonical plans and expected checksums once, with measurement and calibration references to those
+plans. `build_manifest` records available build-time Git, compiler, flags, target, SDK, and minimum-OS provenance,
+plus the executable file's SHA-256 when available. CPU `execution.timing.cpu_raw` retains original Mach start, stop,
+and delta ticks and the timebase for independent elapsed-time reconstruction; unavailable evidence is null.
+Metal retains GPU timestamps. Build hashes bind reported content to a file; they do not authenticate execution.
+
+The independent [LLM artifact verifier](../script-examples/verify_llm_result.py) checks the eight current schema-2
+profiles using independent arithmetic for geometry, work, checksums, timing, rates, accepted populations, and
+statistics. Run `python3 script-examples/verify_llm_result.py result.json`; optional `--require-raw-timing` requires
+CPU raw timing evidence and `--binary PATH` checks the supplied file's hash without executing it. The verdict
+separates artifact consistency from run acceptance. Unsupported profiles, unavailable required evidence, and resource
+limits produce an unsupported verdict, not successful verification. An artifact cannot establish the original process
+exit status or prove physical DRAM service. See the [Machine-Readable CLI API](API.md#independent-llm-artifact-verifier)
+for limits and exit codes.
+
+`results_complete` requires every planned measurement to be measured. `run_accepted` additionally requires complete
+run status and no known checkpoint or command failure, with required timing, checksum, validation, and backend
+completion/lifecycle evidence accepted. Acceptance is independent of position balance, sample count, CV, duration,
+and environment: a correct count-one run can be accepted while `scenario_order_balance_complete` is false.
+Retain the process exit status and terminal context as well as the artifact; an older snapshot cannot report a later
+failure.
 
 Comparisons require matching backend/phase/layout, schema/methodology and component identities, model/phase geometry,
-fixed or automatic work policy, frozen work-plan identity, software, hardware, applicable worker counts, and
-sufficiently similar thermal/power/load conditions. A comparative consumer must also require complete,
-position-balanced schema state, every planned measurement to be measured, and the selected metric to be non-null;
-process success alone is insufficient. Paged cohorts additionally require matching block size, physical/padding/table
-geometry, and permutation identity/hash; contiguous and paged samples are not interchangeable.
+fixed or automatic work policy, frozen work-plan identity, seeds, software, hardware, applicable worker counts,
+conditioning, and output/checkpoint cadence, with sufficiently similar thermal/power/load conditions. Require accepted
+runs and non-null selected metrics; inspect sample count, variability, duration, and environment separately. A
+position-balanced comparison additionally requires `scenario_order_balance_complete`. Paged cohorts require matching
+block size, physical/padding/table geometry, and permutation identity/hash; contiguous and paged samples are not
+interchangeable. See the [LLM Memory Profile Whitepaper](LLM_MEMORY_PROFILE_WHITEPAPER.md) for formulas, timing,
+validation boundaries, and interpretation.
 
 ## Memory and Cache Latency
 
@@ -208,7 +242,7 @@ See the [Core-to-Core Whitepaper](CORE_TO_CORE_WHITEPAPER.md) for the assembly p
 Built-in sweeps execute supported parameter lists without shell orchestration. Standard and pattern modes can sweep
 buffer size and thread count. Standard latency also supports cache size, stride, locality, and chain-mode sweeps; TLB
 mode supports its stride, chain-mode, and density controls; core-to-core mode supports loop count and sample depth.
-Multiple sweep options form a Cartesian product, and combined output requires `--output`. GPU schema 1 and LLM schema 1
+Multiple sweep options form a Cartesian product, and combined output requires `--output`. GPU schema 1 and LLM schema 2
 do not support sweeps.
 
 JSON is designed as auditable evidence, not merely a list of numbers. It preserves the resolved configuration, work and seed identity, measurements, statistics, status, and enough completion information to distinguish complete, partial, interrupted, and unavailable results. Missing measurements are nullable rather than represented by numeric zero.
@@ -217,8 +251,9 @@ Every result-producing direct mode and the CPU modes' supported sweeps reserve t
 machine-readable output: stdout contains one final JSON document and the post-parse human transcript is routed to
 stderr. An empty output value disables JSON for a direct command but is missing/invalid for a sweep. Every other
 non-empty value is a file target, including `./-` and flag-shaped names such as `-G`. File output is atomic; standard
-commands, sweeps, GPU, and LLM retain their mode-specific checkpoints, while stdout remains final-only. GPU and LLM
-stdout execute their logical checkpoint transitions and stop observations without intermediate serialization. The
+commands, sweeps, GPU, and LLM retain their mode-specific checkpoints, while stdout remains final-only. GPU stdout
+retains logical checkpoint transitions without intermediate serialization; LLM stdout skips intermediate snapshot
+preparation while preserving task-boundary stop observations. The
 current support matrix and process acceptance procedure are in the [Machine-Readable CLI API](API.md).
 
 Current standard results use schema 3, which requires `configuration.mode: "benchmark"`, a string

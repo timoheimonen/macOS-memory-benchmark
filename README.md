@@ -374,7 +374,7 @@ recognizes the current console labels only and is neither JSON-schema nor histor
 - [TLB Analysis Whitepaper](documents/TLB_ANALYSIS_WHITEPAPER.md): paired analysis, boundary rules, confidence model, and JSON verification contract.
 - [Core-to-Core Whitepaper](documents/CORE_TO_CORE_WHITEPAPER.md): LDAR/STLR handoff protocol, scheduler-hint scenarios, and JSON schema.
 - [GPU Bandwidth Whitepaper](documents/GPU_BANDWIDTH_WHITEPAPER.md): Metal methodology, timing, validation, resource model, and interpretation limits.
-- [LLM Memory Profile Whitepaper](documents/LLM_MEMORY_PROFILE_WHITEPAPER.md): generic schema-v1 vocabulary plus the
+- [LLM Memory Profile Whitepaper](documents/LLM_MEMORY_PROFILE_WHITEPAPER.md): schema-2 vocabulary plus the
   active CPU and Metal decode/prefill traffic, timing, checksum, and interpretation contracts.
 - [Apple M5 LLM CPU-decode working-set samples](results/0.63.0/AppleM5_LLM_working_set_scaling.md): two complete
   0.63.0 JSON runs and their observed working-set scaling.

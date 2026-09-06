@@ -170,7 +170,7 @@ a sequence of checkpoint documents.
 
 For LLM, let `N=planned_loops` and `K=max(1,ceil(N/8))`, calculated without addition overflow. File targets
 write progress after every Kth fully completed loop, at most eight times, and one command-terminal snapshot on
-success, graceful interruption or representable failure. The current unmerged cadence gives at most 4/7/9 normal
+success, graceful interruption or representable failure. The current cadence gives at most 4/7/9 normal
 snapshots for N=3/12/48. One late command exception after successful terminal persistence may write one corrective
 failure snapshot; a failed checkpoint is terminal and never retried or followed by a disguised final write.
 

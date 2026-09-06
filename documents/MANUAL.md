@@ -1870,7 +1870,8 @@ head dimension 8, one-byte KV elements, context 32, block size 16, seed 42, one 
 reference targets but displays only measurement ID 1 and selected nested fields. Geometry, plan identities, expected
 worker vectors, other measurements/calibration and full statistics are omitted. It is **not a complete acceptable
 artifact** and must not be passed to a result-acceptance predicate. The displayed checksum states are observed fixture
-data; they do not independently prove the implementation.
+data; they do not independently prove the implementation. The displayed unavailable `build_manifest` illustrates
+the fallback for a caller supplying no manifest; normal CLI runs populate the available build and binary provenance.
 
 ```json
 {
@@ -2056,8 +2057,15 @@ Schema 2 ownership and interpretation:
   and positive-mean CV are zero. Classification is `insufficient-samples` for n<3, `undefined` for undefined CV,
   `above-threshold` for payload CV strictly over 5%, otherwise `below-threshold`; equality is below-threshold.
   These descriptive percentiles are not confidence levels. Default console shows n/median/min/max/CV/MAD.
-- `build_manifest` is currently an unavailable reservation with the exact keys shown above. Optional CPU raw ticks are
-  not emitted; software/version or MSL provenance alone is not build attestation or independent verification.
+- `build_manifest` records build-time Git state, compiler, compile/link flags, target architecture, SDK and deployment
+  target. The command captures the executable's `binary_sha256` once before tasks. Missing build fields or a failed
+  binary read leave partial provenance with explicit reasons; a caller supplying no manifest retains the unavailable
+  fallback shown above. These fields bind available artifacts, not signed execution attestation.
+- CPU measurements and excluded calibration attempts retain original Mach boundaries in `execution.timing.cpu_raw`:
+  `start_ticks`, `stop_ticks` and `delta_ticks` are unsigned decimal strings; `timebase_numer` and `timebase_denom` are
+  integer JSON numbers. A missing snapshot is null; older schema-2 artifacts may omit this optional field. Metal retains
+  GPU timestamps and null CPU raw evidence. See the [API contract](API.md#result-schemas-and-completion) for duration
+  reconstruction and provenance availability rules.
 
 For N planned loops, files snapshot every `K=max(1,ceil(N/8))` completed loops, at most eight progress snapshots plus
 terminal: maximum 4/7/9 normal snapshots for N=3/12/48. Abrupt termination can lose up to `3K` truly completed attempts,

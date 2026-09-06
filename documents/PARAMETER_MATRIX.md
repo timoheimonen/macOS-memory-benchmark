@@ -17,14 +17,14 @@ Runtime platform: macOS 26 or later on Apple Silicon (ARM64).
 | — | `--llm-memory-backend` | `cpu\|metal` | LLM execution backend; default `cpu`; CPU and capability-gated Metal support decode/prefill with contiguous or paged KV |
 | — | `--weight-size-mb` | `<MiB>` | Required positive active weight size for LLM-memory mode |
 | — | `--layers` | `<count>` | Required positive LLM layer count |
-| — | `--query-heads` | `<count>` | Required positive query-head count; at least the KV-head count and divisible by it |
+| — | `--query-heads` | `<count>` | Required positive query-head count; at least the KV-head count and divisible by it; defines theoretical attention context |
 | — | `--kv-heads` | `<count>` | Required positive physical KV-head count |
 | — | `--head-dim` | `<count>` | Required positive K/V head-vector element count |
 | — | `--kv-element-bytes` | `1\|2\|4` | LLM KV element width; default `2` |
 | — | `--phase` | `decode\|prefill` | LLM phase; default `decode` |
 | — | `--context-tokens` | `<count>` | Required only for decode; fixed visible context including the current synthetic token |
 | — | `--prompt-tokens` | `<P>` | Required only for prefill; positive full-prompt token count |
-| — | `--attention-query-tile-tokens` | `<Q>` | Required only for prefill; query-tile size in `1..P` |
+| — | `--attention-query-tile-tokens` | `<Q>` | Required only for prefill; query-tile size in `1..P` controls synthetic prefix rereads |
 | — | `--batch-size` | `<count>` | Positive LLM batch-sequence count; default `1` |
 | — | `--kv-layout` | `contiguous\|paged` | LLM KV layout; default `contiguous` |
 | — | `--kv-block-tokens` | `<G>` | Required only for paged KV: a positive power of two no greater than `UINT32_MAX`; may exceed the active phase length |
@@ -42,7 +42,7 @@ Runtime platform: macOS 26 or later on Apple Silicon (ARM64).
 | `-W` | `--only-bandwidth` | — | Run only standard benchmark bandwidth tests; requires `--benchmark` |
 | `-L` | `--only-latency` | — | Run only standard benchmark latency tests; requires `--benchmark` |
 | `-u` | `--non-cacheable` | — | Apply best-effort cache-discouraging allocation hints; does not create truly uncached memory |
-| `-o` | `--output` | `<target>` | Result target syntax. Exact `-` selects one final stdout document for result-producing modes. An empty direct value disables JSON; every other non-empty value is a file. LLM file output checkpoints each terminal scenario measurement and command terminal |
+| `-o` | `--output` | `<target>` | Result target syntax. Exact `-` selects one final stdout document for result-producing modes. An empty direct value disables JSON; every other non-empty value is a file. LLM file output snapshots every `K=max(1,ceil(count/8))` completed loops and at command terminal |
 | `-S` | `--sweep` | `<key=a,b>` | Add a Cartesian sweep parameter; repeat once per distinct key and use with `--output` |
 | `-X` | `--sweep-max-runs` | `<count>` | Positive generated-run limit; default `256`, or `16` with `--analyze-tlb`; effective only with `--sweep` |
 | `-h` | `--help` | — | Show help; the standalone `--analyze-tlb` whitelist is the exception and rejects this combination |
@@ -183,20 +183,21 @@ Decode requires exactly one `--context-tokens`; prefill requires exactly one `--
 defaults to `contiguous`. Paged layout requires exactly one
 `--kv-block-tokens <G>`; contiguous layout rejects that option. `G` must be a positive power of two no greater than
 `UINT32_MAX`, and `G` may exceed the active phase length. These rules are order-independent. After checked configuration
-and memory-budget preflight, the command allocates the layout-specific resources and runs the three schema-1 scenarios.
+and memory-budget preflight, the command allocates the layout-specific resources and runs the three scenarios.
+LLM output uses schema 2 and `llm-memory-v2-<backend>-<phase>-<layout>` methodology identifiers.
 
 | Modifier | Compatible | Notes |
 |----------|------------|-------|
 | `--llm-memory-backend <cpu\|metal>` | ✅ | Default `cpu`. Both backends support decode/prefill with contiguous or paged KV. Metal performs no CPU fallback, reports capability absence as terminal `unsupported`, and reports runtime compiler/pipeline/resource/task failure as terminal `failed`/`invalid` evidence |
 | `--weight-size-mb <MiB>` | ✅ required | Positive active weight size; checked MiB-to-byte conversion |
 | `--layers <n>` | ✅ required | Positive layer count |
-| `--query-heads <n>` | ✅ required | Positive; must be at least and evenly divisible by KV heads |
+| `--query-heads <n>` | ✅ required | Positive; must be at least and evenly divisible by KV heads. Defines theoretical attention context; no attention computation is executed |
 | `--kv-heads <n>` | ✅ required | Positive physical KV-head count |
 | `--head-dim <n>` | ✅ required | Positive K/V head-vector element count |
 | `--phase <decode\|prefill>` | ✅ | Default `decode`; selects a versioned work-unit contract |
 | `--context-tokens <n>` | ✅ decode only | Positive fixed visible context including the current synthetic token |
 | `--prompt-tokens <P>` | ✅ prefill only | Positive full-prompt length; no default |
-| `--attention-query-tile-tokens <Q>` | ✅ prefill only | Required with prefill; `1 <= Q <= P`, with no default |
+| `--attention-query-tile-tokens <Q>` | ✅ prefill only | Required with prefill; `1 <= Q <= P`, with no default. Controls executed synthetic prefix rereads; it does not specify inference-kernel tiling |
 | `--kv-element-bytes <1\|2\|4>` | ✅ | Default `2`; every other width is rejected |
 | `--batch-size <n>` | ✅ | Positive; default `1` |
 | `--kv-layout <contiguous\|paged>` | ✅ | Default `contiguous`; both layouts are executable for decode and prefill on CPU and Metal |
@@ -205,11 +206,18 @@ and memory-budget preflight, the command allocates the layout-specific resources
 | `-i, --iterations <n>` | ✅ | Positive exact work units per scenario; omission selects excluded per-scenario calibration toward 150 ms. CPU values fit the common work/task guardrails; Metal additionally caps one dispatch at 65,536 work units. Metal prefill caps lane-local serial range-helper visits at 1,048,576 per task, including `T*L` for paged `weights_only`; paged Metal profiles also enforce semantic-lookup, owner-ordinal, threadgroup, and per-visit vector-iteration caps |
 | `-r, --count <n>` | ✅ | Positive cyclic loop count; default `3` |
 | `--seed <uint64>` | ✅ | Exact base seed including zero; a non-zero seed is generated once when omitted |
-| `-o, --output <target>` | ✅ | Empty disables JSON; exact `-` emits one final schema 1 document; `./-`, flag-shaped values, and every other non-empty non-sentinel value are atomic file targets. A non-empty target adds the conservative JSON output peak to memory admission |
+| `-o, --output <target>` | ✅ | Empty disables JSON; exact `-` emits one final schema 2 document; `./-`, flag-shaped values, and every other non-empty non-sentinel value are atomic file targets. A non-empty target adds the conservative JSON output peak to memory admission |
 | `-h, --help` | ✅ | Prints dedicated help before enforcing required inputs or resolving worker/seed/session/QoS state; malformed or duplicate tokens still fail |
-| `--sweep`, `--sweep-max-runs`, `--non-cacheable` | ❌ | Outside the frozen v1 whitelist |
+| `--sweep`, `--sweep-max-runs`, `--non-cacheable` | ❌ | Outside the standalone whitelist |
 | Buffer/cache/latency/TLB/pattern/core-to-core/GPU modifiers | ❌ | Outside the standalone whitelist |
 | Any other primary mode | ❌ | Primary modes are mutually exclusive |
+
+File output writes an atomic progress snapshot after every `K=max(1,ceil(count/8))` fully completed loops
+(at most eight progress snapshots), plus a command-terminal snapshot on success, graceful interruption, or representable
+failure. An abrupt exit can lose up to `3K` completed measurement attempts since the last successful snapshot. A failed
+checkpoint stops the command without retry; a late command exception after successful terminal persistence may write
+one corrective failure snapshot. Stdout builds only the final document, and disabled output builds no JSON document.
+See [API output checkpoints](API.md#checkpoints-and-final-snapshots) for the full persistence contract.
 
 The parser rejects checked weight/KV geometry that overflows or makes even one scenario work unit exceed the 64 GiB
 task-accounted-byte ceiling. For paged KV, task-accounted bytes include logical model bytes plus timed block-table lookup
@@ -231,6 +239,10 @@ per-threadgroup `actual-threadgroup-cost` accounted-byte vector, minimum, maximu
 publish no threadgroup-cost evidence. Full-prompt write samples and applicable padding canaries must validate after each
 KV-active task. This is a cyclic assignment, not a weighted balance. The command does not fall back to another backend,
 phase, or layout.
+
+Prefill theoretical causal-pair, attention-pair, and FMA counts are descriptive model context. Overflow in those
+calculations produces JSON `null` with reason `arithmetic-overflow` and does not by itself reject an otherwise valid
+workload. Actual byte, prefix-read, lookup, and allocation arithmetic must still pass checked validation.
 
 ### Sweep Compatibility
 
