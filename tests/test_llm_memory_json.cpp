@@ -1666,26 +1666,6 @@ TEST(LlmMemoryJsonTest, UnknownAndContradictorySnapshotReferencesAreRejected) {
   EXPECT_THROW(build_llm_memory_json(config, plan, preparation_for(plan), fixed_metadata(config, plan), result), std::invalid_argument);
 }
 
-TEST(LlmMemoryJsonTest, CanonicalInsertionDeduplicatesAndRejectsContradictoryWork) {
-  const auto config = explicit_config(1);
-  const auto plan = admitted_plan(config);
-  ASSERT_TRUE(plan.valid);
-  FakeLlmBackend backend;
-  LlmMemoryResult result;
-  const auto mixed = build_llm_scenario_work_plan(plan, LlmScenario::Mixed, 4, true);
-  const auto handle = register_llm_scenario_plan(result, plan, mixed, backend);
-  EXPECT_EQ(register_llm_scenario_plan(result, plan, mixed, backend), handle);
-  auto changed = mixed;
-  ++changed.effective_model_payload_bytes;
-  EXPECT_THROW(register_llm_scenario_plan(result, plan, changed, backend), std::invalid_argument);
-  const auto warm = build_llm_scenario_work_plan(plan, LlmScenario::WeightsOnly, 1, false);
-  const auto warm_handle = register_llm_scenario_plan(result, plan, warm, backend);
-  prepare_llm_result_snapshot(result);
-  EXPECT_EQ(result.snapshot_plan_refs[warm_handle], 0u);
-  EXPECT_EQ(result.snapshot_plan_refs[handle], 1u);
-  EXPECT_EQ(result.scenario_plans.size(), 2u);
-}
-
 TEST(LlmMemoryJsonTest, OneLoopAcceptanceIsIndependentOfBalanceAndObservedCvQuality) {
   const auto config = explicit_config(1);
   const auto plan = admitted_plan(config);

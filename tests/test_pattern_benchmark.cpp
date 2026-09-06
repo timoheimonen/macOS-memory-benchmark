@@ -37,8 +37,14 @@
 #include "pattern_benchmark/pattern_benchmark.h"
 #include "pattern_benchmark/pattern_work_plan.h"
 #include "test_config_helpers.h"
+#include "test_timer_system_calls.h"
 #include "utils/benchmark.h"  // Declares system_info functions
 #include "warmup/warmup.h"
+
+// Internal strided entry point, also used by pattern_coordinator.cpp.
+int run_strided_pattern_benchmarks(const PatternBuffers& buffers, const BenchmarkConfig& config,
+                                   size_t stride, PatternResults& results, HighResTimer& timer);
+
 extern "C" uint64_t verify_pattern_callee_saved_registers_asm(uintptr_t function_address, uintptr_t arg0,
                                                               uintptr_t arg1, uintptr_t arg2, uintptr_t arg3,
                                                               uintptr_t arg4, uintptr_t arg5);
@@ -183,6 +189,12 @@ _verify_pattern_callee_saved_registers_asm:
 
 namespace {
 
+std::atomic<size_t> strided_preflight_timer_reads{0};
+
+uint64_t strided_preflight_timer_ticks() {
+  return 100 * (strided_preflight_timer_reads.fetch_add(1, std::memory_order_relaxed) + 1);
+}
+
 BenchmarkConfig make_pattern_config(size_t buffer_size, int iterations, int num_threads = 1) {
   BenchmarkConfig config;
   config.buffer_size = buffer_size;
@@ -268,12 +280,12 @@ void expect_core_pattern_bandwidths_positive(const PatternResults& results) {
   }
 }
 
-void expect_2mb_pattern_bandwidths_zero(const PatternResults& results) {
+void expect_2mb_pattern_measurements_skipped(const PatternResults& results, const std::string& expected_reason) {
   for (PatternOperation operation : {PatternOperation::Read, PatternOperation::Write, PatternOperation::Copy}) {
     const PatternMeasurement& measurement = get_pattern_measurement(results, PatternKind::Strided2MiB, operation);
     EXPECT_EQ(measurement.status, PatternMeasurementStatus::Skipped);
     EXPECT_FALSE(measurement.bandwidth_gb_s.has_value());
-    EXPECT_EQ(measurement.status_reason, Messages::pattern_reason_stride_transition_unavailable());
+    EXPECT_EQ(measurement.status_reason, expected_reason);
   }
 }
 
@@ -677,18 +689,55 @@ TEST(PatternBenchmarkTest, ExecutionOrderIsDeterministicRotatingAndBalancedAcros
   }
 }
 
-// Integration test: Test that the representative pattern benchmark run produces every core pattern result.
-// NOTE: This is an integration test that performs actual system operations.
-// It runs real pattern benchmarks which may be slower and can fail on slow systems or under load.
-// Use 'make test-integration' to run integration tests, or 'make test' for unit tests only.
-TEST(PatternBenchmarkTest, RunPatternBenchmarksCorePatternsIntegration) {
-  BenchmarkConfig config = make_pattern_config(512 * 1024, 1);
+TEST(PatternBenchmarkTest, Strided2MiBPreflightSkipsUnavailableTransitionsWithoutMeasurement) {
+  // Exercise only the production preflight: empty buffers and a fake clock keep
+  // both validator and planner rejection paths free of kernels and measurements.
+  strided_preflight_timer_reads.store(0, std::memory_order_relaxed);
+  const test_timer_system_calls::ScopedTimerSystemCalls<strided_preflight_timer_ticks> timer_system_calls;
+  auto timer = HighResTimer::create();
+  ASSERT_TRUE(timer.has_value());
+  const PatternBuffers buffers;
+  struct PreflightCase {
+    size_t buffer_size;
+    std::string expected_reason;
+  };
+  const std::array<PreflightCase, 2> cases = {{
+      {512 * 1024, Messages::pattern_reason_stride_transition_unavailable()},
+      {Constants::PATTERN_STRIDE_SUPERPAGE_2MB, Messages::pattern_reason_buffer_lacks_two_strided_accesses()},
+  }};
+  for (const PreflightCase& test_case : cases) {
+    SCOPED_TRACE(test_case.buffer_size);
+    BenchmarkConfig config;
+    config.buffer_size = test_case.buffer_size;
+    config.num_threads = 1;
+    PatternResults results = make_complete_pattern_loop();
+
+    EXPECT_EQ(run_strided_pattern_benchmarks(buffers, config, Constants::PATTERN_STRIDE_SUPERPAGE_2MB,
+                                            results, *timer), EXIT_SUCCESS);
+    expect_2mb_pattern_measurements_skipped(results, test_case.expected_reason);
+    for (PatternOperation operation : {PatternOperation::Read, PatternOperation::Write, PatternOperation::Copy}) {
+      const PatternMeasurement& measurement = get_pattern_measurement(results, PatternKind::Strided2MiB, operation);
+      EXPECT_EQ(measurement.stride_bytes, Constants::PATTERN_STRIDE_SUPERPAGE_2MB);
+      EXPECT_EQ(measurement.requested_threads, 1);
+      EXPECT_EQ(measurement.effective_threads, 0);
+      EXPECT_EQ(measurement.passes, 0u);
+      EXPECT_EQ(measurement.total_accesses, 0u);
+      EXPECT_EQ(measurement.total_payload_bytes, 0u);
+      EXPECT_DOUBLE_EQ(measurement.elapsed_seconds, 0.0);
+    }
+  }
+  EXPECT_EQ(strided_preflight_timer_reads.load(std::memory_order_relaxed), 0u);
+}
+
+// One real-work smoke run covers coordinator dispatch for all seven patterns.
+TEST(PatternBenchmarkTest, RunPatternBenchmarksAllPatternsIntegration) {
+  BenchmarkConfig config = make_pattern_config(8 * 1024 * 1024, 1);
   PatternResults results;
 
   ASSERT_TRUE(run_pattern_benchmarks_with_fresh_buffers(config, results));
 
   expect_core_pattern_bandwidths_positive(results);
-  expect_2mb_pattern_bandwidths_zero(results);
+  expect_2mb_pattern_bandwidths_positive(results);
   const PatternMeasurement& forward_read =
       get_pattern_measurement(results, PatternKind::SequentialForward, PatternOperation::Read);
   EXPECT_EQ(forward_read.status, PatternMeasurementStatus::Measured);
@@ -698,15 +747,6 @@ TEST(PatternBenchmarkTest, RunPatternBenchmarksCorePatternsIntegration) {
   EXPECT_EQ(random_read.status, PatternMeasurementStatus::Measured);
   EXPECT_TRUE(random_read.has_seed);
   EXPECT_EQ(random_read.seed, config.pattern_seed);
-}
-
-TEST(PatternBenchmarkTest, Strided2MiBRouteAndKernelIntegration) {
-  BenchmarkConfig config = make_pattern_config(8 * 1024 * 1024, 1);
-
-  PatternResults results;
-  ASSERT_TRUE(run_pattern_benchmarks_with_fresh_buffers(config, results));
-
-  expect_2mb_pattern_bandwidths_positive(results);
 }
 
 TEST(PatternBenchmarkTest, PhasedStridedKernelsRespectAccessBoundariesIntegration) {
@@ -805,19 +845,21 @@ TEST(PatternBenchmarkTest, FinalizedPatternPlansDriveWarmupKernelsIntegration) {
   EXPECT_EQ(checksum.load(std::memory_order_acquire), expected_checksum);
 }
 
-TEST(PatternBenchmarkTest, CacheReadWarmupUsesCacheKernelIntegration) {
-  constexpr size_t buffer_size = 1024;
-  std::vector<unsigned char> storage(buffer_size + Constants::CACHE_LINE_SIZE_BYTES);
-  unsigned char* source = align_to_cache_line(storage.data());
-  for (size_t offset = 0; offset < buffer_size; ++offset) {
-    source[offset] = static_cast<unsigned char>((offset * 37 + 11) & 0xff);
-  }
+TEST(PatternBenchmarkTest, CacheReadWarmupAccumulatesEveryWorkerChunkIntegration) {
+  alignas(Constants::CACHE_LINE_SIZE_BYTES) std::array<unsigned char, 1024> source{};
+  constexpr uint64_t initial_checksum = 0x123456789abcdef0ULL;
+  // Four aligned 256-byte chunks contribute distinct bits. The byte positions
+  // exercise upper vector lanes and chunk ends without cancelling to zero.
+  source[8] = 0x01;
+  source[256 + 31] = 0x02;
+  source[512 + 255] = 0x04;
+  source[768] = 0x08;
+  constexpr uint64_t expected_xor = 0x0600000000000009ULL;
+  std::atomic<uint64_t> checksum{initial_checksum};
 
-  const uint64_t expected_checksum = memory_read_cache_loop_asm(source, buffer_size);
-  std::atomic<uint64_t> checksum{0};
-  warmup_cache_read(source, buffer_size, 1, checksum);
+  warmup_cache_read(source.data(), source.size(), 4, checksum);
 
-  EXPECT_EQ(checksum.load(std::memory_order_acquire), expected_checksum);
+  EXPECT_EQ(checksum.load(std::memory_order_acquire), initial_checksum ^ expected_xor);
 }
 
 TEST(PatternBenchmarkTest, RandomWarmupUsesChunkRelativeWorkerOffsetsIntegration) {

@@ -26,7 +26,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -53,53 +52,15 @@ constexpr size_t kCanonicalSegmentSlotsPerPool = 256;
 constexpr uint64_t kCanonicalPoolCapacityBytes =
     kCanonicalSegmentCapacityBytes * kCanonicalSegmentSlotsPerPool;
 
-enum class ContractBackend {
-  Cpu,
-  Metal,
-};
-
-enum class ContractPhase {
-  Decode,
-  Prefill,
-};
-
 enum class ContractKvLayout {
   Contiguous,
   Paged,
-};
-
-enum class ContractWorkUnitKind {
-  DecodeStep,
-  PrefillOperation,
-};
-
-enum class ContractKvWriteKind {
-  None,
-  CurrentTokenAppend,
-  FullPromptPopulation,
 };
 
 enum class ContractScenario {
   WeightsOnly,
   KvOnly,
   Mixed,
-};
-
-enum class ContractRunStatus {
-  NotStarted,
-  Complete,
-  Partial,
-  Interrupted,
-  Unsupported,
-  Failed,
-};
-
-enum class ContractMeasurementStatus {
-  NotRun,
-  Measured,
-  Interrupted,
-  Invalid,
-  Failed,
 };
 
 struct PrefillPayloadContract {
@@ -158,14 +119,6 @@ struct ComponentIdentityContract {
   std::string_view checksum_pattern_version;
   std::optional<std::string_view> msl_revision;
   std::optional<std::string_view> msl_source_sha256;
-};
-
-struct ProfileActivationContract {
-  ContractBackend backend;
-  ContractPhase phase;
-  ContractKvLayout layout;
-  std::optional<int> activation_phase;
-  bool preexisting_at_phase_zero;
 };
 
 struct ScenarioAccountingContract {
@@ -250,128 +203,6 @@ PayloadContract resolve_payload_contract(uint64_t weight_bytes,
   result.kv_only_total = result.kv_only_per_step * steps;
   result.mixed_total = result.mixed_per_step * steps;
   return result;
-}
-
-std::string_view contract_token(ContractBackend backend) {
-  switch (backend) {
-    case ContractBackend::Cpu:
-      return "cpu";
-    case ContractBackend::Metal:
-      return "metal";
-  }
-  return {};
-}
-
-std::string_view contract_token(ContractPhase phase) {
-  switch (phase) {
-    case ContractPhase::Decode:
-      return "decode";
-    case ContractPhase::Prefill:
-      return "prefill";
-  }
-  return {};
-}
-
-std::string_view contract_token(ContractKvLayout layout) {
-  switch (layout) {
-    case ContractKvLayout::Contiguous:
-      return "contiguous";
-    case ContractKvLayout::Paged:
-      return "paged";
-  }
-  return {};
-}
-
-std::string_view contract_token(ContractWorkUnitKind kind) {
-  switch (kind) {
-    case ContractWorkUnitKind::DecodeStep:
-      return "decode_step";
-    case ContractWorkUnitKind::PrefillOperation:
-      return "prefill_operation";
-  }
-  return {};
-}
-
-std::string_view contract_token(ContractKvWriteKind kind) {
-  switch (kind) {
-    case ContractKvWriteKind::None:
-      return "none";
-    case ContractKvWriteKind::CurrentTokenAppend:
-      return "current_token_append";
-    case ContractKvWriteKind::FullPromptPopulation:
-      return "full_prompt_population";
-  }
-  return {};
-}
-
-std::string_view contract_token(ContractScenario scenario) {
-  switch (scenario) {
-    case ContractScenario::WeightsOnly:
-      return "weights_only";
-    case ContractScenario::KvOnly:
-      return "kv_only";
-    case ContractScenario::Mixed:
-      return "mixed";
-  }
-  return {};
-}
-
-std::string_view contract_token(ContractRunStatus status) {
-  switch (status) {
-    case ContractRunStatus::NotStarted:
-      return "not_started";
-    case ContractRunStatus::Complete:
-      return "complete";
-    case ContractRunStatus::Partial:
-      return "partial";
-    case ContractRunStatus::Interrupted:
-      return "interrupted";
-    case ContractRunStatus::Unsupported:
-      return "unsupported";
-    case ContractRunStatus::Failed:
-      return "failed";
-  }
-  return {};
-}
-
-std::string_view contract_token(ContractMeasurementStatus status) {
-  switch (status) {
-    case ContractMeasurementStatus::NotRun:
-      return "not_run";
-    case ContractMeasurementStatus::Measured:
-      return "measured";
-    case ContractMeasurementStatus::Interrupted:
-      return "interrupted";
-    case ContractMeasurementStatus::Invalid:
-      return "invalid";
-    case ContractMeasurementStatus::Failed:
-      return "failed";
-  }
-  return {};
-}
-
-std::string methodology_token(ContractBackend backend,
-                              ContractPhase phase,
-                              ContractKvLayout layout) {
-  return "llm-memory-v2-" + std::string(contract_token(backend)) + "-" +
-         std::string(contract_token(phase)) + "-" +
-         std::string(contract_token(layout));
-}
-
-ContractWorkUnitKind work_unit_kind_for_phase(ContractPhase phase) {
-  return phase == ContractPhase::Decode
-             ? ContractWorkUnitKind::DecodeStep
-             : ContractWorkUnitKind::PrefillOperation;
-}
-
-ContractKvWriteKind kv_write_kind_for(ContractPhase phase,
-                                      ContractScenario scenario) {
-  if (scenario == ContractScenario::WeightsOnly) {
-    return ContractKvWriteKind::None;
-  }
-  return phase == ContractPhase::Decode
-             ? ContractKvWriteKind::CurrentTokenAppend
-             : ContractKvWriteKind::FullPromptPopulation;
 }
 
 uint64_t ceil_divide_small(uint64_t value, uint64_t divisor) {
@@ -896,28 +727,6 @@ RunChecksum fold_components(
   return run;
 }
 
-struct alignas(16) LayerDescriptorAbiV1 {
-  const uint8_t* weight_ptr;
-  uint64_t weight_bytes;
-  uint64_t first_sequence_index;
-  uint64_t sequence_count;
-  uint64_t layer_index;
-  uint64_t reserved_zero;
-};
-
-struct alignas(16) KvSequenceDescriptorAbiV1 {
-  const uint8_t* k_visible_ptr;
-  uint64_t k_visible_bytes;
-  const uint8_t* v_visible_ptr;
-  uint64_t v_visible_bytes;
-  uint8_t* k_append_ptr;
-  uint64_t k_append_bytes;
-  uint8_t* v_append_ptr;
-  uint64_t v_append_bytes;
-  uint64_t batch_sequence_index;
-  uint64_t append_record_byte_offset;
-};
-
 bool accepted_generic_result(const GenericResultIdentity& identity) {
   const bool backend_is_known =
       identity.backend == "cpu" || identity.backend == "metal";
@@ -1115,35 +924,6 @@ TEST(LlmMemoryContractTest,
   EXPECT_NE(wrong_order.state_b, folded.state_b);
 }
 
-TEST(LlmMemoryContractTest, DescriptorAbiLayoutGolden) {
-  static_assert(sizeof(void*) == 8, "LLM descriptor ABI requires ARM64 pointers");
-  static_assert(std::is_standard_layout_v<LayerDescriptorAbiV1>);
-  static_assert(std::is_standard_layout_v<KvSequenceDescriptorAbiV1>);
-
-  EXPECT_EQ(alignof(LayerDescriptorAbiV1), 16u);
-  EXPECT_EQ(sizeof(LayerDescriptorAbiV1), 48u);
-  EXPECT_EQ(offsetof(LayerDescriptorAbiV1, weight_ptr), 0u);
-  EXPECT_EQ(offsetof(LayerDescriptorAbiV1, weight_bytes), 8u);
-  EXPECT_EQ(offsetof(LayerDescriptorAbiV1, first_sequence_index), 16u);
-  EXPECT_EQ(offsetof(LayerDescriptorAbiV1, sequence_count), 24u);
-  EXPECT_EQ(offsetof(LayerDescriptorAbiV1, layer_index), 32u);
-  EXPECT_EQ(offsetof(LayerDescriptorAbiV1, reserved_zero), 40u);
-
-  EXPECT_EQ(alignof(KvSequenceDescriptorAbiV1), 16u);
-  EXPECT_EQ(sizeof(KvSequenceDescriptorAbiV1), 80u);
-  EXPECT_EQ(offsetof(KvSequenceDescriptorAbiV1, k_visible_ptr), 0u);
-  EXPECT_EQ(offsetof(KvSequenceDescriptorAbiV1, k_visible_bytes), 8u);
-  EXPECT_EQ(offsetof(KvSequenceDescriptorAbiV1, v_visible_ptr), 16u);
-  EXPECT_EQ(offsetof(KvSequenceDescriptorAbiV1, v_visible_bytes), 24u);
-  EXPECT_EQ(offsetof(KvSequenceDescriptorAbiV1, k_append_ptr), 32u);
-  EXPECT_EQ(offsetof(KvSequenceDescriptorAbiV1, k_append_bytes), 40u);
-  EXPECT_EQ(offsetof(KvSequenceDescriptorAbiV1, v_append_ptr), 48u);
-  EXPECT_EQ(offsetof(KvSequenceDescriptorAbiV1, v_append_bytes), 56u);
-  EXPECT_EQ(offsetof(KvSequenceDescriptorAbiV1, batch_sequence_index), 64u);
-  EXPECT_EQ(
-      offsetof(KvSequenceDescriptorAbiV1, append_record_byte_offset), 72u);
-}
-
 TEST(LlmMemoryContractTest, GenericV2AcceptancePredicateIsExact) {
   const GenericResultIdentity accepted = {
       "llm_memory",
@@ -1208,117 +988,6 @@ TEST(LlmMemoryContractTest, GenericV2AcceptancePredicateIsExact) {
   candidate = accepted;
   candidate.all_planned_measurements_measured = false;
   EXPECT_FALSE(accepted_generic_result(candidate));
-}
-
-TEST(LlmMemoryContractTest,
-     GenericVocabularyAndMethodologyTokensAreCanonical) {
-  EXPECT_EQ(
-      (std::array<std::string_view, 2>{
-          contract_token(ContractBackend::Cpu),
-          contract_token(ContractBackend::Metal),
-      }),
-      (std::array<std::string_view, 2>{"cpu", "metal"}));
-  EXPECT_EQ(
-      (std::array<std::string_view, 2>{
-          contract_token(ContractPhase::Decode),
-          contract_token(ContractPhase::Prefill),
-      }),
-      (std::array<std::string_view, 2>{"decode", "prefill"}));
-  EXPECT_EQ(
-      (std::array<std::string_view, 2>{
-          contract_token(ContractKvLayout::Contiguous),
-          contract_token(ContractKvLayout::Paged),
-      }),
-      (std::array<std::string_view, 2>{"contiguous", "paged"}));
-  EXPECT_EQ(
-      (std::array<std::string_view, 2>{
-          contract_token(ContractWorkUnitKind::DecodeStep),
-          contract_token(ContractWorkUnitKind::PrefillOperation),
-      }),
-      (std::array<std::string_view, 2>{"decode_step",
-                                       "prefill_operation"}));
-  EXPECT_EQ(
-      (std::array<std::string_view, 3>{
-          contract_token(ContractKvWriteKind::None),
-          contract_token(ContractKvWriteKind::CurrentTokenAppend),
-          contract_token(ContractKvWriteKind::FullPromptPopulation),
-      }),
-      (std::array<std::string_view, 3>{"none", "current_token_append",
-                                       "full_prompt_population"}));
-  EXPECT_EQ(
-      (std::array<std::string_view, 3>{
-          contract_token(ContractScenario::WeightsOnly),
-          contract_token(ContractScenario::KvOnly),
-          contract_token(ContractScenario::Mixed),
-      }),
-      (std::array<std::string_view, 3>{"weights_only", "kv_only",
-                                       "mixed"}));
-  EXPECT_EQ(
-      (std::array<std::string_view, 6>{
-          contract_token(ContractRunStatus::NotStarted),
-          contract_token(ContractRunStatus::Complete),
-          contract_token(ContractRunStatus::Partial),
-          contract_token(ContractRunStatus::Interrupted),
-          contract_token(ContractRunStatus::Unsupported),
-          contract_token(ContractRunStatus::Failed),
-      }),
-      (std::array<std::string_view, 6>{
-          "not_started", "complete", "partial", "interrupted",
-          "unsupported", "failed"}));
-  EXPECT_EQ(
-      (std::array<std::string_view, 5>{
-          contract_token(ContractMeasurementStatus::NotRun),
-          contract_token(ContractMeasurementStatus::Measured),
-          contract_token(ContractMeasurementStatus::Interrupted),
-          contract_token(ContractMeasurementStatus::Invalid),
-          contract_token(ContractMeasurementStatus::Failed),
-      }),
-      (std::array<std::string_view, 5>{
-          "not_run", "measured", "interrupted", "invalid", "failed"}));
-
-  EXPECT_EQ(work_unit_kind_for_phase(ContractPhase::Decode),
-            ContractWorkUnitKind::DecodeStep);
-  EXPECT_EQ(work_unit_kind_for_phase(ContractPhase::Prefill),
-            ContractWorkUnitKind::PrefillOperation);
-  for (ContractPhase phase :
-       {ContractPhase::Decode, ContractPhase::Prefill}) {
-    EXPECT_EQ(kv_write_kind_for(phase, ContractScenario::WeightsOnly),
-              ContractKvWriteKind::None);
-  }
-  for (ContractScenario scenario :
-       {ContractScenario::KvOnly, ContractScenario::Mixed}) {
-    EXPECT_EQ(kv_write_kind_for(ContractPhase::Decode, scenario),
-              ContractKvWriteKind::CurrentTokenAppend);
-    EXPECT_EQ(kv_write_kind_for(ContractPhase::Prefill, scenario),
-              ContractKvWriteKind::FullPromptPopulation);
-  }
-
-  const std::array<ContractBackend, 2> backends = {
-      ContractBackend::Cpu, ContractBackend::Metal};
-  const std::array<ContractPhase, 2> phases = {
-      ContractPhase::Decode, ContractPhase::Prefill};
-  const std::array<ContractKvLayout, 2> layouts = {
-      ContractKvLayout::Contiguous, ContractKvLayout::Paged};
-  const std::array<std::string_view, 8> expected_methodologies = {
-      "llm-memory-v2-cpu-decode-contiguous",
-      "llm-memory-v2-cpu-decode-paged",
-      "llm-memory-v2-cpu-prefill-contiguous",
-      "llm-memory-v2-cpu-prefill-paged",
-      "llm-memory-v2-metal-decode-contiguous",
-      "llm-memory-v2-metal-decode-paged",
-      "llm-memory-v2-metal-prefill-contiguous",
-      "llm-memory-v2-metal-prefill-paged",
-  };
-  size_t methodology_index = 0;
-  for (ContractBackend backend : backends) {
-    for (ContractPhase phase : phases) {
-      for (ContractKvLayout layout : layouts) {
-        EXPECT_EQ(methodology_token(backend, phase, layout),
-                  expected_methodologies[methodology_index]);
-        ++methodology_index;
-      }
-    }
-  }
 }
 
 TEST(LlmMemoryContractTest,
@@ -1848,103 +1517,6 @@ TEST(LlmMemoryContractTest,
   ASSERT_NE(msl_suffix, std::string::npos);
   EXPECT_EQ(cpu_identity.substr(msl_suffix),
             "|msl_revision=null|msl_source_sha256=null");
-}
-
-TEST(LlmMemoryContractTest,
-     FinalSupportMatrixAndPublicActivationOrderAreFrozen) {
-  constexpr std::array<ProfileActivationContract, 8> profiles = {{
-      {ContractBackend::Cpu, ContractPhase::Decode,
-       ContractKvLayout::Contiguous, std::nullopt, true},
-      {ContractBackend::Cpu, ContractPhase::Decode,
-       ContractKvLayout::Paged, 4, false},
-      {ContractBackend::Cpu, ContractPhase::Prefill,
-       ContractKvLayout::Contiguous, 6, false},
-      {ContractBackend::Cpu, ContractPhase::Prefill,
-       ContractKvLayout::Paged, 7, false},
-      {ContractBackend::Metal, ContractPhase::Decode,
-       ContractKvLayout::Contiguous, 9, false},
-      {ContractBackend::Metal, ContractPhase::Decode,
-       ContractKvLayout::Paged, 10, false},
-      {ContractBackend::Metal, ContractPhase::Prefill,
-       ContractKvLayout::Contiguous, 11, false},
-      {ContractBackend::Metal, ContractPhase::Prefill,
-       ContractKvLayout::Paged, 12, false},
-  }};
-  constexpr std::array<std::string_view, 8> expected_profiles = {
-      "cpu/decode/contiguous", "cpu/decode/paged",
-      "cpu/prefill/contiguous", "cpu/prefill/paged",
-      "metal/decode/contiguous", "metal/decode/paged",
-      "metal/prefill/contiguous", "metal/prefill/paged",
-  };
-  constexpr std::array<std::optional<int>, 8> expected_activation_phases = {
-      std::nullopt, 4, 6, 7, 9, 10, 11, 12};
-
-  size_t scenario_profile_count = 0;
-  for (size_t index = 0; index < profiles.size(); ++index) {
-    const ProfileActivationContract& profile = profiles[index];
-    const std::string serialized =
-        std::string(contract_token(profile.backend)) + "/" +
-        std::string(contract_token(profile.phase)) + "/" +
-        std::string(contract_token(profile.layout));
-    EXPECT_EQ(serialized, expected_profiles[index]);
-    EXPECT_EQ(profile.activation_phase, expected_activation_phases[index]);
-    EXPECT_EQ(profile.preexisting_at_phase_zero, index == 0);
-    scenario_profile_count += 3;
-    for (size_t other = index + 1; other < profiles.size(); ++other) {
-      EXPECT_FALSE(profile.backend == profiles[other].backend &&
-                   profile.phase == profiles[other].phase &&
-                   profile.layout == profiles[other].layout);
-    }
-  }
-  EXPECT_EQ(scenario_profile_count, 24u);
-
-  constexpr std::array<std::pair<int, std::string_view>, 7>
-      expected_new_profile_activation_order = {{
-          {4, "cpu/decode/paged"},
-          {6, "cpu/prefill/contiguous"},
-          {7, "cpu/prefill/paged"},
-          {9, "metal/decode/contiguous"},
-          {10, "metal/decode/paged"},
-          {11, "metal/prefill/contiguous"},
-          {12, "metal/prefill/paged"},
-      }};
-  size_t activation_index = 0;
-  for (const ProfileActivationContract& profile : profiles) {
-    if (!profile.activation_phase.has_value()) {
-      continue;
-    }
-    ASSERT_LT(activation_index,
-              expected_new_profile_activation_order.size());
-    const std::string profile_name =
-        std::string(contract_token(profile.backend)) + "/" +
-        std::string(contract_token(profile.phase)) + "/" +
-        std::string(contract_token(profile.layout));
-    EXPECT_EQ(*profile.activation_phase,
-              expected_new_profile_activation_order[activation_index].first);
-    EXPECT_EQ(profile_name,
-              expected_new_profile_activation_order[activation_index].second);
-    ++activation_index;
-  }
-  EXPECT_EQ(activation_index, expected_new_profile_activation_order.size());
-
-  constexpr int generic_schema_rename_phase = 1;
-  constexpr int capability_validation_pending_phase = 12;
-  constexpr int capability_production_supported_phase = 13;
-  EXPECT_EQ(generic_schema_rename_phase, 1);
-  EXPECT_EQ(capability_validation_pending_phase, 12);
-  EXPECT_EQ(capability_production_supported_phase, 13);
-  EXPECT_LT(capability_validation_pending_phase,
-            capability_production_supported_phase);
-
-  constexpr std::array<int, 7> phases_without_new_profile_activation = {
-      0, 1, 2, 3, 5, 8, 13};
-  for (int phase : phases_without_new_profile_activation) {
-    EXPECT_TRUE(std::none_of(
-        profiles.begin(), profiles.end(), [phase](const auto& profile) {
-          return profile.activation_phase.has_value() &&
-                 *profile.activation_phase == phase;
-        }));
-  }
 }
 
 namespace {

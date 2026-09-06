@@ -3327,10 +3327,21 @@ TEST(LlmMemoryRunnerTest, CanonicalInsertionReusesExactPlanAndSnapshotRemapsStab
   const auto eight = build_llm_scenario_work_plan(model, LlmScenario::Mixed, 8, true);
   const auto two = build_llm_scenario_work_plan(model, LlmScenario::Mixed, 2, true);
   const auto first = register_llm_scenario_plan(result, model, eight, backend);
-  const auto second = register_llm_scenario_plan(result, model, two, backend);
   EXPECT_EQ(register_llm_scenario_plan(result, model, eight, backend), first);
+  auto changed_payload = eight;
+  ++changed_payload.effective_model_payload_bytes;
+  EXPECT_THROW(register_llm_scenario_plan(result, model, changed_payload, backend), std::invalid_argument);
+  EXPECT_EQ(backend.expected_calls, 1u);
+  const auto warm = build_llm_scenario_work_plan(model, LlmScenario::WeightsOnly, 1, false);
+  const auto warm_handle = register_llm_scenario_plan(result, model, warm, backend);
+  prepare_llm_result_snapshot(result);
+  EXPECT_EQ(result.snapshot_plan_refs.at(warm_handle), 0u);
+  EXPECT_EQ(result.snapshot_plan_refs.at(first), 1u);
   EXPECT_EQ(backend.expected_calls, 2u);
   EXPECT_EQ(result.scenario_plans.size(), 2u);
+  const auto second = register_llm_scenario_plan(result, model, two, backend);
+  EXPECT_EQ(backend.expected_calls, 3u);
+  EXPECT_EQ(result.scenario_plans.size(), 3u);
   result.frozen_plan_handles[2] = first;
   for (size_t t = 3; t < 20; ++t) {
     register_llm_scenario_plan(result, model,
