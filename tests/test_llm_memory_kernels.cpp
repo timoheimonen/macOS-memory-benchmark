@@ -745,6 +745,37 @@ void expect_worker_equal(const LlmWorkerChecksum& actual, const LlmWorkerChecksu
   expect_component_equal(actual.v, expected.v);
 }
 
+// Four direct ABI calls keep these fault examples scoped to the shared weight
+// span. They do not exercise KV writes, lookup mixing, or backend acceptance.
+LlmWorkerChecksum run_weights_only_fault_probe(size_t profile, const uint8_t* bytes,
+                                               size_t byte_count, size_t work_units) {
+  LlmWorkerChecksum actual{};
+  constexpr uint64_t seed = 424242;
+  switch (profile) {
+    case 0: {
+      LlmLayerDescriptor layer{bytes, byte_count, 0, 0, 0, 0};
+      llm_decode_memory_asm(&layer, nullptr, 1, work_units, kLlmScenarioFlagWeight, seed, &actual);
+      break;
+    }
+    case 1: {
+      LlmPagedLayerDescriptor layer{bytes, byte_count, 0, 0, 0, 0};
+      llm_decode_memory_paged_asm(&layer, nullptr, 1, work_units, kLlmScenarioFlagWeight, seed, &actual);
+      break;
+    }
+    case 2: {
+      LlmPrefillLayerDescriptor layer{bytes, byte_count, 0, 0, 0, 0};
+      llm_prefill_memory_asm(&layer, nullptr, 1, work_units, kLlmScenarioFlagWeight, seed, &actual);
+      break;
+    }
+    case 3: {
+      LlmPagedPrefillLayerDescriptor layer{bytes, byte_count, 0, 0, 0, 0};
+      llm_prefill_memory_paged_asm(&layer, nullptr, 1, work_units, kLlmScenarioFlagWeight, seed, &actual);
+      break;
+    }
+  }
+  return actual;
+}
+
 LlmMemoryWorkPlan build_real_executor_plan(const LlmGeometryRequest& geometry, size_t workers) {
   LlmMemoryWorkPlanRequest request;
   request.geometry = geometry;
@@ -903,6 +934,83 @@ struct ManualPagedDescriptorFixture {
 };
 
 }  // namespace
+
+TEST(LlmMemoryKernelIntegrationTest, AllCpuWeightSpansExposeBoundedParityCollisions) {
+  const std::array<uint64_t, 8> original = {11, 23, 37, 43, 59, 67, 79, 83};
+  auto swapped = original;
+  std::rotate(swapped.begin(), swapped.begin() + 4, swapped.end());
+  auto cancelling = original;
+  ++cancelling[0];
+  --cancelling[2];
+  auto one_bit = original;
+  one_bit[0] ^= 1;
+  ASSERT_NE(original, swapped);
+  ASSERT_NE(original, cancelling);
+  ASSERT_NE(original, one_bit);
+
+  for (size_t profile = 0; profile < 4; ++profile) {
+    SCOPED_TRACE(profile);
+    for (size_t work_units : {1U, 2U}) {
+      SCOPED_TRACE(work_units);
+      LlmWorkerChecksum expected = profile < 2
+          ? oracle_initial_worker()
+          : LlmWorkerChecksum{oracle_initial(LlmChecksumComponent::Weight), {}, {}};
+      for (size_t unit = 0; unit < work_units; ++unit) {
+        oracle_absorb(expected.weight, reinterpret_cast<const uint8_t*>(original.data()), sizeof(original));
+      }
+      for (const auto* contents : std::array<const std::array<uint64_t, 8>*, 3>{&original, &swapped, &cancelling}) {
+        const auto actual = run_weights_only_fault_probe(
+            profile, reinterpret_cast<const uint8_t*>(contents->data()), sizeof(original), work_units);
+        expect_worker_equal(actual, expected);
+      }
+      const auto changed = run_weights_only_fault_probe(
+          profile, reinterpret_cast<const uint8_t*>(one_bit.data()), sizeof(original), work_units);
+      EXPECT_NE(changed.weight.state_a, expected.weight.state_a);
+      EXPECT_EQ(changed.weight.exact_bytes_read, expected.weight.exact_bytes_read);
+      EXPECT_EQ(changed.weight.span_count, expected.weight.span_count);
+    }
+  }
+}
+
+TEST(LlmMemoryKernelIntegrationTest, AllCpuWeightSpansDetectBoundedReadAndWorkUnitMutations) {
+  // The final 32 bytes duplicate the first 32. The frozen expected workload is
+  // exactly the first 64 bytes, twice. Mutations retain that original oracle;
+  // these selected descriptor faults do not model every possible kernel bug.
+  const std::array<uint64_t, 12> contents = {11, 23, 37, 43, 59, 67, 79, 83, 11, 23, 37, 43};
+  constexpr size_t planned_bytes = 64;
+  constexpr size_t planned_work_units = 2;
+  const auto* bytes = reinterpret_cast<const uint8_t*>(contents.data());
+  struct Mutation {
+    const char* name;
+    size_t span_bytes;
+    size_t work_units;
+  };
+  const std::array<Mutation, 4> mutations = {{{"skip-32-byte-range", 32, 2},
+                                            {"duplicate-32-byte-range", 96, 2},
+                                            {"missing-work-unit", 64, 1},
+                                            {"extra-work-unit", 64, 3}}};
+  for (size_t profile = 0; profile < 4; ++profile) {
+    SCOPED_TRACE(profile);
+    LlmWorkerChecksum expected = profile < 2
+        ? oracle_initial_worker()
+        : LlmWorkerChecksum{oracle_initial(LlmChecksumComponent::Weight), {}, {}};
+    for (size_t unit = 0; unit < planned_work_units; ++unit) {
+      oracle_absorb(expected.weight, bytes, planned_bytes);
+    }
+    expect_worker_equal(run_weights_only_fault_probe(profile, bytes, planned_bytes, planned_work_units), expected);
+    for (const auto& mutation : mutations) {
+      SCOPED_TRACE(mutation.name);
+      const auto actual = run_weights_only_fault_probe(profile, bytes, mutation.span_bytes, mutation.work_units);
+      EXPECT_NE(actual.weight.exact_bytes_read, expected.weight.exact_bytes_read);
+      EXPECT_EQ(actual.weight.exact_bytes_read, mutation.span_bytes * mutation.work_units);
+      EXPECT_EQ(actual.weight.span_count, mutation.work_units);
+      EXPECT_TRUE(actual.weight.state_a != expected.weight.state_a || actual.weight.state_b != expected.weight.state_b);
+      // No KV descriptors or resources were used by any of these probes.
+      expect_component_equal(actual.k, expected.k);
+      expect_component_equal(actual.v, expected.v);
+    }
+  }
+}
 
 TEST(LlmMemoryKernelIntegrationTest, SafeZeroNullAndInvalidTopLevelBoundariesReturnInitialStates) {
   // A null output is the sole case where no initialized result can be stored.

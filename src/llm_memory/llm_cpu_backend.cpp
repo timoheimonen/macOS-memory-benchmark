@@ -128,6 +128,13 @@ class LlmCpuBackend final : public LlmBackend {
     return evidence_.preparation;
   }
 
+  LlmExpectedChecksumResult expected_cpu_checksum(const LlmMemoryWorkPlan& model_plan,
+                                                  const LlmScenarioWorkPlan& scenario_plan) const noexcept override {
+    if (!resources_prepared_ || !plan_resolved_ || model_plan.backend != LlmMemoryBackend::Cpu ||
+        resolved_plan_identity_ != model_plan.plan_identity) return LlmExpectedChecksumResult{};
+    return calculate_llm_expected_checksums(model_plan, scenario_plan, resources_);
+  }
+
   LlmTaskExecutionResult execute_task(const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan& scenario_plan,
                                       const LlmRunnerTaskContext& context) override {
     if (!resources_prepared_ || !timer_.has_value() || resolved_plan_identity_ != model_plan.plan_identity) {
@@ -183,17 +190,23 @@ LlmTaskExecutionResult adapt_llm_cpu_executor_result(const LlmMemoryWorkPlan& mo
   const LlmCpuExecutionPlan* cpu_plan = get_llm_cpu_execution_plan(model_plan);
   const size_t effective_workers = cpu_plan == nullptr ? 0 : cpu_plan->effective_workers;
   const bool lifecycle_complete = cpu_lifecycle_complete(executor_result, effective_workers);
+  const bool write_required = scenario_plan.scenario != LlmScenario::WeightsOnly;
+  const bool write_evidence_complete =
+      executor_result.kv_write_validation_applicable == write_required &&
+      (!write_required || executor_result.kv_write_validation_evaluated);
   const bool checksum_evidence_complete =
       lifecycle_complete && executor_result.checksum_evaluated &&
-      executor_result.post_validation_evaluated;
+      executor_result.post_validation_evaluated && write_evidence_complete;
   result.timing.evaluated = executor_result.timer_started && executor_result.timer_stopped;
   result.timing.elapsed_seconds = executor_result.elapsed_seconds;
+  result.timing.cpu_raw = executor_result.cpu_raw;
   result.timing.valid = result.timing.evaluated && std::isfinite(executor_result.elapsed_seconds) &&
                         executor_result.elapsed_seconds > 0.0;
   result.validation.evaluated = checksum_evidence_complete;
   result.validation.valid =
       checksum_evidence_complete && executor_result.checksum_valid &&
-      executor_result.post_validation_valid;
+      executor_result.post_validation_valid &&
+      (!write_required || executor_result.kv_write_validation_valid);
 
   const std::string_view original_reason = executor_result.reason_code;
   const bool accepted = executor_result.valid && original_reason == LlmExecutorReason::VALID && lifecycle_complete &&
@@ -207,13 +220,15 @@ LlmTaskExecutionResult adapt_llm_cpu_executor_result(const LlmMemoryWorkPlan& mo
     result.completion.completed_layout_metadata_read_bytes = scenario_plan.layout_metadata_read_bytes;
     result.completion.completed_task_accounted_bytes = scenario_plan.task_accounted_bytes;
   } else if (original_reason == LlmExecutorReason::CHECKSUM_MISMATCH ||
+             original_reason == LlmExecutorReason::DECODE_POST_VALIDATION_FAILED ||
              original_reason ==
                  LlmExecutorReason::PAGED_POST_VALIDATION_FAILED ||
              original_reason ==
                  LlmExecutorReason::PREFILL_POST_VALIDATION_FAILED ||
              (lifecycle_complete && result.validation.evaluated && !result.validation.valid)) {
     result.status = LlmTaskExecutionStatus::Invalid;
-    result.reason_code = original_reason ==
+    result.reason_code = original_reason == LlmExecutorReason::DECODE_POST_VALIDATION_FAILED ||
+                             original_reason ==
                                  LlmExecutorReason::PAGED_POST_VALIDATION_FAILED ||
                              original_reason ==
                                  LlmExecutorReason::PREFILL_POST_VALIDATION_FAILED

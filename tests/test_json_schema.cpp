@@ -1047,82 +1047,6 @@ TEST(JsonSchemaTest, TlbAnalysisBuilderCoversStatusesAndExporterHandlesUnavailab
             std::string::npos);
 }
 
-TEST(JsonSchemaTest, CoreToCorePayloadPersistsThroughSharedWriter) {
-  const TemporaryJsonFile output_file("core2core_schema");
-  CoreToCoreLatencyConfig config;
-  config.loop_count = 1;
-  config.latency_sample_count = 2;
-
-  const std::string cpu_name = "test-cpu";
-  const std::vector<CoreToCoreLatencyScenarioResult> scenarios = {
-      {
-          Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY,
-          {10.0, 11.0},
-          {10.2, 10.4},
-          {},
-          {},
-      },
-  };
-
-  const CoreToCoreLatencyJsonContext context = {
-      config,
-      cpu_name,
-      4,
-      6,
-      100,
-      200,
-      20,
-      scenarios,
-      4.5,
-  };
-
-  const nlohmann::ordered_json payload = build_core_to_core_latency_json(context);
-  ASSERT_EQ(write_json_to_file(output_file.path(), payload, false), EXIT_SUCCESS);
-  const nlohmann::json output_json = read_json_file(output_file.path());
-
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::CORE_TO_CORE_JSON_MODE_NAME);
-  ASSERT_TRUE(output_json["core_to_core_latency"]["scenarios"][0].contains(JsonKeys::SAMPLES_NS));
-  const nlohmann::json samples_json = output_json["core_to_core_latency"]["scenarios"][0][JsonKeys::SAMPLES_NS];
-  EXPECT_TRUE(samples_json.contains(JsonKeys::VALUES));
-  EXPECT_TRUE(samples_json.contains(JsonKeys::STATISTICS));
-}
-
-TEST(JsonSchemaTest, CoreToCoreJsonBuilderReturnsInMemoryPayload) {
-  CoreToCoreLatencyConfig config;
-  config.output_file.clear();
-  config.loop_count = 1;
-  config.latency_sample_count = 2;
-
-  const std::string cpu_name = "test-cpu";
-  const std::vector<CoreToCoreLatencyScenarioResult> scenarios = {
-      {
-          Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY,
-          {10.0},
-          {10.2, 10.4},
-          {},
-          {},
-      },
-  };
-
-  const CoreToCoreLatencyJsonContext context = {
-      config,
-      cpu_name,
-      4,
-      6,
-      100,
-      200,
-      20,
-      scenarios,
-      4.5,
-  };
-
-  const nlohmann::json output_json = build_core_to_core_latency_json(context);
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::CORE_TO_CORE_JSON_MODE_NAME);
-  EXPECT_TRUE(output_json.contains("core_to_core_latency"));
-  EXPECT_EQ(output_json["core_to_core_latency"]["scenarios"][0]["name"],
-            Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY);
-}
-
 TEST(JsonSchemaTest,
      CoreToCoreBuilderRetainsFailedAndInterruptedIncompleteState) {
   struct StatusCase {
@@ -1280,7 +1204,17 @@ TEST(JsonSchemaTest, CoreToCoreBuilderSerializesOneWayValuesAndThreadHints) {
 
   const nlohmann::json output_json = build_core_to_core_latency_json(context);
 
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::CORE_TO_CORE_JSON_MODE_NAME);
+  ASSERT_TRUE(output_json["core_to_core_latency"].is_object());
+  ASSERT_EQ(output_json["core_to_core_latency"]["scenarios"].size(), 1u);
   const nlohmann::json scenario_json = output_json["core_to_core_latency"]["scenarios"][0];
+  EXPECT_EQ(scenario_json["name"], Constants::CORE_TO_CORE_SCENARIO_SAME_AFFINITY);
+  const nlohmann::json samples_json = scenario_json[JsonKeys::SAMPLES_NS];
+  EXPECT_EQ(samples_json[JsonKeys::VALUES], nlohmann::json::array({15.0, 17.0}));
+  ASSERT_TRUE(samples_json[JsonKeys::STATISTICS].is_object());
+  EXPECT_DOUBLE_EQ(samples_json[JsonKeys::STATISTICS]["average"].get<double>(), 16.0);
+  EXPECT_DOUBLE_EQ(samples_json[JsonKeys::STATISTICS]["median"].get<double>(), 16.0);
+
   ASSERT_EQ(scenario_json["one_way_estimate_ns"][JsonKeys::VALUES].size(), 2u);
   EXPECT_DOUBLE_EQ(scenario_json["one_way_estimate_ns"][JsonKeys::VALUES][0].get<double>(), 6.0);
   EXPECT_DOUBLE_EQ(scenario_json["one_way_estimate_ns"][JsonKeys::VALUES][1].get<double>(), 9.0);

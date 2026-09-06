@@ -1538,7 +1538,7 @@ TEST(LlmMemoryConfigTest, ConvertsWeightMiBWithCheckedArithmetic) {
 }
 
 TEST(LlmMemoryConfigTest,
-     TimerSetupFailureKeepsStdoutEmptyAndPreservesLegacyDiagnosticBoundary) {
+     TimerSetupFailureKeepsStdoutEmptyAndPreservesLegacyDiagnosticBoundaryIntegration) {
   std::vector<std::string> arguments = valid_llm_arguments();
   arguments.insert(arguments.end(), {"--iterations", "1", "--count", "1",
                                      "--output", "-"});
@@ -1593,8 +1593,13 @@ TEST(LlmMemoryConfigIntegrationTest,
   ASSERT_NO_THROW(document = nlohmann::ordered_json::parse(stdout_output));
   EXPECT_EQ(document.at("status"), "failed");
   EXPECT_EQ(document.at("reason_code"), LlmRunnerReason::RUNNER_EXCEPTION);
-  EXPECT_FALSE(document.at("results_complete").get<bool>());
-  EXPECT_FALSE(document.at("conclusions_valid").get<bool>());
+  EXPECT_TRUE(document.at("results_complete").get<bool>());
+  EXPECT_FALSE(document.at("run_accepted").get<bool>());
+  const auto& lifecycle = document.at("checkpoint_lifecycle");
+  EXPECT_EQ(lifecycle.at("current_request"), "late-command-error-correction");
+  EXPECT_EQ(lifecycle.at("prior_file_writer_attempts"), 0);
+  EXPECT_EQ(lifecycle.at("prior_successful_file_writes"), 0);
+  EXPECT_TRUE(lifecycle.at("current_persistence_success").is_null());
   EXPECT_NE(stderr_output.find("injected post-run command exception"),
             std::string::npos);
 }
@@ -1635,8 +1640,13 @@ TEST(LlmMemoryConfigIntegrationTest,
       read_llm_command_output_file(output.path()));
   EXPECT_EQ(document.at("status"), "failed");
   EXPECT_EQ(document.at("reason_code"), LlmRunnerReason::RUNNER_EXCEPTION);
-  EXPECT_FALSE(document.at("results_complete").get<bool>());
-  EXPECT_FALSE(document.at("conclusions_valid").get<bool>());
+  EXPECT_TRUE(document.at("results_complete").get<bool>());
+  EXPECT_FALSE(document.at("run_accepted").get<bool>());
+  const auto& lifecycle = document.at("checkpoint_lifecycle");
+  EXPECT_EQ(lifecycle.at("current_request"), "late-command-error-correction");
+  EXPECT_EQ(lifecycle.at("prior_file_writer_attempts"), 2);
+  EXPECT_EQ(lifecycle.at("prior_successful_file_writes"), 2);
+  EXPECT_TRUE(lifecycle.at("current_persistence_success").is_null());
   EXPECT_EQ(stdout_output.find("Results saved"), std::string::npos);
   EXPECT_NE(stderr_output.find("injected post-run command exception"),
             std::string::npos);
@@ -1684,18 +1694,18 @@ TEST(LlmMemoryConfigTest, ResultFoundationKeepsUnavailableValuesAbsent) {
   const LlmMeasurementState measurement;
   EXPECT_EQ(measurement.status, LlmMeasurementStatus::NotRun);
   EXPECT_EQ(measurement.reason_code, "not-run");
-  EXPECT_EQ(measurement.planned_work_units, 0u);
-  EXPECT_EQ(measurement.completed_work_units, 0u);
-  EXPECT_FALSE(measurement.elapsed_seconds.has_value());
-  EXPECT_FALSE(measurement.effective_model_payload_gb_s.has_value());
-  EXPECT_FALSE(measurement.checksum_valid);
+  EXPECT_EQ(measurement.plan_handle, kLlmNoTaskIndex);
+  EXPECT_EQ(measurement.execution.completion.completed_work_units, 0u);
+  EXPECT_FALSE(derive_llm_measurement_metrics(measurement).latency_seconds.has_value());
+  EXPECT_FALSE(derive_llm_measurement_metrics(measurement).payload_gb_s.has_value());
+  EXPECT_FALSE(measurement.execution_evidence_available);
 
   const LlmMemoryResult result;
   EXPECT_EQ(result.status, LlmRunStatus::NotStarted);
   EXPECT_EQ(result.reason_code, "not-started");
   EXPECT_FALSE(result.interruption_requested);
   EXPECT_FALSE(result.results_complete);
-  EXPECT_FALSE(result.conclusions_valid);
+  EXPECT_FALSE(result.run_accepted);
   EXPECT_FALSE(result.scenario_order_balance_complete);
   EXPECT_TRUE(result.measurements.empty());
   EXPECT_EQ(result.counters.planned_measurements, 0u);

@@ -2414,9 +2414,7 @@ LlmExpectedChecksumResult calculate_prefill_expected_checksums(
   const LlmCpuExecutionPlan* const cpu_plan =
       get_llm_cpu_execution_plan(model_plan);
   if (cpu_plan == nullptr || !cpu_plan->prefill.has_value() ||
-      !model_plan.geometry.prefill.has_value() ||
-      !materialized_resources_match_plan(model_plan, resources) ||
-      !scenario_plan_matches_model(model_plan, scenario_plan)) {
+      !model_plan.geometry.prefill.has_value()) {
     result.reason_code = LlmExecutorReason::INVALID_RESOURCES;
     return result;
   }
@@ -2609,9 +2607,7 @@ LlmExpectedChecksumResult calculate_paged_prefill_expected_checksums(
       get_llm_cpu_execution_plan(model_plan);
   if (cpu_plan == nullptr || !cpu_plan->prefill.has_value() ||
       !cpu_plan->paged.has_value() ||
-      !model_plan.geometry.prefill.has_value() ||
-      !materialized_resources_match_plan(model_plan, resources) ||
-      !scenario_plan_matches_model(model_plan, scenario_plan)) {
+      !model_plan.geometry.prefill.has_value()) {
     result.reason_code = LlmExecutorReason::INVALID_RESOURCES;
     return result;
   }
@@ -2853,9 +2849,7 @@ LlmExpectedChecksumResult calculate_paged_expected_checksums(
   LlmExpectedChecksumResult result;
   const LlmCpuExecutionPlan* const cpu_plan =
       get_llm_cpu_execution_plan(model_plan);
-  if (cpu_plan == nullptr || !cpu_plan->paged.has_value() ||
-      !materialized_resources_match_plan(model_plan, resources) ||
-      !scenario_plan_matches_model(model_plan, scenario_plan)) {
+  if (cpu_plan == nullptr || !cpu_plan->paged.has_value()) {
     result.reason_code = LlmExecutorReason::INVALID_RESOURCES;
     return result;
   }
@@ -3013,15 +3007,54 @@ LlmExpectedChecksumResult calculate_paged_expected_checksums(
   return result;
 }
 
+/**
+ * Validate every contiguous decode append byte against the cold affine oracle.
+ * Called only after descriptor admission, timer stop, and worker joins; mapping
+ * ownership remains live and no worker can modify the checked records. Admission
+ * proves nonzero visible-token/record counts and checked layer/batch/sequence
+ * products, with each complete append record inside both K and V mappings.
+ */
+bool validate_decode_post_execution(const LlmMemoryWorkPlan& model_plan,
+                                    const LlmScenarioWorkPlan& scenario_plan,
+                                    const LlmExecutionResources& resources, LlmColdChecks& checks) noexcept {
+  constexpr auto reason = LlmExecutorReason::DECODE_POST_VALIDATION_FAILED;
+  const auto& geometry = model_plan.geometry;
+  if (!geometry.decode.has_value() || scenario_plan.work_units == 0 || !resources.buffers.complete()) {
+    return resolve_llm_cold_check(checks, 0, false, reason);
+  }
+  resolve_llm_cold_check(checks, 0, true);
+  const auto* k = static_cast<const uint8_t*>(resources.buffers.k.get());
+  const auto* v = static_cast<const uint8_t*>(resources.buffers.v.get());
+  const size_t record_bytes = geometry.k_or_v_record_bytes_per_layer;
+  for (size_t layer = 0; layer < geometry.layer_count; ++layer) {
+    for (size_t batch = 0; batch < geometry.batch_size; ++batch) {
+      const size_t row = layer * geometry.batch_size + batch;
+      const size_t offset = row * geometry.k_or_v_sequence_visible_bytes +
+                            (geometry.decode->visible_context_tokens - 1) * record_bytes;
+      for (size_t byte = 0; byte < record_bytes; ++byte) {
+        if (k[offset + byte] != append_byte(scenario_plan.scenario_seed, scenario_plan.work_units - 1,
+                                           layer, batch, byte, LlmChecksumComponent::K) ||
+            v[offset + byte] != append_byte(scenario_plan.scenario_seed, scenario_plan.work_units - 1,
+                                           layer, batch, byte, LlmChecksumComponent::V)) {
+          return resolve_llm_cold_check(checks, 1, false, reason);
+        }
+      }
+    }
+  }
+  for (size_t slot = 0; slot < checks.size(); ++slot) resolve_llm_cold_check(checks, slot, true);
+  return true;
+}
+
 bool validate_paged_post_execution(
     const LlmMemoryWorkPlan& model_plan,
     const LlmScenarioWorkPlan& scenario_plan,
-    const LlmExecutionResources& resources) noexcept {
+    const LlmExecutionResources& resources, LlmColdChecks& checks) noexcept {
+  constexpr auto reason = LlmExecutorReason::PAGED_POST_VALIDATION_FAILED;
   const LlmCpuExecutionPlan* const cpu_plan =
       get_llm_cpu_execution_plan(model_plan);
   if (cpu_plan == nullptr || !cpu_plan->paged.has_value() ||
       resources.block_table == nullptr || !resources.buffers.complete()) {
-    return false;
+    return resolve_llm_cold_check(checks, 0, false, reason);
   }
   const LlmKvLayoutPlan& layout = cpu_plan->paged->layout;
   const uint8_t* const k =
@@ -3038,8 +3071,10 @@ bool validate_paged_post_execution(
           (layout.blocks_per_sequence - 1);
       const uint32_t physical_id = resources.block_table[table_index];
       if (physical_id >= layout.physical_blocks_per_layer) {
-        return false;
+        return resolve_llm_cold_check(checks, 0, false, reason);
       }
+      const bool final_row = layer + 1 == layout.layer_count && batch + 1 == layout.batch_size;
+      if (final_row) resolve_llm_cold_check(checks, 0, true);
       const size_t global_block =
           layer * layout.physical_blocks_per_layer + physical_id;
       const size_t block_offset = global_block * layout.block_bytes;
@@ -3066,9 +3101,10 @@ bool validate_paged_post_execution(
                       model_plan.v_buffer_seed, layer, physical_id,
                       block_byte_offset, 1));
         if (k[byte_offset] != expected_k || v[byte_offset] != expected_v) {
-          return false;
+          return resolve_llm_cold_check(checks, 1, false, reason);
         }
       }
+      if (final_row) resolve_llm_cold_check(checks, 1, true);
       for (size_t padding_byte = layout.last_block_valid_bytes;
            padding_byte < layout.block_bytes; ++padding_byte) {
         const uint8_t expected_k = static_cast<uint8_t>(
@@ -3079,18 +3115,20 @@ bool validate_paged_post_execution(
                                     physical_id, padding_byte, 1));
         if (k[block_offset + padding_byte] != expected_k ||
             v[block_offset + padding_byte] != expected_v) {
-          return false;
+          return resolve_llm_cold_check(checks, 2, false, reason);
         }
       }
     }
   }
+  for (size_t slot = 0; slot < checks.size(); ++slot) resolve_llm_cold_check(checks, slot, true);
   return true;
 }
 
 bool validate_paged_prefill_post_execution(
     const LlmMemoryWorkPlan& model_plan,
     const LlmScenarioWorkPlan& scenario_plan,
-    const LlmExecutionResources& resources) noexcept {
+    const LlmExecutionResources& resources, LlmColdChecks& checks) noexcept {
+  constexpr auto reason = LlmExecutorReason::PREFILL_POST_VALIDATION_FAILED;
   const LlmCpuExecutionPlan* const cpu_plan =
       get_llm_cpu_execution_plan(model_plan);
   if (model_plan.phase != LlmPhase::Prefill ||
@@ -3099,7 +3137,7 @@ bool validate_paged_prefill_post_execution(
       !cpu_plan->prefill.has_value() || !cpu_plan->paged.has_value() ||
       resources.block_table == nullptr || !resources.buffers.complete() ||
       scenario_plan.work_units == 0) {
-    return false;
+    return resolve_llm_cold_check(checks, 0, false, reason);
   }
   const LlmKvLayoutPlan& layout = cpu_plan->paged->layout;
   const uint8_t* const k =
@@ -3118,11 +3156,11 @@ bool validate_paged_prefill_post_execution(
            logical_block < layout.blocks_per_sequence; ++logical_block) {
         const size_t table_index = table_row + logical_block;
         if (table_index >= resources.block_table_entries) {
-          return false;
+          return resolve_llm_cold_check(checks, 0, false, reason);
         }
         const uint32_t physical_id = resources.block_table[table_index];
         if (physical_id >= layout.physical_blocks_per_layer) {
-          return false;
+          return resolve_llm_cold_check(checks, 0, false, reason);
         }
         size_t global_block = 0;
         size_t physical_offset = 0;
@@ -3136,27 +3174,31 @@ bool validate_paged_prefill_post_execution(
                 global_block, layout.block_bytes, physical_offset) ||
             !NumericUtils::checked_multiply(
                 logical_block, layout.block_bytes, logical_offset)) {
-          return false;
+          return resolve_llm_cold_check(checks, 0, false, reason);
         }
         const size_t valid_bytes =
             logical_block + 1 == layout.blocks_per_sequence
                 ? layout.last_block_valid_bytes
                 : layout.block_bytes;
         if (valid_bytes == 0) {
-          return false;
+          return resolve_llm_cold_check(checks, 0, false, reason);
         }
+        const bool final_block = layer + 1 == layout.layer_count &&
+            batch + 1 == layout.batch_size && logical_block + 1 == layout.blocks_per_sequence;
+        if (final_block && !wrote_kv) resolve_llm_cold_check(checks, 0, true);
         if (wrote_kv) {
           size_t logical_end = 0;
           if (!NumericUtils::checked_add(
                   logical_offset, valid_bytes, logical_end)) {
-            return false;
+            return resolve_llm_cold_check(checks, 0, false, reason);
           }
           const size_t midpoint = logical_offset + valid_bytes / 2;
           const std::array<size_t, 3> representative_words = {
               logical_offset / sizeof(uint64_t),
               midpoint / sizeof(uint64_t),
               (logical_end - 1) / sizeof(uint64_t)};
-          for (size_t logical_word : representative_words) {
+          for (size_t sample = 0; sample < representative_words.size(); ++sample) {
+            const size_t logical_word = representative_words[sample];
             const size_t word_start = logical_word * sizeof(uint64_t);
             const size_t sample_start = std::max(logical_offset, word_start);
             size_t sample_end = 0;
@@ -3164,8 +3206,10 @@ bool validate_paged_prefill_post_execution(
                     sample_start,
                     sizeof(uint64_t) - sample_start % sizeof(uint64_t),
                     sample_end)) {
-              return false;
+              return resolve_llm_cold_check(checks, 0, false, reason);
             }
+            if (final_block && sample + 1 == representative_words.size())
+              resolve_llm_cold_check(checks, 0, true);
             sample_end = std::min(logical_end, sample_end);
             for (size_t logical_byte = sample_start;
                  logical_byte < sample_end; ++logical_byte) {
@@ -3179,11 +3223,12 @@ bool validate_paged_prefill_post_execution(
                   LlmPrefillKvDomain::V, logical_byte);
               if (k[mapping_offset] != expected_k ||
                   v[mapping_offset] != expected_v) {
-                return false;
+                return resolve_llm_cold_check(checks, 1, false, reason);
               }
             }
           }
         }
+        if (final_block) resolve_llm_cold_check(checks, 1, true);
         for (size_t padding_byte = valid_bytes;
              padding_byte < layout.block_bytes; ++padding_byte) {
           const uint8_t expected_k = static_cast<uint8_t>(
@@ -3196,19 +3241,21 @@ bool validate_paged_prefill_post_execution(
                   padding_byte, 1));
           if (k[physical_offset + padding_byte] != expected_k ||
               v[physical_offset + padding_byte] != expected_v) {
-            return false;
+            return resolve_llm_cold_check(checks, 2, false, reason);
           }
         }
       }
     }
   }
+  for (size_t slot = 0; slot < checks.size(); ++slot) resolve_llm_cold_check(checks, slot, true);
   return true;
 }
 
 bool validate_prefill_post_execution(
     const LlmMemoryWorkPlan& model_plan,
     const LlmScenarioWorkPlan& scenario_plan,
-    const LlmExecutionResources& resources) noexcept {
+    const LlmExecutionResources& resources, LlmColdChecks& checks) noexcept {
+  constexpr auto reason = LlmExecutorReason::PREFILL_POST_VALIDATION_FAILED;
   const LlmCpuExecutionPlan* const cpu_plan =
       get_llm_cpu_execution_plan(model_plan);
   if (model_plan.phase != LlmPhase::Prefill ||
@@ -3216,10 +3263,11 @@ bool validate_prefill_post_execution(
       !model_plan.geometry.prefill.has_value() ||
       cpu_plan == nullptr || !cpu_plan->prefill.has_value() ||
       !resources.buffers.complete() || scenario_plan.work_units == 0) {
-    return false;
+    return resolve_llm_cold_check(checks, 0, false, reason);
   }
   if ((llm_scenario_flags(scenario_plan.scenario) &
        kLlmScenarioFlagKv) == 0) {
+    resolve_llm_cold_check(checks, 0, true);
     return true;
   }
   const uint8_t* const k =
@@ -3229,7 +3277,7 @@ bool validate_prefill_post_execution(
   const size_t final_operation = scenario_plan.work_units - 1;
   const size_t scenario_index = static_cast<size_t>(scenario_plan.scenario);
   if (scenario_index >= kLlmScenarioCount) {
-    return false;
+    return resolve_llm_cold_check(checks, 0, false, reason);
   }
   const size_t per_scenario =
       cpu_plan->prefill->sequence_descriptors_per_scenario_per_worker;
@@ -3245,7 +3293,7 @@ bool validate_prefill_post_execution(
           !NumericUtils::checked_multiply(
               row, model_plan.geometry.k_or_v_sequence_visible_bytes,
               row_offset)) {
-        return false;
+        return resolve_llm_cold_check(checks, 0, false, reason);
       }
       for (size_t worker = 0; worker < cpu_plan->effective_workers;
            ++worker) {
@@ -3272,8 +3320,11 @@ bool validate_prefill_post_execution(
             owned_bytes == 0 ||
             end_byte >
                 model_plan.geometry.k_or_v_sequence_visible_bytes) {
-          return false;
+          return resolve_llm_cold_check(checks, 0, false, reason);
         }
+        if (layer + 1 == model_plan.geometry.layer_count &&
+            batch + 1 == model_plan.geometry.batch_size && worker + 1 == cpu_plan->effective_workers)
+          resolve_llm_cold_check(checks, 0, true);
         const size_t midpoint = first_byte + owned_bytes / 2;
         const std::array<size_t, 3> representative_words = {
             first_byte / sizeof(uint64_t),
@@ -3295,13 +3346,14 @@ bool validate_prefill_post_execution(
                                  scenario_plan.scenario_seed,
                                  final_operation, layer, batch,
                                  LlmPrefillKvDomain::V, logical_byte)) {
-              return false;
+              return resolve_llm_cold_check(checks, 1, false, reason);
             }
           }
         }
       }
     }
   }
+  for (size_t slot = 0; slot < checks.size(); ++slot) resolve_llm_cold_check(checks, slot, true);
   return true;
 }
 
@@ -3939,22 +3991,20 @@ LlmResourcePreparationResult prepare_llm_execution_resources(const LlmMemoryWork
   }
 }
 
-LlmExpectedChecksumResult calculate_llm_expected_checksums(const LlmMemoryWorkPlan& model_plan,
+namespace {
+
+/**
+ * Compute the oracle immediately after the caller validated this task's plan
+ * and materialized resources. No callback or mutation may intervene. This
+ * private boundary retains no validation verdict across public calls or tasks.
+ */
+LlmExpectedChecksumResult calculate_validated_expected_checksums(const LlmMemoryWorkPlan& model_plan,
                                                            const LlmScenarioWorkPlan& scenario_plan,
                                                            const LlmExecutionResources& resources) noexcept {
   LlmExpectedChecksumResult result;
   try {
     const LlmCpuExecutionPlan* const cpu_plan =
         get_llm_cpu_execution_plan(model_plan);
-    if (cpu_plan == nullptr ||
-        !materialized_resources_match_plan(model_plan, resources)) {
-      result.reason_code = LlmExecutorReason::INVALID_RESOURCES;
-      return result;
-    }
-    if (!scenario_plan_matches_model(model_plan, scenario_plan)) {
-      result.reason_code = LlmExecutorReason::SCENARIO_PLAN_MISMATCH;
-      return result;
-    }
     if (model_plan.phase == LlmPhase::Prefill &&
         model_plan.kv_layout == LlmKvLayout::Paged) {
       return calculate_paged_prefill_expected_checksums(
@@ -4061,14 +4111,49 @@ LlmExpectedChecksumResult calculate_llm_expected_checksums(const LlmMemoryWorkPl
   }
 }
 
+}  // namespace
+
+LlmExpectedChecksumResult calculate_llm_expected_checksums(const LlmMemoryWorkPlan& model_plan,
+                                                           const LlmScenarioWorkPlan& scenario_plan,
+                                                           const LlmExecutionResources& resources) noexcept {
+  LlmExpectedChecksumResult result;
+  try {
+    if (!materialized_resources_match_plan(model_plan, resources)) {
+      result.reason_code = LlmExecutorReason::INVALID_RESOURCES;
+      return result;
+    }
+    if (!scenario_plan_matches_model(model_plan, scenario_plan)) {
+      result.reason_code = LlmExecutorReason::SCENARIO_PLAN_MISMATCH;
+      return result;
+    }
+    return calculate_validated_expected_checksums(model_plan, scenario_plan, resources);
+  } catch (const std::bad_alloc&) {
+    result.reason_code = LlmExecutorReason::EXPECTED_CHECKSUM_ALLOCATION_FAILED;
+  } catch (...) {
+    result.reason_code = LlmExecutorReason::INVALID_SCENARIO_PLAN;
+  }
+  return result;
+}
+
 LlmKernelAdapter production_llm_kernel_adapter() noexcept { return {production_kernel_invoke, nullptr}; }
 
 LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan& scenario_plan,
                                        const LlmExecutionResources& resources, HighResTimer& timer,
                                        LlmKernelAdapter kernel, const LlmExecutorTestControl* test_control) noexcept {
   LlmExecutorResult result;
+  result.kv_write_validation_applicable =
+      (llm_scenario_flags(scenario_plan.scenario) & kLlmScenarioFlagKv) != 0;
   const LlmCpuExecutionPlan* const cpu_plan =
       get_llm_cpu_execution_plan(model_plan);
+  const bool paged_checks = model_plan.kv_layout == LlmKvLayout::Paged;
+  const bool prefill_checks = model_plan.phase == LlmPhase::Prefill;
+  const bool padding_checks = paged_checks && cpu_plan != nullptr && cpu_plan->paged.has_value() &&
+      cpu_plan->paged->layout.last_block_valid_bytes < cpu_plan->paged->layout.block_bytes;
+  result.cold_checks = make_llm_cold_checks(
+      paged_checks || prefill_checks || result.kv_write_validation_applicable,
+      prefill_checks ? LlmColdCheckKind::KvPrefillFinalSamples :
+          result.kv_write_validation_applicable ? LlmColdCheckKind::KvAppendFinal : LlmColdCheckKind::KvAppendUnchanged,
+      result.kv_write_validation_applicable || (paged_checks && !prefill_checks), padding_checks);
   result.requested_workers =
       cpu_plan == nullptr ? 0 : cpu_plan->effective_workers;
   try {
@@ -4086,7 +4171,7 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
       return result;
     }
 
-    LlmExpectedChecksumResult expected = calculate_llm_expected_checksums(model_plan, scenario_plan, resources);
+    LlmExpectedChecksumResult expected = calculate_validated_expected_checksums(model_plan, scenario_plan, resources);
     if (!expected.valid) {
       result.reason_code = expected.reason_code;
       return result;
@@ -4265,6 +4350,7 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
     result.completed_workers = completed_workers.load(std::memory_order_relaxed);
     result.qos_successful_workers = qos_successful_workers.load(std::memory_order_relaxed);
     result.qos_failed_workers = qos_failed_workers.load(std::memory_order_relaxed);
+    if (timer_stop_succeeded) result.cpu_raw = timer.last_snapshot;
     result.elapsed_seconds = measured_duration;
     result.timer_stopped = timer_stop_succeeded;
 
@@ -4296,13 +4382,17 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
         model_plan.phase == LlmPhase::Prefill &&
                 model_plan.kv_layout == LlmKvLayout::Paged
             ? validate_paged_prefill_post_execution(
-                  model_plan, scenario_plan, resources)
+                  model_plan, scenario_plan, resources, result.cold_checks)
         : model_plan.phase == LlmPhase::Prefill
             ? validate_prefill_post_execution(model_plan, scenario_plan,
-                                               resources)
-        : model_plan.kv_layout != LlmKvLayout::Paged ||
-              validate_paged_post_execution(model_plan, scenario_plan,
-                                             resources);
+                                               resources, result.cold_checks)
+        : model_plan.kv_layout == LlmKvLayout::Paged
+            ? validate_paged_post_execution(model_plan, scenario_plan, resources, result.cold_checks)
+            : !result.kv_write_validation_applicable ||
+                  validate_decode_post_execution(model_plan, scenario_plan, resources, result.cold_checks);
+    result.kv_write_validation_evaluated = result.kv_write_validation_applicable;
+    result.kv_write_validation_valid =
+        result.kv_write_validation_evaluated && result.post_validation_valid;
     if (!result.checksum_valid) {
       result.reason_code = LlmExecutorReason::CHECKSUM_MISMATCH;
       return result;
@@ -4311,7 +4401,9 @@ LlmExecutorResult execute_llm_scenario(const LlmMemoryWorkPlan& model_plan, cons
       result.reason_code =
           model_plan.phase == LlmPhase::Prefill
               ? LlmExecutorReason::PREFILL_POST_VALIDATION_FAILED
-              : LlmExecutorReason::PAGED_POST_VALIDATION_FAILED;
+              : model_plan.kv_layout == LlmKvLayout::Paged
+                    ? LlmExecutorReason::PAGED_POST_VALIDATION_FAILED
+                    : LlmExecutorReason::DECODE_POST_VALIDATION_FAILED;
       return result;
     }
 

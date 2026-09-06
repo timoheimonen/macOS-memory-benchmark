@@ -27,10 +27,128 @@
 #include <exception>
 #include <stdexcept>
 #include <utility>
+#include <tuple>
+#include "llm_memory/llm_metal_backend.h"
 
 #include "core/config/constants.h"
 #include "core/signal/signal_handler.h"
 #include "utils/numeric_utils.h"
+
+LlmColdChecks required_llm_cold_checks(const LlmMemoryWorkPlan& model, LlmScenario scenario) noexcept {
+  const bool writes = scenario != LlmScenario::WeightsOnly;
+  const bool paged = model.kv_layout == LlmKvLayout::Paged;
+  const bool prefill = model.phase == LlmPhase::Prefill;
+  bool padding = false;
+  if (model.backend == LlmMemoryBackend::Cpu) {
+    const auto* cpu = get_llm_cpu_execution_plan(model);
+    padding = paged && cpu && cpu->paged &&
+        cpu->paged->layout.last_block_valid_bytes < cpu->paged->layout.block_bytes;
+    return make_llm_cold_checks(paged || prefill || writes,
+        prefill ? LlmColdCheckKind::KvPrefillFinalSamples : writes ? LlmColdCheckKind::KvAppendFinal :
+        LlmColdCheckKind::KvAppendUnchanged, writes || (paged && !prefill), padding);
+  }
+  const auto* metal = get_llm_metal_execution_plan(model);
+  padding = paged && metal && metal->resources.paged_layout &&
+      metal->resources.paged_layout->last_block_valid_bytes < metal->resources.paged_layout->block_bytes;
+  return make_llm_cold_checks(writes, prefill ? LlmColdCheckKind::KvPrefillFinalSamples :
+      LlmColdCheckKind::KvAppendFinal, writes, writes && padding);
+}
+
+const LlmCanonicalScenarioPlan* find_llm_scenario_plan(const LlmMemoryResult& result,
+    LlmPlanHandle handle) noexcept {
+  return handle < result.scenario_plans.size() ? &result.scenario_plans[handle] : nullptr;
+}
+
+namespace {
+auto scenario_content(const LlmScenarioWorkPlan& p) noexcept {
+  return std::tie(p.valid, p.reason_code, p.scenario, p.work_unit_kind, p.kv_write_kind,
+      p.explicit_iterations, p.model_plan_identity, p.scenario_seed, p.work_units,
+      p.weight_read_bytes_per_work_unit, p.kv_read_bytes_per_work_unit, p.kv_write_bytes_per_work_unit,
+      p.effective_model_payload_bytes_per_work_unit, p.layout_metadata_lookup_count_per_work_unit,
+      p.layout_metadata_read_bytes_per_work_unit, p.accounted_bytes_per_work_unit,
+      p.weight_read_bytes, p.kv_read_bytes, p.kv_write_bytes, p.effective_model_payload_bytes,
+      p.layout_metadata_lookup_count, p.layout_metadata_read_bytes, p.task_accounted_bytes,
+      p.maximum_work_units_by_work_unit_cap, p.maximum_work_units_by_guardrail,
+      p.effective_maximum_work_units, p.plan_identity);
+}
+}
+
+LlmPlanHandle register_llm_scenario_plan(LlmMemoryResult& result,
+    const LlmMemoryWorkPlan& model, const LlmScenarioWorkPlan& plan, LlmBackend& backend) {
+  if (!plan.valid || plan.model_plan_identity != model.plan_identity)
+    throw std::invalid_argument("invalid canonical scenario plan");
+  for (size_t i = 0; i < result.scenario_plans.size(); ++i) {
+    const auto& prior = result.scenario_plans[i].plan;
+    if (prior.scenario == plan.scenario && prior.work_units == plan.work_units &&
+        prior.explicit_iterations == plan.explicit_iterations) {
+      if (scenario_content(prior) != scenario_content(plan))
+        throw std::invalid_argument("contradictory canonical scenario plan");
+      return i;
+    }
+  }
+  const auto rebuilt = build_llm_scenario_work_plan(model, plan.scenario, plan.work_units, plan.explicit_iterations);
+  if (scenario_content(rebuilt) != scenario_content(plan))
+    throw std::invalid_argument("noncanonical scenario content");
+  LlmCanonicalScenarioPlan entry;
+  entry.plan = plan;
+  if (model.backend == LlmMemoryBackend::Cpu) {
+    auto expected = backend.expected_cpu_checksum(model, plan);
+    const auto* cpu = get_llm_cpu_execution_plan(model);
+    entry.expected.available = expected.valid && cpu && expected.workers.size() == cpu->effective_workers;
+    entry.expected.reason_code = expected.valid && !entry.expected.available ?
+        LlmExecutorReason::INVALID_DESCRIPTOR_LAYOUT : expected.reason_code;
+    if (entry.expected.available) {
+      entry.expected.cpu_workers = std::move(expected.workers);
+      entry.expected.cpu_run = expected.run_checksum;
+    }
+  } else {
+    LlmMetalChecksumOracle oracle;
+    if (model.kv_layout == LlmKvLayout::Contiguous) {
+      oracle = model.phase == LlmPhase::Decode ? calculate_llm_metal_decode_contiguous_checksum(model, plan)
+          : calculate_llm_metal_prefill_contiguous_checksum(model, plan);
+    } else {
+      const auto* metal = get_llm_metal_execution_plan(model);
+      if (metal != nullptr && metal->resources.paged_layout) {
+        auto table = materialize_llm_kv_block_table(*metal->resources.paged_layout,
+            derive_llm_kv_permutation_seed(model.base_seed));
+        if (table.valid) {
+          if (model.phase == LlmPhase::Decode) {
+            const auto summary = build_llm_metal_decode_paged_checksum_summary(model, table.entries.data(), table.entries.size());
+            oracle = calculate_llm_metal_decode_paged_checksum(model, plan, summary);
+          } else {
+            const auto summary = build_llm_metal_prefill_paged_checksum_summary(model, table.entries.data(), table.entries.size());
+            oracle = calculate_llm_metal_prefill_paged_checksum(model, plan, summary);
+          }
+        }
+      }
+    }
+    entry.expected.available = oracle.valid;
+    entry.expected.reason_code = oracle.reason_code;
+    if (oracle.valid) entry.expected.metal_run = oracle.checksum;
+  }
+  result.scenario_plans.push_back(std::move(entry));
+  return result.scenario_plans.size() - 1;
+}
+
+LlmDerivedMetrics derive_llm_measurement_metrics(const LlmMeasurementState& measurement) noexcept {
+  LlmDerivedMetrics values;
+  const auto& runtime = measurement.execution;
+  if (measurement.status != LlmMeasurementStatus::Measured || !runtime.timing.evaluated ||
+      !runtime.timing.valid || !std::isfinite(runtime.timing.elapsed_seconds) ||
+      runtime.timing.elapsed_seconds <= 0 || runtime.completion.completed_work_units == 0) return values;
+  const long double elapsed = runtime.timing.elapsed_seconds;
+  const long double work = runtime.completion.completed_work_units;
+  const double latency = static_cast<double>(elapsed / work);
+  const double rate = static_cast<double>(work / elapsed);
+  const double bandwidth = static_cast<double>(runtime.completion.completed_effective_model_payload_bytes / elapsed / 1.0e9L);
+  if (std::isfinite(latency) && latency > 0 && std::isfinite(rate) && rate > 0 &&
+      std::isfinite(bandwidth) && bandwidth > 0) {
+    values.latency_seconds = latency;
+    values.work_units_per_second = rate;
+    values.payload_gb_s = bandwidth;
+  }
+  return values;
+}
 
 namespace {
 
@@ -62,6 +180,7 @@ constexpr std::string_view kLlmExecutorReasons[] = {
     LlmExecutorReason::WEIGHT_MAPPING_FAILED,
     LlmExecutorReason::K_MAPPING_FAILED,
     LlmExecutorReason::V_MAPPING_FAILED,
+    LlmExecutorReason::DECODE_POST_VALIDATION_FAILED,
     LlmExecutorReason::PAGED_POST_VALIDATION_FAILED,
     LlmExecutorReason::PREFILL_POST_VALIDATION_FAILED,
     LlmExecutorReason::DESCRIPTOR_ALLOCATION_FAILED,
@@ -395,6 +514,11 @@ const LlmExecutorResult* cpu_executor_evidence(
   return cpu == nullptr ? nullptr : &cpu->executor;
 }
 
+const LlmCpuRuntimeEvidence* cpu_executor_evidence(const LlmRetainedExecution& execution) noexcept {
+  const auto* cpu = std::get_if<LlmCpuRetainedEvidence>(&execution.backend_evidence);
+  return cpu == nullptr ? nullptr : &cpu->executor;
+}
+
 LlmTaskExecutionEvidence compact_execution(
     const LlmTaskExecutionResult& execution) {
   LlmTaskExecutionEvidence evidence;
@@ -402,6 +526,7 @@ LlmTaskExecutionEvidence compact_execution(
   evidence.valid = execution.status == LlmTaskExecutionStatus::Complete;
   evidence.reason_code = canonicalize_llm_result_reason_code(execution.reason_code);
   evidence.elapsed_seconds = execution.timing.elapsed_seconds;
+  evidence.cpu_raw = execution.timing.cpu_raw;
   evidence.timing_evaluated = execution.timing.evaluated;
   evidence.timing_valid = execution.timing.valid;
   evidence.completion = execution.completion;
@@ -414,6 +539,7 @@ LlmTaskExecutionEvidence compact_execution(
         cpu->expected_checksums.size() == cpu->requested_workers &&
         cpu->actual_checksums.size() == cpu->requested_workers;
     evidence.cpu_evidence_available = true;
+    evidence.cpu_cold_checks = cpu->cold_checks;
     evidence.requested_workers = cpu->requested_workers;
     evidence.created_workers = cpu->created_workers;
     evidence.completed_workers = cpu->completed_workers;
@@ -426,7 +552,6 @@ LlmTaskExecutionEvidence compact_execution(
     evidence.checksum_evaluated = checksum_evidence_complete;
     evidence.checksum_valid = checksum_evidence_complete && cpu->checksum_valid;
     if (checksum_evidence_complete) {
-      evidence.expected_run_checksum = cpu->expected_run_checksum;
       evidence.actual_run_checksum = cpu->actual_run_checksum;
     }
   }
@@ -460,10 +585,9 @@ bool task_identity_matches(const LlmTaskIdentity& identity,
          identity.scenario_plan_identity == task_plan.plan_identity;
 }
 
-bool task_completion_matches(const LlmTaskCompletion& completion,
+bool task_completion_matches(const LlmCompletedWork& completion,
                              const LlmScenarioWorkPlan& task_plan) noexcept {
-  return completion.planned_work_units == task_plan.work_units &&
-         completion.completed_work_units == task_plan.work_units &&
+  return completion.completed_work_units == task_plan.work_units &&
          completion.completed_effective_model_payload_bytes ==
              task_plan.effective_model_payload_bytes &&
          completion.completed_layout_metadata_lookup_count ==
@@ -472,6 +596,34 @@ bool task_completion_matches(const LlmTaskCompletion& completion,
              task_plan.layout_metadata_read_bytes &&
          completion.completed_task_accounted_bytes ==
              task_plan.task_accounted_bytes;
+}
+
+/** Validate observed slot applicability against the admitted profile, not the
+ * producer's booleans alone. Missing whole backend evidence cannot certify a task. */
+bool required_checks_valid(const LlmTaskExecutionResult& execution,
+                           const LlmMemoryWorkPlan& model, const LlmScenarioWorkPlan& plan) noexcept {
+  const LlmColdChecks expected = required_llm_cold_checks(model, plan.scenario);
+  const LlmColdChecks* actual = nullptr;
+  if (model.backend == LlmMemoryBackend::Cpu) {
+    const auto* evidence = get_llm_cpu_task_evidence(execution);
+    const auto* cpu = get_llm_cpu_execution_plan(model);
+    if (!evidence || !cpu || !evidence->checksum_evaluated || !evidence->checksum_valid ||
+        evidence->actual_checksums.size() != cpu->effective_workers ||
+        evidence->requested_workers != cpu->effective_workers ||
+        evidence->created_workers != cpu->effective_workers ||
+        evidence->completed_workers != cpu->effective_workers) return false;
+    actual = &evidence->cold_checks;
+  } else {
+    const auto* evidence = get_llm_metal_task_evidence(execution);
+    const auto* metal = get_llm_metal_execution_plan(model);
+    if (!evidence || !metal || !evidence->checksum_evaluated || !evidence->checksum_valid) return false;
+    actual = &evidence->cold_checks;
+  }
+  for (size_t i = 0; i < expected.size(); ++i) {
+    if ((*actual)[i].kind != expected[i].kind || (*actual)[i].applicable != expected[i].applicable ||
+        (expected[i].applicable && (!(*actual)[i].evaluated || !(*actual)[i].valid))) return false;
+  }
+  return true;
 }
 
 bool execution_is_accepted(const LlmTaskExecutionResult& execution,
@@ -485,8 +637,10 @@ bool execution_is_accepted(const LlmTaskExecutionResult& execution,
          execution.timing.evaluated && execution.timing.valid &&
          std::isfinite(execution.timing.elapsed_seconds) &&
          execution.timing.elapsed_seconds > 0.0 &&
+         execution.completion.planned_work_units == task_plan.work_units &&
          task_completion_matches(execution.completion, task_plan) &&
-         execution.validation.evaluated && execution.validation.valid;
+         execution.validation.evaluated && execution.validation.valid &&
+         required_checks_valid(execution, model_plan, task_plan);
 }
 
 std::string_view execution_failure_reason(
@@ -511,7 +665,8 @@ std::string_view execution_failure_reason(
                              context)) {
     return LlmBackendReason::TASK_IDENTITY_MISMATCH;
   }
-  if (!task_completion_matches(execution.completion, task_plan)) {
+  if (execution.completion.planned_work_units != task_plan.work_units ||
+      !task_completion_matches(execution.completion, task_plan)) {
     return LlmBackendReason::TASK_COMPLETION_MISMATCH;
   }
   if (!execution.timing.evaluated || !execution.timing.valid ||
@@ -522,7 +677,7 @@ std::string_view execution_failure_reason(
   if (!execution.validation.evaluated) {
     return LlmBackendReason::VALIDATION_NOT_EVALUATED;
   }
-  if (!execution.validation.valid) {
+  if (!execution.validation.valid || !required_checks_valid(execution, model_plan, task_plan)) {
     return LlmBackendReason::VALIDATION_FAILED;
   }
   return reason_code == LlmBackendReason::VALID
@@ -542,65 +697,10 @@ LlmMeasurementStatus execution_failure_status(
              : LlmMeasurementStatus::Failed;
 }
 
-void clear_measurement_values(LlmMeasurementState& measurement) {
-  measurement.completed_work_units = 0;
-  measurement.completed_effective_model_payload_bytes = 0;
-  measurement.completed_layout_metadata_lookup_count = 0;
-  measurement.completed_layout_metadata_read_bytes = 0;
-  measurement.completed_task_accounted_bytes = 0;
-  measurement.elapsed_seconds.reset();
-  measurement.synthetic_work_unit_latency_seconds.reset();
-  measurement.synthetic_memory_work_units_per_second.reset();
-  measurement.effective_model_payload_gb_s.reset();
-  measurement.checksum_valid = false;
-}
-
-void update_metric_aggregate(LlmMetricAggregate& aggregate, LlmStatisticsWorkspace& workspace) {
-  aggregate.statistics = DescriptiveStatistics{};
-  aggregate.headline.reset();
-  if (aggregate.values.empty()) {
-    return;
-  }
-  aggregate.statistics =
-      calculate_descriptive_statistics(aggregate.values, workspace.sorted_values, workspace.absolute_deviations);
-  aggregate.headline = aggregate.values.size() == 1 ? aggregate.values.front() : aggregate.statistics.median;
-}
-
-void update_scenario_aggregate(LlmMemoryResult& result, const LlmMeasurementState& measurement) {
-  const size_t index = scenario_index(measurement.scenario);
-  if (index >= result.aggregates.size() || measurement.status != LlmMeasurementStatus::Measured ||
-      !measurement.checksum_valid || !measurement.synthetic_work_unit_latency_seconds.has_value() ||
-      !measurement.synthetic_memory_work_units_per_second.has_value() ||
-      !measurement.effective_model_payload_gb_s.has_value()) {
-    return;
-  }
-
-  LlmScenarioAggregate& aggregate = result.aggregates[index];
-  aggregate.work_unit_latency_seconds.values.push_back(*measurement.synthetic_work_unit_latency_seconds);
-  aggregate.synthetic_memory_work_units_per_second.values.push_back(
-      *measurement.synthetic_memory_work_units_per_second);
-  aggregate.effective_model_payload_gb_s.values.push_back(*measurement.effective_model_payload_gb_s);
-  update_metric_aggregate(aggregate.work_unit_latency_seconds, result.statistics_workspace);
-  update_metric_aggregate(aggregate.synthetic_memory_work_units_per_second, result.statistics_workspace);
-  update_metric_aggregate(aggregate.effective_model_payload_gb_s, result.statistics_workspace);
-
-  const size_t sample_count = aggregate.effective_model_payload_gb_s.values.size();
-  aggregate.status = sample_count == result.counters.planned_loops ? "complete" : "partial";
-  if (sample_count < 3) {
-    aggregate.stability_quality = "insufficient-samples";
-  } else if (aggregate.effective_model_payload_gb_s.statistics.coefficient_of_variation_defined &&
-             aggregate.effective_model_payload_gb_s.statistics.coefficient_of_variation_pct >
-                 Constants::LLM_STREAMING_CV_WARNING_PCT) {
-    aggregate.stability_quality = "noisy";
-  } else {
-    aggregate.stability_quality = "stable";
-  }
-}
-
 void rebuild_quality_warnings(LlmMemoryResult& result) {
   result.quality_warnings.clear();
   for (const LlmScenarioAggregate& aggregate : result.aggregates) {
-    if (aggregate.stability_quality != "noisy") {
+    if (aggregate.observed_cv_classification != "above-threshold") {
       continue;
     }
     switch (aggregate.scenario) {
@@ -668,8 +768,8 @@ void update_completion_state(LlmMemoryResult& result) {
     }
   }
 
-  result.conclusions_valid = result.status == LlmRunStatus::Complete && result.results_complete &&
-                             result.scenario_order_balance_complete && !result.checkpoint_failed;
+  result.run_accepted = result.status == LlmRunStatus::Complete && result.results_complete &&
+                             !result.checkpoint_failed;
   rebuild_quality_warnings(result);
 }
 
@@ -683,7 +783,6 @@ void finalize_remaining_interrupted(LlmMemoryResult& result) {
       }
       measurement.status = LlmMeasurementStatus::Interrupted;
       measurement.reason_code = LlmRunnerReason::INTERRUPTION_BEFORE_TASK;
-      clear_measurement_values(measurement);
     }
   }
 }
@@ -694,7 +793,6 @@ void finalize_remaining_failed(LlmMemoryResult& result) {
       ++result.counters.terminal_measurements;
       measurement.status = LlmMeasurementStatus::Failed;
       measurement.reason_code = LlmRunnerReason::NOT_RUN_AFTER_RUNTIME_FAILURE;
-      clear_measurement_values(measurement);
     }
   }
 }
@@ -706,7 +804,6 @@ void finalize_failure(LlmMemoryResult& result, std::string_view reason_code, boo
       ++result.counters.terminal_measurements;
       measurement.status = LlmMeasurementStatus::Failed;
       measurement.reason_code = stable_reason_code;
-      clear_measurement_values(measurement);
     }
   }
   if (interruption_pending) {
@@ -721,21 +818,27 @@ void finalize_failure(LlmMemoryResult& result, std::string_view reason_code, boo
 }
 
 bool invoke_checkpoint(LlmMemoryResult& result, LlmCheckpointKind kind, const LlmRunnerHooks& hooks) {
+  if (kind == LlmCheckpointKind::MeasurementTerminal &&
+      (!hooks.progress_snapshots || result.counters.terminal_measurements == 0 || result.counters.terminal_measurements % kLlmScenarioCount != 0 ||
+       result.counters.completed_loops % result.snapshot_interval_loops != 0 ||
+       result.status == LlmRunStatus::Failed || result.status == LlmRunStatus::Interrupted)) return true;
+  result.snapshot_request = kind == LlmCheckpointKind::CommandTerminal ? "terminal" : "progress";
   ++result.logical_checkpoint_attempts;
-  ++result.successful_logical_checkpoints;
   if (kind == LlmCheckpointKind::CommandTerminal) {
     result.terminal_checkpoint_attempted = true;
-    result.terminal_checkpoint_completed = true;
+    result.terminal_checkpoint_completed = false;
   }
-  if (!hooks.checkpoint) {
-    return true;
-  }
-
   int status = EXIT_FAILURE;
   bool checkpoint_threw = false;
   std::string_view checkpoint_failure_reason = LlmRunnerReason::CHECKPOINT_WRITE_FAILED;
   try {
-    status = hooks.checkpoint(result, kind);
+    if (hooks.observe_file_writes) {
+      const auto observed = hooks.observe_file_writes();
+      result.prior_file_writer_attempts = observed.first;
+      result.prior_successful_file_writes = observed.second;
+    }
+    prepare_llm_result_snapshot(result);
+    status = hooks.checkpoint ? hooks.checkpoint(result, kind) : EXIT_SUCCESS;
   } catch (const std::exception& error) {
     checkpoint_threw = true;
     checkpoint_failure_reason = LlmRunnerReason::RUNNER_EXCEPTION;
@@ -746,7 +849,6 @@ bool invoke_checkpoint(LlmMemoryResult& result, LlmCheckpointKind kind, const Ll
     result.diagnostic.clear();
   }
   if (status != EXIT_SUCCESS) {
-    --result.successful_logical_checkpoints;
     if (kind == LlmCheckpointKind::CommandTerminal) {
       result.terminal_checkpoint_completed = false;
     }
@@ -756,19 +858,12 @@ bool invoke_checkpoint(LlmMemoryResult& result, LlmCheckpointKind kind, const Ll
     if (!checkpoint_threw) {
       result.diagnostic.clear();
     }
-    result.conclusions_valid = false;
+    result.run_accepted = false;
     return false;
   }
+  ++result.successful_logical_checkpoints;
+  if (kind == LlmCheckpointKind::CommandTerminal) result.terminal_checkpoint_completed = true;
   return true;
-}
-
-void refresh_calibration_references(LlmMemoryResult& result) noexcept {
-  for (LlmMeasurementState& measurement : result.measurements) {
-    const size_t index = scenario_index(measurement.scenario);
-    if (index < kLlmScenarioCount) {
-      measurement.calibration_attempt_count = result.calibration_attempt_counts[index];
-    }
-  }
 }
 
 bool release_backend_once(LlmBackend& backend, bool& release_attempted,
@@ -798,7 +893,6 @@ int fail_uninitialized_backend_transition(
 
 int finish_terminal(LlmMemoryResult& result, const LlmRunnerHooks& hooks,
                     LlmBackend& backend, bool& release_attempted) {
-  refresh_calibration_references(result);
   update_completion_state(result);
   const bool release_succeeded =
       release_backend_once(backend, release_attempted, result);
@@ -851,7 +945,7 @@ bool add_string_backing(const std::string& value, size_t& total) noexcept {
   return NumericUtils::checked_add(value.capacity(), static_cast<size_t>(1), bytes) && checked_add_to(bytes, total);
 }
 
-bool add_metal_task_string_backing(const LlmMetalTaskEvidence& metal,
+bool add_metal_task_string_backing(const LlmMetalRuntimeEvidence& metal,
                                    size_t& total) noexcept {
   return add_string_backing(metal.pipeline_label, total) &&
          add_string_backing(metal.grid_plan.reason_code, total) &&
@@ -862,7 +956,6 @@ bool add_metal_task_string_backing(const LlmMetalTaskEvidence& metal,
          add_string_backing(metal.reset_command_status, total) &&
          add_string_backing(metal.timed_command_status, total) &&
          add_string_backing(metal.post_validation_command_status, total) &&
-         add_string_backing(metal.checksum_algorithm_version, total) &&
          add_string_backing(metal.error.domain, total) &&
          add_string_backing(metal.error.description, total);
 }
@@ -875,79 +968,46 @@ LlmRunnerAuxiliaryEstimate calculate_actual_runner_backing(const LlmMemoryResult
     return actual;
   }
 
-  for (const std::vector<LlmCalibrationAttempt>& attempts : result.calibration_attempts) {
+  for (const auto& attempts : result.calibration_attempts) {
     if (!add_capacity_bytes(attempts.capacity(), sizeof(LlmCalibrationAttempt), actual.calibration_record_bytes)) {
       return actual;
     }
-    for (const LlmCalibrationAttempt& attempt : attempts) {
-      if (!add_string_backing(attempt.work_plan_identity, actual.calibration_identity_bytes)) {
-        return actual;
-      }
-      if (attempt.execution.metal_evidence_available &&
-          attempt.execution.metal.has_value() &&
-          !add_metal_task_string_backing(*attempt.execution.metal,
-                                         actual.fixed_metadata_bytes)) {
-        return actual;
-      }
+    for (const auto& attempt : attempts) {
+      if (attempt.execution.metal &&
+          !add_metal_task_string_backing(*attempt.execution.metal, actual.fixed_metadata_bytes)) return actual;
     }
   }
-
-  for (const LlmScenarioAggregate& aggregate : result.aggregates) {
-    if (!add_capacity_bytes(aggregate.work_unit_latency_seconds.values.capacity(), sizeof(double),
-                            actual.aggregate_value_bytes) ||
-        !add_capacity_bytes(aggregate.synthetic_memory_work_units_per_second.values.capacity(), sizeof(double),
-                            actual.aggregate_value_bytes) ||
-        !add_capacity_bytes(aggregate.effective_model_payload_gb_s.values.capacity(), sizeof(double),
-                            actual.aggregate_value_bytes)) {
-      return actual;
-    }
+  for (const auto& aggregate : result.aggregates) {
+    if (!add_capacity_bytes(aggregate.accepted_measurement_ids.capacity(), sizeof(size_t),
+                            actual.aggregate_value_bytes)) return actual;
   }
-  if (!add_capacity_bytes(result.statistics_workspace.sorted_values.capacity(), sizeof(double),
-                          actual.statistics_workspace_bytes) ||
-      !add_capacity_bytes(result.statistics_workspace.absolute_deviations.capacity(), sizeof(double),
-                          actual.statistics_workspace_bytes) ||
-      !add_capacity_bytes(result.quality_warnings.capacity(), sizeof(std::string_view), actual.warning_record_bytes)) {
-    return actual;
+  for (const auto* values : {&result.statistics_workspace.extracted_values,
+                             &result.statistics_workspace.sorted_values,
+                             &result.statistics_workspace.absolute_deviations}) {
+    if (!add_capacity_bytes(values->capacity(), sizeof(double), actual.statistics_workspace_bytes)) return actual;
   }
-
-  if (!add_string_backing(result.reason_code, actual.fixed_metadata_bytes) ||
-      !add_string_backing(result.diagnostic, actual.fixed_metadata_bytes) ||
-      !add_string_backing(result.frozen_scenario_plans.reason_code, actual.fixed_metadata_bytes) ||
-      !add_string_backing(result.frozen_scenario_plans.model_plan_identity, actual.fixed_metadata_bytes) ||
-      !add_string_backing(result.frozen_scenario_plans.plan_identity, actual.fixed_metadata_bytes)) {
-    return actual;
+  if (!add_capacity_bytes(result.quality_warnings.capacity(), sizeof(std::string_view), actual.warning_record_bytes) ||
+      !add_capacity_bytes(result.scenario_plans.capacity(), sizeof(LlmCanonicalScenarioPlan), actual.fixed_metadata_bytes) ||
+      !add_capacity_bytes(result.snapshot_plan_order.capacity(), sizeof(size_t), actual.fixed_metadata_bytes) ||
+      !add_capacity_bytes(result.snapshot_plan_refs.capacity(), sizeof(size_t), actual.fixed_metadata_bytes) ||
+      !add_string_backing(result.reason_code, actual.fixed_metadata_bytes) ||
+      !add_string_backing(result.diagnostic, actual.fixed_metadata_bytes)) return actual;
+  for (const auto& entry : result.scenario_plans) {
+    if (!add_string_backing(entry.plan.reason_code, actual.fixed_metadata_bytes) ||
+        !add_string_backing(entry.plan.model_plan_identity, actual.calibration_identity_bytes) ||
+        !add_string_backing(entry.plan.plan_identity, actual.calibration_identity_bytes) ||
+        !add_string_backing(entry.expected.reason_code, actual.fixed_metadata_bytes) ||
+        !add_capacity_bytes(entry.expected.cpu_workers.capacity(), sizeof(LlmWorkerChecksum),
+                            actual.retained_checksum_bytes)) return actual;
   }
-  for (const LlmScenarioWorkPlan& scenario : result.frozen_scenario_plans.scenarios) {
-    if (!add_string_backing(scenario.reason_code, actual.fixed_metadata_bytes) ||
-        !add_string_backing(scenario.model_plan_identity, actual.fixed_metadata_bytes) ||
-        !add_string_backing(scenario.plan_identity, actual.fixed_metadata_bytes)) {
-      return actual;
-    }
-  }
-  for (const LlmMeasurementState& measurement : result.measurements) {
-    if (!add_string_backing(measurement.execution.reason_code,
-                            actual.fixed_metadata_bytes)) {
-      return actual;
-    }
-    const LlmExecutorResult* cpu =
-        cpu_executor_evidence(measurement.execution);
-    if (cpu != nullptr &&
-        (!add_string_backing(cpu->reason_code, actual.fixed_metadata_bytes) ||
-         !add_capacity_bytes(cpu->expected_checksums.capacity(),
-                             sizeof(LlmWorkerChecksum),
-                             actual.retained_checksum_bytes) ||
-         !add_capacity_bytes(cpu->actual_checksums.capacity(),
-                             sizeof(LlmWorkerChecksum),
-                             actual.retained_checksum_bytes))) {
-      return actual;
-    }
-    const LlmMetalTaskEvidence* const metal =
-        get_llm_metal_task_evidence(measurement.execution);
-    if (metal != nullptr &&
-        !add_metal_task_string_backing(*metal,
-                                       actual.fixed_metadata_bytes)) {
-      return actual;
-    }
+  for (const auto& measurement : result.measurements) {
+    if (!add_string_backing(measurement.execution.reason_code, actual.fixed_metadata_bytes)) return actual;
+    const auto* cpu = cpu_executor_evidence(measurement.execution);
+    if (cpu && (!add_string_backing(cpu->reason_code, actual.fixed_metadata_bytes) ||
+                !add_capacity_bytes(cpu->actual_checksums.capacity(), sizeof(LlmWorkerChecksum),
+                                     actual.retained_checksum_bytes))) return actual;
+    const auto* metal = std::get_if<LlmMetalRuntimeEvidence>(&measurement.execution.backend_evidence);
+    if (metal && !add_metal_task_string_backing(*metal, actual.fixed_metadata_bytes)) return actual;
   }
 
   actual.checksum_auxiliary_bytes = actual.retained_checksum_bytes;
@@ -999,18 +1059,15 @@ bool initialize_result(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& m
   const size_t attempts_per_scenario = calibration_capacity(config);
   for (size_t index = 0; index < kLlmScenarioCount; ++index) {
     result.aggregates[index].scenario = kLlmScenarios[index];
-    result.aggregates[index].work_unit_latency_seconds.values.reserve(config.loop_count);
-    result.aggregates[index].synthetic_memory_work_units_per_second.values.reserve(config.loop_count);
-    result.aggregates[index].effective_model_payload_gb_s.values.reserve(config.loop_count);
+    result.aggregates[index].accepted_measurement_ids.reserve(config.loop_count);
     result.calibration_attempts[index].resize(attempts_per_scenario);
-    for (LlmCalibrationAttempt& attempt : result.calibration_attempts[index]) {
-      attempt.scenario = kLlmScenarios[index];
-      attempt.work_unit_kind = model_plan.work_unit_kind;
-      attempt.kv_write_kind =
-          llm_kv_write_kind_for(model_plan.phase, attempt.scenario);
-      attempt.work_plan_identity.reserve(identity_capacities[index]);
-    }
+    for (auto& attempt : result.calibration_attempts[index]) attempt.scenario = kLlmScenarios[index];
   }
+  result.scenario_plans.reserve(kLlmScenarioCount * (attempts_per_scenario + 1));
+  result.snapshot_plan_order.reserve(result.scenario_plans.capacity());
+  result.snapshot_plan_refs.reserve(result.scenario_plans.capacity());
+  result.statistics_workspace.extracted_values.reserve(config.loop_count);
+  result.snapshot_interval_loops = std::max<size_t>(1, config.loop_count / 8 + (config.loop_count % 8 != 0));
   result.loops.reserve(config.loop_count);
   result.measurements.reserve(result.counters.planned_measurements);
   const LlmCpuExecutionPlan* cpu_plan =
@@ -1022,23 +1079,14 @@ bool initialize_result(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& m
     for (size_t position = 0; position < kLlmScenarioCount; ++position) {
       LlmMeasurementState measurement;
       measurement.scenario = loop.planned_order[position];
-      measurement.work_unit_kind = model_plan.work_unit_kind;
-      measurement.kv_write_kind =
-          llm_kv_write_kind_for(model_plan.phase, measurement.scenario);
       measurement.loop_index = loop_index;
       measurement.order_position = position;
-      measurement.requested_workers =
-          cpu_plan == nullptr ? 0 : cpu_plan->requested_workers;
-      measurement.effective_workers =
-          cpu_plan == nullptr ? 0 : cpu_plan->effective_workers;
-      measurement.working_set_bytes = model_plan.geometry.total_data_mapping_bytes;
       measurement.execution.reason_code.reserve(kLlmRunnerReasonCapacity);
       if (cpu_plan != nullptr) {
-        measurement.execution.backend_evidence = LlmCpuTaskEvidence{};
-        auto& cpu = std::get<LlmCpuTaskEvidence>(
+        measurement.execution.backend_evidence = LlmCpuRetainedEvidence{};
+        auto& cpu = std::get<LlmCpuRetainedEvidence>(
             measurement.execution.backend_evidence).executor;
         cpu.reason_code.reserve(kLlmRunnerReasonCapacity);
-        cpu.expected_checksums.reserve(cpu_plan->effective_workers);
         cpu.actual_checksums.reserve(cpu_plan->effective_workers);
       }
       loop.measurement_indexes[position] = result.measurements.size();
@@ -1128,20 +1176,8 @@ ExcludedTaskOutcome execute_excluded_task(const LlmMemoryWorkPlan& model_plan, c
   LlmCalibrationAttempt& attempt = result.calibration_attempts[index][attempt_index];
   ++result.calibration_attempt_counts[index];
   attempt.scenario = task_plan.scenario;
-  attempt.work_unit_kind = task_plan.work_unit_kind;
-  attempt.kv_write_kind = task_plan.kv_write_kind;
   attempt.purpose = canonical_calibration_purpose(purpose);
-  attempt.explicit_iterations = task_plan.explicit_iterations;
-  attempt.work_units = task_plan.work_units;
-  attempt.weight_read_bytes = task_plan.weight_read_bytes;
-  attempt.kv_read_bytes = task_plan.kv_read_bytes;
-  attempt.kv_write_bytes = task_plan.kv_write_bytes;
-  attempt.effective_model_payload_bytes = task_plan.effective_model_payload_bytes;
-  attempt.layout_metadata_lookup_count =
-      task_plan.layout_metadata_lookup_count;
-  attempt.layout_metadata_read_bytes = task_plan.layout_metadata_read_bytes;
-  attempt.task_accounted_bytes = task_plan.task_accounted_bytes;
-  attempt.work_plan_identity.assign(task_plan.plan_identity);
+  attempt.plan_handle = register_llm_scenario_plan(result, model_plan, task_plan, backend);
   try {
     LlmTaskExecutionResult execution =
         backend.execute_task(model_plan, task_plan, context);
@@ -1153,13 +1189,14 @@ ExcludedTaskOutcome execute_excluded_task(const LlmMemoryWorkPlan& model_plan, c
                 model_plan.geometry, task_plan.scenario,
                 model_plan.backend));
     attempt.terminal = true;
-    attempt.valid = execution_is_accepted(execution, model_plan, task_plan,
-                                          context);
+    const auto& expected = result.scenario_plans.at(attempt.plan_handle).expected;
+    const bool runtime_accepted = execution_is_accepted(execution, model_plan, task_plan, context);
+    attempt.valid = runtime_accepted && expected.available;
     attempt.reason_code =
         attempt.valid
             ? std::string_view(LlmBackendReason::VALID)
-            : execution_failure_reason(execution, model_plan, task_plan,
-                                       context);
+            : runtime_accepted ? canonicalize_llm_result_reason_code(expected.reason_code)
+            : execution_failure_reason(execution, model_plan, task_plan, context);
     attempt.execution.valid = attempt.valid;
     attempt.execution.reason_code = attempt.reason_code;
 
@@ -1310,14 +1347,15 @@ CalibrationOutcome calibrate_scenario(const LlmMemoryWorkPlan& model_plan,
 CalibrationOutcome warm_frozen_scenarios(
     const LlmMemoryWorkPlan& model_plan, LlmBackend& backend,
     LlmMemoryResult& result, const LlmRunnerHooks& hooks) {
-  if (!result.frozen_scenario_plans.valid) {
+  if (std::any_of(result.frozen_plan_handles.begin(), result.frozen_plan_handles.end(),
+                  [&](size_t h) { return h >= result.scenario_plans.size(); })) {
     result.status = LlmRunStatus::Failed;
     result.reason_code = LlmRunnerReason::FROZEN_PLAN_MISMATCH;
     return CalibrationOutcome::Failed;
   }
   for (size_t index = 0; index < kLlmScenarioCount; ++index) {
     const LlmScenarioWorkPlan& frozen =
-        result.frozen_scenario_plans.scenarios[index];
+        result.scenario_plans.at(result.frozen_plan_handles[index]).plan;
     if (!frozen.valid || frozen.scenario != kLlmScenarios[index]) {
       result.status = LlmRunStatus::Failed;
       result.reason_code = LlmRunnerReason::FROZEN_PLAN_MISMATCH;
@@ -1344,42 +1382,8 @@ bool assign_frozen_plans(LlmMemoryResult& result, const LlmMemoryWorkPlan& model
     if (index >= kLlmScenarioCount) {
       return false;
     }
-    const LlmScenarioWorkPlan& plan = result.frozen_scenario_plans.scenarios[index];
-    measurement.frozen_plan_index = index;
-    measurement.work_unit_kind = plan.work_unit_kind;
-    measurement.kv_write_kind = plan.kv_write_kind;
-    measurement.explicit_iterations = plan.explicit_iterations;
-    measurement.planned_work_units = plan.work_units;
-    measurement.weight_read_bytes_per_work_unit = plan.weight_read_bytes_per_work_unit;
-    measurement.kv_read_bytes_per_work_unit = plan.kv_read_bytes_per_work_unit;
-    measurement.kv_write_bytes_per_work_unit = plan.kv_write_bytes_per_work_unit;
-    measurement.effective_model_payload_bytes_per_work_unit = plan.effective_model_payload_bytes_per_work_unit;
-    measurement.layout_metadata_lookup_count_per_work_unit =
-        plan.layout_metadata_lookup_count_per_work_unit;
-    measurement.layout_metadata_read_bytes_per_work_unit =
-        plan.layout_metadata_read_bytes_per_work_unit;
-    measurement.accounted_bytes_per_work_unit =
-        plan.accounted_bytes_per_work_unit;
-    measurement.planned_weight_read_bytes = plan.weight_read_bytes;
-    measurement.planned_kv_read_bytes = plan.kv_read_bytes;
-    measurement.planned_kv_write_bytes = plan.kv_write_bytes;
-    measurement.planned_effective_model_payload_bytes = plan.effective_model_payload_bytes;
-    measurement.planned_layout_metadata_lookup_count =
-        plan.layout_metadata_lookup_count;
-    measurement.planned_layout_metadata_read_bytes =
-        plan.layout_metadata_read_bytes;
-    measurement.planned_task_accounted_bytes = plan.task_accounted_bytes;
-    measurement.calibration_attempt_count = result.calibration_attempt_counts[index];
-
-    if (measurement.scenario == LlmScenario::Mixed && plan.effective_model_payload_bytes_per_work_unit != 0) {
-      const long double total = static_cast<long double>(plan.effective_model_payload_bytes_per_work_unit);
-      measurement.weight_payload_fraction =
-          static_cast<double>(static_cast<long double>(plan.weight_read_bytes_per_work_unit) / total);
-      measurement.kv_read_payload_fraction =
-          static_cast<double>(static_cast<long double>(plan.kv_read_bytes_per_work_unit) / total);
-      measurement.kv_write_payload_fraction =
-          static_cast<double>(static_cast<long double>(plan.kv_write_bytes_per_work_unit) / total);
-    }
+    const LlmScenarioWorkPlan& plan = result.scenario_plans.at(result.frozen_plan_handles[index]).plan;
+    measurement.plan_handle = result.frozen_plan_handles[index];
 
     if (!checked_add_to(plan.work_units, total_work_units) ||
         !checked_add_to(plan.effective_model_payload_bytes,
@@ -1403,59 +1407,16 @@ bool assign_frozen_plans(LlmMemoryResult& result, const LlmMemoryWorkPlan& model
   return model_plan.valid;
 }
 
-void retain_task_evidence(LlmTaskExecutionResult& retained,
-                          LlmTaskExecutionResult& execution,
-                          const LlmMemoryWorkPlan& model_plan) {
-  if (auto* metal =
-          std::get_if<LlmMetalTaskEvidence>(&execution.backend_evidence)) {
-    retained.backend_evidence = std::move(*metal);
-    return;
-  }
-  auto* source = std::get_if<LlmCpuTaskEvidence>(&execution.backend_evidence);
-  if (source == nullptr) {
-    retained.backend_evidence = std::monostate{};
-    return;
-  }
-  auto* target = std::get_if<LlmCpuTaskEvidence>(&retained.backend_evidence);
-  if (target == nullptr) {
-    retained.backend_evidence = LlmCpuTaskEvidence{};
-    target = std::get_if<LlmCpuTaskEvidence>(&retained.backend_evidence);
-  }
-  LlmExecutorResult& destination = target->executor;
-  LlmExecutorResult& input = source->executor;
-  destination.valid = input.valid;
-  destination.reason_code.assign(
-      canonicalize_llm_result_reason_code(input.reason_code));
-  destination.elapsed_seconds = input.elapsed_seconds;
-  destination.requested_workers = input.requested_workers;
-  destination.created_workers = input.created_workers;
-  destination.completed_workers = input.completed_workers;
-  destination.qos_successful_workers = input.qos_successful_workers;
-  destination.qos_failed_workers = input.qos_failed_workers;
-  destination.worker_startup_failed = input.worker_startup_failed;
-  destination.kernel_succeeded = input.kernel_succeeded;
-  destination.timer_started = input.timer_started;
-  destination.timer_stopped = input.timer_stopped;
-  destination.checksum_evaluated = input.checksum_evaluated;
-  destination.checksum_valid = input.checksum_valid;
-  destination.post_validation_evaluated =
-      input.post_validation_evaluated;
-  destination.post_validation_valid = input.post_validation_valid;
-  destination.expected_run_checksum = input.expected_run_checksum;
-  destination.actual_run_checksum = input.actual_run_checksum;
-  const LlmCpuExecutionPlan* cpu_plan =
-      get_llm_cpu_execution_plan(model_plan);
-  const size_t effective_workers =
-      cpu_plan == nullptr ? 0 : cpu_plan->effective_workers;
-  if (input.expected_checksums.size() == effective_workers &&
-      input.actual_checksums.size() == effective_workers) {
-    destination.expected_checksums.assign(input.expected_checksums.begin(),
-                                          input.expected_checksums.end());
-    destination.actual_checksums.assign(input.actual_checksums.begin(),
-                                        input.actual_checksums.end());
+void retain_task_evidence(LlmRetainedExecution& retained, LlmTaskExecutionResult& execution,
+                          const LlmMemoryWorkPlan&) {
+  if (auto* cpu = std::get_if<LlmCpuTaskEvidence>(&execution.backend_evidence)) {
+    LlmCpuRetainedEvidence runtime;
+    runtime.executor = std::move(static_cast<LlmCpuRuntimeEvidence&>(cpu->executor));
+    retained.backend_evidence = std::move(runtime);
+  } else if (auto* metal = std::get_if<LlmMetalTaskEvidence>(&execution.backend_evidence)) {
+    retained.backend_evidence = std::move(static_cast<LlmMetalRuntimeEvidence&>(*metal));
   } else {
-    destination.expected_checksums.clear();
-    destination.actual_checksums.clear();
+    retained.backend_evidence = std::monostate{};
   }
 }
 
@@ -1471,21 +1432,15 @@ void populate_measurement(LlmMeasurementState& measurement,
           ? std::string_view(LlmBackendReason::VALID)
           : execution_failure_reason(execution, model_plan, task_plan,
                                      context);
-  LlmTaskExecutionResult& retained = measurement.execution;
+  LlmRetainedExecution& retained = measurement.execution;
   retained.status = execution.status;
   retained.reason_code.assign(accepted ? LlmBackendReason::VALID
                                        : failure_reason);
-  retained.identity = {};
   retained.timing = execution.timing;
   retained.completion = execution.completion;
   retained.validation = execution.validation;
   retain_task_evidence(retained, execution, model_plan);
 
-  const LlmExecutorResult* cpu = cpu_executor_evidence(retained);
-  if (cpu != nullptr) {
-    measurement.qos_successful_workers = cpu->qos_successful_workers;
-    measurement.qos_failed_workers = cpu->qos_failed_workers;
-  }
   measurement.duration_quality =
       classify_llm_duration_quality(
           measurement.execution.timing.elapsed_seconds,
@@ -1498,7 +1453,6 @@ void populate_measurement(LlmMeasurementState& measurement,
     measurement.execution.status = execution.status;
     measurement.status =
         execution_failure_status(execution, measurement.reason_code);
-    clear_measurement_values(measurement);
     measurement.execution_evidence_available = true;
     return;
   }
@@ -1516,25 +1470,12 @@ void populate_measurement(LlmMeasurementState& measurement,
       work_units_per_second_value <= 0.0 || !std::isfinite(bandwidth_value) || bandwidth_value <= 0.0) {
     measurement.status = LlmMeasurementStatus::Invalid;
     measurement.reason_code = LlmRunnerReason::INVALID_DERIVED_METRIC;
-    clear_measurement_values(measurement);
     measurement.execution_evidence_available = true;
     return;
   }
 
   measurement.status = LlmMeasurementStatus::Measured;
   measurement.reason_code = "measured";
-  measurement.completed_work_units = task_plan.work_units;
-  measurement.completed_effective_model_payload_bytes = task_plan.effective_model_payload_bytes;
-  measurement.completed_layout_metadata_lookup_count =
-      task_plan.layout_metadata_lookup_count;
-  measurement.completed_layout_metadata_read_bytes =
-      task_plan.layout_metadata_read_bytes;
-  measurement.completed_task_accounted_bytes = task_plan.task_accounted_bytes;
-  measurement.elapsed_seconds = measurement.execution.timing.elapsed_seconds;
-  measurement.synthetic_work_unit_latency_seconds = latency_value;
-  measurement.synthetic_memory_work_units_per_second = work_units_per_second_value;
-  measurement.effective_model_payload_gb_s = bandwidth_value;
-  measurement.checksum_valid = true;
   measurement.execution_evidence_available = true;
 }
 
@@ -1545,18 +1486,17 @@ void record_terminal_measurement(LlmMemoryResult& result, const LlmLoopRecord& l
     return;
   }
   ++result.counters.measured_measurements;
-  result.counters.completed_work_units += measurement.completed_work_units;
-  result.counters.completed_effective_model_payload_bytes += measurement.completed_effective_model_payload_bytes;
+  result.counters.completed_work_units += measurement.execution.completion.completed_work_units;
+  result.counters.completed_effective_model_payload_bytes += measurement.execution.completion.completed_effective_model_payload_bytes;
   result.counters.completed_layout_metadata_lookup_count +=
-      measurement.completed_layout_metadata_lookup_count;
+      measurement.execution.completion.completed_layout_metadata_lookup_count;
   result.counters.completed_layout_metadata_read_bytes +=
-      measurement.completed_layout_metadata_read_bytes;
+      measurement.execution.completion.completed_layout_metadata_read_bytes;
   result.counters.completed_task_accounted_bytes +=
-      measurement.completed_task_accounted_bytes;
+      measurement.execution.completion.completed_task_accounted_bytes;
   if (loop.realized_order_count == kLlmScenarioCount) {
     ++result.counters.completed_loops;
   }
-  update_scenario_aggregate(result, measurement);
 }
 
 int fail_initialized_run(LlmMemoryResult& result, const LlmRunnerHooks& hooks,
@@ -1576,7 +1516,7 @@ int run_measurements(const LlmMemoryWorkPlan& model_plan, LlmBackend& backend,
       }
       LlmMeasurementState& measurement = result.measurements[loop.measurement_indexes[position]];
       const size_t index = scenario_index(measurement.scenario);
-      const LlmScenarioWorkPlan& task_plan = result.frozen_scenario_plans.scenarios[index];
+      const LlmScenarioWorkPlan& task_plan = result.scenario_plans.at(result.frozen_plan_handles[index]).plan;
       if (loop.realized_order_count == 0) {
         ++result.counters.attempted_loops;
       }
@@ -1745,13 +1685,10 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(
             attempts_per_scenario, kLlmScenarioCount,
             total_calibration_attempts) ||
         !NumericUtils::checked_multiply(
-            planned_measurements, static_cast<size_t>(3),
+            planned_measurements, static_cast<size_t>(1),
             aggregate_value_count) ||
         !NumericUtils::checked_multiply(
             planned_measurements, preflight.effective_workers,
-            retained_worker_checksums) ||
-        !NumericUtils::checked_multiply(
-            retained_worker_checksums, static_cast<size_t>(2),
             retained_worker_checksums) ||
         !NumericUtils::checked_multiply(
             planned_measurements, sizeof(LlmMeasurementState),
@@ -1763,10 +1700,10 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(
             total_calibration_attempts, sizeof(LlmCalibrationAttempt),
             estimate.calibration_record_bytes) ||
         !NumericUtils::checked_multiply(
-            aggregate_value_count, sizeof(double),
+            aggregate_value_count, sizeof(size_t),
             estimate.aggregate_value_bytes) ||
         !NumericUtils::checked_multiply(
-            config.loop_count, static_cast<size_t>(2 * sizeof(double)),
+            config.loop_count, static_cast<size_t>(3 * sizeof(double)),
             estimate.statistics_workspace_bytes) ||
         !NumericUtils::checked_multiply(
             kLlmRunnerMaximumWarnings, sizeof(std::string_view),
@@ -1793,7 +1730,7 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(
               identity_with_null, static_cast<size_t>(2),
               conservative_identity) ||
           !NumericUtils::checked_multiply(
-              conservative_identity, attempts_per_scenario,
+              conservative_identity, attempts_per_scenario + 1,
               scenario_identity_total) ||
           !checked_add_to(scenario_identity_total,
                           estimate.calibration_identity_bytes)) {
@@ -1878,6 +1815,27 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(
       }
     }
 
+    // Worst-case unique excluded plans plus frozen plans coexist with the active
+    // reconstructed expectation. Maps and expected worker vectors are capacity charged.
+    size_t canonical_count = 0;
+    size_t canonical_storage = 0;
+    size_t canonical_workers = 0;
+    size_t canonical_checksum_bytes = 0;
+    size_t canonical_model_strings = 0;
+    if (!NumericUtils::checked_add(total_calibration_attempts, kLlmScenarioCount, canonical_count) ||
+        !NumericUtils::checked_multiply(canonical_count,
+            sizeof(LlmCanonicalScenarioPlan) + 2 * sizeof(size_t), canonical_storage) ||
+        !checked_add_to(canonical_storage, estimate.fixed_metadata_bytes) ||
+        !NumericUtils::checked_add(canonical_count, static_cast<size_t>(2), canonical_workers) ||
+        !NumericUtils::checked_multiply(canonical_workers, preflight.effective_workers, canonical_workers) ||
+        !NumericUtils::checked_multiply(canonical_workers, sizeof(LlmWorkerChecksum), canonical_checksum_bytes) ||
+        !checked_add_to(canonical_checksum_bytes, estimate.retained_checksum_bytes) ||
+        !NumericUtils::checked_add(preflight.model_plan_identity_bytes, static_cast<size_t>(1), canonical_model_strings) ||
+        !NumericUtils::checked_multiply(canonical_model_strings, static_cast<size_t>(2), canonical_model_strings) ||
+        !NumericUtils::checked_multiply(canonical_model_strings, canonical_count, canonical_model_strings) ||
+        !checked_add_to(canonical_model_strings, estimate.calibration_identity_bytes)) return estimate;
+
+    if (!checked_add_to(preflight.canonical_expected_scratch_bytes, estimate.fixed_metadata_bytes)) return estimate;
     estimate.checksum_auxiliary_bytes =
         estimate.retained_checksum_bytes;
     size_t orchestration = 0;
@@ -1938,7 +1896,7 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(const LlmMemo
     size_t retained_worker_checksums = 0;
     if (!NumericUtils::checked_multiply(config.loop_count, kLlmScenarioCount, planned_measurements) ||
         !NumericUtils::checked_multiply(attempts_per_scenario, kLlmScenarioCount, total_calibration_attempts) ||
-        !NumericUtils::checked_multiply(planned_measurements, static_cast<size_t>(3), aggregate_value_count)) {
+        !NumericUtils::checked_multiply(planned_measurements, static_cast<size_t>(1), aggregate_value_count)) {
       return estimate;
     }
     const size_t retained_records_per_measurement =
@@ -1946,14 +1904,13 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(const LlmMemo
     if (!NumericUtils::checked_multiply(planned_measurements,
                                         retained_records_per_measurement,
                                         retained_worker_checksums) ||
-        !NumericUtils::checked_multiply(retained_worker_checksums, static_cast<size_t>(2), retained_worker_checksums) ||
         !NumericUtils::checked_multiply(planned_measurements, sizeof(LlmMeasurementState),
                                         estimate.measurement_record_bytes) ||
         !NumericUtils::checked_multiply(config.loop_count, sizeof(LlmLoopRecord), estimate.loop_record_bytes) ||
         !NumericUtils::checked_multiply(total_calibration_attempts, sizeof(LlmCalibrationAttempt),
                                         estimate.calibration_record_bytes) ||
-        !NumericUtils::checked_multiply(aggregate_value_count, sizeof(double), estimate.aggregate_value_bytes) ||
-        !NumericUtils::checked_multiply(config.loop_count, static_cast<size_t>(2 * sizeof(double)),
+        !NumericUtils::checked_multiply(aggregate_value_count, sizeof(size_t), estimate.aggregate_value_bytes) ||
+        !NumericUtils::checked_multiply(config.loop_count, static_cast<size_t>(3 * sizeof(double)),
                                         estimate.statistics_workspace_bytes) ||
         !NumericUtils::checked_multiply(kLlmRunnerMaximumWarnings, sizeof(std::string_view),
                                         estimate.warning_record_bytes) ||
@@ -1979,7 +1936,7 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(const LlmMemo
       size_t scenario_identity_total = 0;
       if (!NumericUtils::checked_add(identity_capacities[index], static_cast<size_t>(1), identity_with_null) ||
           !NumericUtils::checked_multiply(identity_with_null, static_cast<size_t>(2), conservative_identity) ||
-          !NumericUtils::checked_multiply(conservative_identity, attempts_per_scenario, scenario_identity_total) ||
+          !NumericUtils::checked_multiply(conservative_identity, attempts_per_scenario + 1, scenario_identity_total) ||
           !checked_add_to(scenario_identity_total, estimate.calibration_identity_bytes)) {
         return estimate;
       }
@@ -2039,6 +1996,29 @@ LlmRunnerAuxiliaryEstimate calculate_llm_runner_auxiliary_estimate(const LlmMemo
       }
     }
 
+    // Worst-case unique excluded plans plus frozen plans coexist with the active
+    // reconstructed expectation. Maps and expected worker vectors are capacity charged.
+    size_t canonical_count = 0;
+    size_t canonical_storage = 0;
+    size_t canonical_workers = 0;
+    size_t canonical_checksum_bytes = 0;
+    size_t canonical_model_strings = 0;
+    if (!NumericUtils::checked_add(total_calibration_attempts, kLlmScenarioCount, canonical_count) ||
+        !NumericUtils::checked_multiply(canonical_count,
+            sizeof(LlmCanonicalScenarioPlan) + 2 * sizeof(size_t), canonical_storage) ||
+        !checked_add_to(canonical_storage, estimate.fixed_metadata_bytes) ||
+        !NumericUtils::checked_add(canonical_count, static_cast<size_t>(2), canonical_workers) ||
+        !NumericUtils::checked_multiply(canonical_workers, retained_records_per_measurement, canonical_workers) ||
+        !NumericUtils::checked_multiply(canonical_workers, sizeof(LlmWorkerChecksum), canonical_checksum_bytes) ||
+        !checked_add_to(canonical_checksum_bytes, estimate.retained_checksum_bytes) ||
+        !NumericUtils::checked_add(model_plan.plan_identity.size(), static_cast<size_t>(1), canonical_model_strings) ||
+        !NumericUtils::checked_multiply(canonical_model_strings, static_cast<size_t>(2), canonical_model_strings) ||
+        !NumericUtils::checked_multiply(canonical_model_strings, canonical_count, canonical_model_strings) ||
+        !checked_add_to(canonical_model_strings, estimate.calibration_identity_bytes)) return estimate;
+
+    if (metal_plan && metal_plan->resources.paged_layout &&
+        (!checked_add_to(metal_plan->resources.paged_layout->memory.transient_peak_bytes, estimate.fixed_metadata_bytes) ||
+         !checked_add_to(Constants::LLM_CANONICAL_PAGED_EXPECTED_FIXED_SCRATCH_BYTES, estimate.fixed_metadata_bytes))) return estimate;
     estimate.checksum_auxiliary_bytes = estimate.retained_checksum_bytes;
     size_t orchestration = 0;
     if (!checked_add_to(estimate.measurement_record_bytes, orchestration) ||
@@ -2267,12 +2247,12 @@ int run_llm_memory_suite(const LlmMemoryConfig& config,
       }
     }
 
-    result.frozen_scenario_plans = freeze_llm_scenario_work_plans(
-        model_plan, frozen_work_units, config.user_specified_iterations);
-    if (!result.frozen_scenario_plans.valid) {
-      return fail_initialized_run(result, hooks,
-                                  result.frozen_scenario_plans.reason_code,
-                                  backend, release_attempted);
+    for (size_t index = 0; index < kLlmScenarioCount; ++index) {
+      const auto frozen = build_llm_scenario_work_plan(model_plan, kLlmScenarios[index],
+          frozen_work_units[index], config.user_specified_iterations);
+      result.frozen_plan_handles[index] = register_llm_scenario_plan(result, model_plan, frozen, backend);
+      const auto& expected = result.scenario_plans.at(result.frozen_plan_handles[index]).expected;
+      if (!expected.available) return fail_initialized_run(result, hooks, expected.reason_code, backend, release_attempted);
     }
     for (size_t index = 0;
          !config.user_specified_iterations && index < kLlmScenarioCount;
@@ -2284,8 +2264,8 @@ int run_llm_memory_suite(const LlmMemoryConfig& config,
       }
       const LlmCalibrationAttempt& latest = result.calibration_attempts[index]
           [result.calibration_attempt_counts[index] - 1];
-      if (result.frozen_scenario_plans.scenarios[index].work_units != frozen_work_units[index] ||
-          result.frozen_scenario_plans.scenarios[index].plan_identity != latest.work_plan_identity) {
+      if (result.scenario_plans.at(result.frozen_plan_handles[index]).plan.work_units != frozen_work_units[index] ||
+          result.scenario_plans.at(result.frozen_plan_handles[index]).plan.plan_identity != result.scenario_plans.at(latest.plan_handle).plan.plan_identity) {
         return fail_initialized_run(
             result, hooks, LlmRunnerReason::FROZEN_PLAN_MISMATCH, backend,
             release_attempted);
@@ -2313,7 +2293,6 @@ int run_llm_memory_suite(const LlmMemoryConfig& config,
                                   release_attempted);
     }
     trim_calibration_attempts(result);
-    refresh_calibration_references(result);
     if (!actual_runner_backing_is_covered(result)) {
       return fail_initialized_run(
           result, hooks, LlmRunnerReason::AUXILIARY_BUDGET_INSUFFICIENT,
@@ -2347,7 +2326,7 @@ int run_llm_memory_suite(const LlmMemoryConfig& config,
       result.status = LlmRunStatus::Failed;
       result.reason_code = LlmRunnerReason::RUNNER_EXCEPTION;
       result.results_complete = false;
-      result.conclusions_valid = false;
+      result.run_accepted = false;
       release_backend_once(backend, release_attempted, result);
       return EXIT_FAILURE;
     }
@@ -2372,7 +2351,7 @@ int run_llm_memory_suite(const LlmMemoryConfig& config,
       result.status = LlmRunStatus::Failed;
       result.reason_code = LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION;
       result.results_complete = false;
-      result.conclusions_valid = false;
+      result.run_accepted = false;
       release_backend_once(backend, release_attempted, result);
       return EXIT_FAILURE;
     }
@@ -2399,4 +2378,80 @@ const char* llm_checkpoint_kind_to_string(LlmCheckpointKind kind) noexcept {
       return "command-terminal";
   }
   return "unknown";
+}
+
+void prepare_llm_result_snapshot(LlmMemoryResult& result) {
+  ++result.snapshot_preparation_attempts;
+  const auto validate_reference = [&](LlmPlanHandle handle, LlmScenario scenario) {
+    if (handle == kLlmNoTaskIndex) return;
+    const auto* canonical = find_llm_scenario_plan(result, handle);
+    if (!canonical || !canonical->plan.valid || canonical->plan.scenario != scenario)
+      throw std::invalid_argument("contradictory canonical scenario reference");
+  };
+  for (size_t index = 0; index < kLlmScenarioCount; ++index) {
+    validate_reference(result.frozen_plan_handles[index], kLlmScenarios[index]);
+    if (result.calibration_attempt_counts[index] > result.calibration_attempts[index].size())
+      throw std::invalid_argument("invalid calibration attempt count");
+    for (size_t attempt_index = 0; attempt_index < result.calibration_attempt_counts[index]; ++attempt_index) {
+      const auto& attempt = result.calibration_attempts[index][attempt_index];
+      if (attempt.scenario != kLlmScenarios[index])
+        throw std::invalid_argument("contradictory calibration scenario");
+      validate_reference(attempt.plan_handle, attempt.scenario);
+    }
+  }
+  for (const auto& measurement : result.measurements)
+    validate_reference(measurement.plan_handle, measurement.scenario);
+
+  result.snapshot_plan_order.resize(result.scenario_plans.size());
+  result.snapshot_plan_refs.resize(result.scenario_plans.size());
+  for (size_t i = 0; i < result.scenario_plans.size(); ++i) result.snapshot_plan_order[i] = i;
+  std::sort(result.snapshot_plan_order.begin(), result.snapshot_plan_order.end(), [&](size_t a, size_t b) {
+    const auto& x = result.scenario_plans[a].plan;
+    const auto& y = result.scenario_plans[b].plan;
+    return std::tie(x.scenario, x.work_units, x.explicit_iterations) < std::tie(y.scenario, y.work_units, y.explicit_iterations);
+  });
+  for (size_t index = 0; index < result.snapshot_plan_order.size(); ++index)
+    result.snapshot_plan_refs[result.snapshot_plan_order[index]] = index;
+  for (auto& aggregate : result.aggregates) {
+    aggregate.accepted_measurement_ids.clear();
+    for (size_t index = 0; index < result.measurements.size(); ++index) {
+      const auto& measurement = result.measurements[index];
+      if (measurement.scenario != aggregate.scenario || measurement.status != LlmMeasurementStatus::Measured) continue;
+      const auto* plan = find_llm_scenario_plan(result, measurement.plan_handle);
+      if (!plan || !plan->expected.available || plan->plan.scenario != measurement.scenario ||
+          !measurement.execution_evidence_available || measurement.execution.status != LlmTaskExecutionStatus::Complete ||
+          !measurement.execution.validation.evaluated || !measurement.execution.validation.valid ||
+          !measurement.execution.timing.evaluated || !measurement.execution.timing.valid ||
+          !task_completion_matches(measurement.execution.completion, plan->plan) ||
+          !derive_llm_measurement_metrics(measurement).payload_gb_s)
+        throw std::invalid_argument("invalid accepted measurement plan or work");
+      aggregate.accepted_measurement_ids.push_back(index);
+    }
+    LlmMetricAggregate* metrics[] = {&aggregate.work_unit_latency_seconds,
+        &aggregate.synthetic_memory_work_units_per_second, &aggregate.effective_model_payload_gb_s};
+    for (size_t metric = 0; metric < 3; ++metric) {
+      auto& target = *metrics[metric];
+      target.statistics = {};
+      target.headline.reset();
+      auto& values = result.statistics_workspace.extracted_values;
+      values.clear();
+      for (size_t index : aggregate.accepted_measurement_ids) {
+        const auto derived = derive_llm_measurement_metrics(result.measurements[index]);
+        values.push_back(metric == 0 ? *derived.latency_seconds : metric == 1 ? *derived.work_units_per_second : *derived.payload_gb_s);
+      }
+      if (!values.empty()) {
+        ++result.exact_statistics_passes;
+        target.statistics = calculate_descriptive_statistics(values, result.statistics_workspace.sorted_values,
+                                                              result.statistics_workspace.absolute_deviations);
+        target.headline = target.statistics.median;
+      }
+    }
+    const size_t count = aggregate.accepted_measurement_ids.size();
+    aggregate.status = count == 0 ? "unavailable" : count == result.counters.planned_loops ? "complete" : "partial";
+    const auto& statistics = aggregate.effective_model_payload_gb_s.statistics;
+    aggregate.observed_cv_classification = count < 3 ? "insufficient-samples" :
+        !statistics.coefficient_of_variation_defined ? "undefined" :
+        statistics.coefficient_of_variation_pct > Constants::LLM_STREAMING_CV_WARNING_PCT ? "above-threshold" : "below-threshold";
+  }
+  rebuild_quality_warnings(result);
 }

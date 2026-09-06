@@ -42,6 +42,15 @@
 
 #include "llm_memory/llm_backend.h"
 
+/** Interpret only completed cold-command shader bits. Incomplete commands leave
+ * applicable sets unresolved. Invalid parameters prevent clear content bits from
+ * proving completion; observed mismatches still resolve false. Pure, reentrant,
+ * allocation-free; flags must come from the current command, not a test injection.
+ */
+LlmColdChecks interpret_llm_metal_cold_checks(LlmPhase phase, bool writes_kv,
+                                             bool padding, bool completed,
+                                             uint32_t flags) noexcept;
+
 /** Canonical CPU mirror of the MSL 2.3 foundation parameter block. */
 struct alignas(8) LlmMetalFoundationParams {
   uint64_t byte_count = 0;

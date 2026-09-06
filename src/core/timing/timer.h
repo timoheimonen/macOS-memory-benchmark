@@ -47,6 +47,19 @@ std::optional<double> convert_mach_ticks_to_nanoseconds(uint64_t ticks,
                                                         uint32_t numer,
                                                         uint32_t denom);
 
+/** Original timer boundaries, copied without clock reads.
+ * Unsigned delta permits one wrap. Floating multiplication avoids integer
+ * overflow. Zero delta/numerator yields zero, not a valid LLM duration.
+ * Access across threads requires external synchronization.
+ */
+struct MachTimingSnapshot {
+  uint64_t start_ticks = 0;
+  uint64_t stop_ticks = 0;
+  uint64_t delta_ticks = 0;
+  uint32_t numer = 0;
+  uint32_t denom = 0;
+};
+
 // --- High-resolution timer helper ---
 /**
  * @struct HighResTimer
@@ -56,6 +69,7 @@ std::optional<double> convert_mach_ticks_to_nanoseconds(uint64_t ticks,
  * Automatically handles timebase conversion for accurate measurements.
  */
 struct HighResTimer {
+    std::optional<MachTimingSnapshot> last_snapshot; ///< Reset at start, captured at stop.
     uint64_t start_ticks = 0;           ///< Ticks at timer start
     mach_timebase_info_data_t timebase_info; ///< Timebase info for conversion
 

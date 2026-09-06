@@ -21,6 +21,11 @@
 #import <Foundation/Foundation.h>
 
 #include "llm_memory/llm_environment.h"
+#include "utils/hash_utils.h"
+#include <mach-o/dyld.h>
+#include <array>
+#include <fstream>
+#include <vector>
 
 namespace {
 
@@ -65,5 +70,27 @@ LlmHostEnvironmentSnapshot capture_llm_host_environment() noexcept {
     }
   } catch (...) {
     return LlmHostEnvironmentSnapshot{};
+  }
+}
+
+std::string capture_llm_binary_sha256() noexcept {
+  try {
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    if (size == 0 || size > 1024 * 1024) return {};
+    std::vector<char> path(size);
+    if (_NSGetExecutablePath(path.data(), &size) != 0) return {};
+    std::ifstream input(path.data(), std::ios::binary);
+    if (!input) return {};
+    HashUtils::Sha256Hasher hasher;
+    std::array<char, 65536> buffer;
+    while (input) {
+      input.read(buffer.data(), buffer.size());
+      hasher.update(buffer.data(), static_cast<size_t>(input.gcount()));
+    }
+    if (!input.eof()) return {};
+    return hasher.finalize_hex();
+  } catch (...) {
+    return {};
   }
 }

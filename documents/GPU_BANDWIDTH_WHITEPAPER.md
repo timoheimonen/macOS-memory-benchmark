@@ -135,6 +135,9 @@ The Objective-C++ backend is auto-discovered, compiled with `-fobjc-arc`, and li
 No third-party production dependency is added. CommonCrypto SHA-256 comes from the platform/libSystem API and needs no
 additional framework link. Coverage includes production `.mm` beside `.cpp`.
 
+Python 3 is required for both release and test builds, including ordinary `make`: the Makefile runs
+`build-support/generate_provenance.py` to generate build provenance before compiling objects.
+
 Runtime admission requires:
 
 1. `MTLCreateSystemDefaultDevice()` returns a device.
@@ -667,8 +670,9 @@ make test-all
 ./memory_benchmark --gpu-bandwidth --help
 ```
 
-The aggregate `make test-all` gate requires Python 3; it runs the focused script-example entry test after all GTest
-cases pass. `jq` is not required by this gate.
+The aggregate `make test-all` gate runs all GTest cases, followed by `make test-script-examples` and
+`make test-llm-verifier`. Both Python test drivers require Python 3; the latter checks the independent LLM schema-2
+artifact verifier. `jq` is not required by this gate.
 
 Real Metal tests may skip on an unsupported/no-device execution environment. That skip does not replace deterministic
 unsupported-path tests and does not create a performance-validation claim.

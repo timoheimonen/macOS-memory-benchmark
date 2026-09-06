@@ -37,6 +37,7 @@
 #ifndef MESSAGES_MESSAGES_API_H
 #define MESSAGES_MESSAGES_API_H
 
+#include <optional>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -278,8 +279,8 @@ std::string report_llm_memory_decode_geometry(
     size_t visible_context_tokens, double traffic_crossover_context_tokens);
 std::string report_llm_memory_prefill_geometry(size_t prompt_tokens, size_t attention_query_tile_tokens,
                                                size_t tile_count, size_t attention_prefix_token_visits_per_sequence,
-                                               size_t causal_token_pairs_per_sequence, size_t logical_attention_pairs,
-                                               size_t logical_attention_fma_terms);
+                                               std::optional<size_t> causal_token_pairs_per_sequence, std::optional<size_t> logical_attention_pairs,
+                                               std::optional<size_t> logical_attention_fma_terms);
 struct LlmPagedLayoutReportValues {
   size_t block_tokens = 0;
   size_t blocks_per_sequence = 0;
@@ -314,6 +315,9 @@ std::string report_llm_memory_scenario_headline(
     double synthetic_memory_work_units_per_second,
     double effective_model_payload_gb_s,
     bool include_work_units_per_second);
+/** Shared accepted-population payload distribution, with descriptive CV/MAD. */
+std::string report_llm_memory_distribution(size_t count, double median, double minimum, double maximum,
+                                           double cv_pct, double mad);
 std::string report_llm_memory_scenario_name(
     const std::string& scenario_token);
 std::string report_llm_memory_interpretation_note(

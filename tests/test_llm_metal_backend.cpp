@@ -3021,57 +3021,11 @@ TEST(LlmMetalBackendTest,
 }
 
 TEST(LlmMetalBackendTest,
-     PrefillContiguousMslSourceLocksFullPromptThenPerTileKThenVContract) {
-  const std::string_view source = LlmMetalKernelContract::kSource;
-  EXPECT_EQ(canonical_llm_metal_kernel_source_sha256(),
-            kCanonicalKernelSourceSha256);
-  EXPECT_NE(source.find("#if LLM_METAL_PREFILL_CONTIGUOUS"),
-            std::string_view::npos);
-  EXPECT_NE(source.find("llm_metal_prefill_contiguous_weights_only"),
-            std::string_view::npos);
-  EXPECT_NE(source.find("llm_metal_prefill_contiguous_kv_only"),
-            std::string_view::npos);
-  EXPECT_NE(source.find("llm_metal_prefill_contiguous_mixed"),
-            std::string_view::npos);
-  EXPECT_NE(source.find("llm_metal_validate_prefill_contiguous_writes"),
-            std::string_view::npos);
-
-  const size_t run_start = source.find("inline void run_prefill_kv");
-  const size_t run_end = source.find(
-      "kernel void llm_metal_prefill_contiguous_weights_only", run_start);
-  ASSERT_NE(run_start, std::string_view::npos);
-  ASSERT_NE(run_end, std::string_view::npos);
-  const std::string_view run = source.substr(run_start, run_end - run_start);
-  const size_t token_loop = run.find(
-      "for (ulong prompt_token = 0ul; prompt_token < params.prompt_tokens;");
-  const size_t write_key = run.find("write_prefill_key_range", token_loop);
-  const size_t write_value = run.find("write_prefill_value_range", write_key);
-  const size_t remaining = run.find(
-      "ulong remaining_tokens = params.prompt_tokens", write_value);
-  const size_t tile_loop = run.find("while (remaining_tokens != 0ul)",
-                                    remaining);
-  const size_t remaining_distance = run.find(
-      "min(params.attention_query_tile_tokens,", tile_loop);
-  const size_t scan_key = run.find("scan_key_range", tile_loop);
-  const size_t scan_value = run.find("scan_value_range", scan_key);
-  ASSERT_NE(token_loop, std::string_view::npos);
-  ASSERT_LT(token_loop, write_key);
-  ASSERT_LT(write_key, write_value);
-  ASSERT_LT(write_value, remaining);
-  ASSERT_LT(remaining, tile_loop);
-  ASSERT_LT(tile_loop, remaining_distance);
-  ASSERT_LT(remaining_distance, scan_key);
-  ASSERT_LT(scan_key, scan_value);
-  EXPECT_EQ(run.find("(tile_ordinal + 1ul) *"), std::string_view::npos);
-  EXPECT_EQ(run.find("threadgroup_barrier(mem_flags::mem_device)"),
-            std::string_view::npos);
-  EXPECT_NE(source.find(
-                "const ulong remainder = first_vector % ulong(grid_size)"),
-            std::string_view::npos);
-  EXPECT_NE(source.find(
-                "return first_vector + delta;"),
-            std::string_view::npos);
-
+     PrefillContiguousSemanticTraceWritesFullPromptBeforePerTileKThenV) {
+  // This freezes the bounded schedule oracle. Actual MSL pipeline/layout,
+  // Q=1/Q=P/tail execution, and corruption rejection have real-device tests;
+  // the separate canonical source hash retains provenance. A trace alone
+  // does not attest the GPU's temporal access order.
   const LlmPrefillPlan plan = resolve_llm_prefill_plan(
       {64, 2, 1, 1, 1, 1, 1, 4, 0});
   ASSERT_TRUE(plan.valid) << plan.reason_code;
@@ -4370,6 +4324,10 @@ TEST(LlmMetalBackendFailureInjectionIntegrationTest,
     EXPECT_TRUE(task->padding_canary_evaluated);
     EXPECT_EQ(task->padding_canary_valid, !cases[index].padding_mismatch);
     EXPECT_EQ(task->post_validation_valid, !cases[index].padding_mismatch);
+    EXPECT_TRUE(task->cold_checks[0].valid);
+    EXPECT_TRUE(task->cold_checks[1].valid);
+    EXPECT_TRUE(task->cold_checks[2].evaluated);
+    EXPECT_EQ(task->cold_checks[2].valid, !cases[index].padding_mismatch);
   }
 }
 
@@ -4456,6 +4414,10 @@ TEST(LlmMetalBackendFailureInjectionIntegrationTest,
     EXPECT_TRUE(task->padding_canary_evaluated);
     EXPECT_EQ(task->padding_canary_valid, !cases[index].padding_mismatch);
     EXPECT_EQ(task->post_validation_valid, !cases[index].padding_mismatch);
+    EXPECT_TRUE(task->cold_checks[0].valid);
+    EXPECT_TRUE(task->cold_checks[1].valid);
+    EXPECT_TRUE(task->cold_checks[2].evaluated);
+    EXPECT_EQ(task->cold_checks[2].valid, !cases[index].padding_mismatch);
   }
 }
 
@@ -4538,6 +4500,11 @@ TEST(LlmMetalBackendFailureInjectionIntegrationTest,
     const LlmMetalTaskEvidence* task = get_llm_metal_task_evidence(result);
     ASSERT_NE(task, nullptr);
     EXPECT_TRUE(task->timed_pipeline_available);
+    EXPECT_TRUE(task->cold_checks[0].applicable);
+    EXPECT_TRUE(task->cold_checks[1].applicable);
+    EXPECT_EQ(task->cold_checks[0].evaluated, test_case.index != 2 && test_case.index != 4);
+    // Host acceptance injection is not an observed shader-bit mismatch.
+    EXPECT_EQ(task->cold_checks[1].valid, test_case.index != 2 && test_case.index != 4);
     EXPECT_EQ(task->timing_evaluated, test_case.index != 4);
     EXPECT_EQ(task->timing_valid,
               test_case.index != 0 && test_case.index != 4);
@@ -4711,3 +4678,98 @@ TEST(LlmMetalBackendFailureInjectionIntegrationTest,
 }
 
 }  // namespace
+
+TEST(LlmMetalBackendTest, ColdReadbackIndependentVerdicts) {
+  for (bool completed : {false, true}) {
+    for (unsigned combination = 0; combination < 8; ++combination) {
+      const uint32_t flags = ((combination & 1) ? LlmMetalKernelContract::kValidationInvalidParametersBit : 0) |
+          ((combination & 2) ? LlmMetalKernelContract::kKvWriteValidationMismatchBit : 0) |
+          ((combination & 4) ? LlmMetalKernelContract::kPaddingCanaryMismatchBit : 0);
+      const auto checks = interpret_llm_metal_cold_checks(LlmPhase::Prefill, true, true, completed, flags);
+      EXPECT_EQ(checks[0].evaluated, completed);
+      EXPECT_EQ(checks[0].valid, completed && !(combination & 1));
+      for (size_t slot = 1; slot < 3; ++slot) {
+        const bool mismatch = (combination & (1U << slot)) != 0;
+        EXPECT_EQ(checks[slot].evaluated, completed && (mismatch || !(combination & 1)));
+        EXPECT_EQ(checks[slot].valid, completed && !mismatch && !(combination & 1));
+      }
+      const auto none = interpret_llm_metal_cold_checks(LlmPhase::Decode, false, true, completed, flags);
+      for (const auto& check : none) EXPECT_FALSE(check.applicable);
+      const auto contiguous = interpret_llm_metal_cold_checks(LlmPhase::Decode, true, false, completed, flags);
+      EXPECT_FALSE(contiguous[2].applicable);
+      EXPECT_EQ(contiguous[1].kind, LlmColdCheckKind::KvAppendFinal);
+      EXPECT_EQ(checks[1].kind, LlmColdCheckKind::KvPrefillFinalSamples);
+    }
+  }
+}
+
+TEST(LlmMetalBackendTest, PendingColdChecksPreserveAllApplicabilityCombinations) {
+  for (auto phase : {LlmPhase::Decode, LlmPhase::Prefill}) {
+    for (bool writes : {false, true}) {
+      for (bool padding : {false, true}) {
+        const auto checks = interpret_llm_metal_cold_checks(phase, writes, padding, false, 0);
+        EXPECT_EQ(checks[0].applicable, writes);
+        EXPECT_EQ(checks[1].applicable, writes);
+        EXPECT_EQ(checks[2].applicable, writes && padding);
+        EXPECT_EQ(checks[1].kind, phase == LlmPhase::Decode ? LlmColdCheckKind::KvAppendFinal
+                                                         : LlmColdCheckKind::KvPrefillFinalSamples);
+        for (const auto& check : checks) {
+          EXPECT_FALSE(check.evaluated);
+          EXPECT_FALSE(check.valid);
+          EXPECT_EQ(check.reason_code, "not-evaluated");
+        }
+      }
+    }
+  }
+}
+
+TEST_F(LlmMetalBackendIntegrationTest, PrefillElementWidthsAndWideSingleTokenPreserveTaskContractIntegration) {
+  struct Case {
+    size_t prompt_tokens;
+    size_t query_tile_tokens;
+    size_t head_dimension;
+    size_t block_tokens;
+  };
+  // Include a wide P=Q=1 record: replacing token control with vector control
+  // must preserve this supported case as well as narrow, split-token tails.
+  constexpr std::array<Case, 4> kCases = {{{1, 1, 131072, 1},
+                                          {17, 1, 3, 4},
+                                          {257, 257, 64, 128},
+                                          {129, 16, 5, 16}}};
+  for (LlmKvLayout layout : {LlmKvLayout::Contiguous, LlmKvLayout::Paged}) {
+    for (size_t element_bytes : {1U, 2U, 4U}) {
+      for (const Case& test_case : kCases) {
+        SCOPED_TRACE("P=" + std::to_string(test_case.prompt_tokens) +
+                     ", E=" + std::to_string(element_bytes) +
+                     ", layout=" + std::to_string(static_cast<int>(layout)));
+        LlmMemoryConfig config = metal_config();
+        config.phase = LlmPhase::Prefill;
+        config.kv_layout = layout;
+        backend_ = create_llm_metal_backend();
+        ASSERT_EQ(backend_->initialize(config).status, LlmBackendStatus::Ready);
+        LlmGeometryRequest request;
+        request.active_weight_bytes = 4097;
+        request.layer_count = 2;
+        request.batch_size = 2;
+        request.query_head_count = 1;
+        request.kv_head_count = 1;
+        request.head_dimension = test_case.head_dimension;
+        request.kv_element_bytes = element_bytes;
+        request.phase = LlmPhase::Prefill;
+        request.kv_layout = layout;
+        request.prompt_tokens = test_case.prompt_tokens;
+        request.attention_query_tile_tokens = test_case.query_tile_tokens;
+        request.kv_block_tokens = layout == LlmKvLayout::Paged ? test_case.block_tokens : 0;
+        const LlmGeometry geometry = resolve_llm_geometry(request);
+        ASSERT_TRUE(geometry.valid) << geometry.reason_code;
+        ASSERT_EQ(geometry.k_or_v_record_bytes_per_layer, test_case.head_dimension * element_bytes);
+        LlmMemoryWorkPlan plan = build_device_plan(geometry, "prefill-element-width-and-record-boundary");
+        resolve_and_prepare(plan);
+        for (LlmScenario scenario : {LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed}) {
+          expect_complete_scenario_task(plan, scenario, 1);
+          expect_complete_scenario_task(plan, scenario, 3);
+        }
+      }
+    }
+  }
+}

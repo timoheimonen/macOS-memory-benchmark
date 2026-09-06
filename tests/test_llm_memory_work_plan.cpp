@@ -33,6 +33,7 @@
 #include "core/config/constants.h"
 #include "llm_memory/llm_kv_layout.h"
 #include "llm_memory/llm_metal_backend.h"
+#include "llm_memory/llm_runner.h"
 #include "llm_memory/llm_work_plan.h"
 #include "test_memory_system_calls.h"
 #include "utils/numeric_utils.h"
@@ -605,14 +606,14 @@ TEST(LlmMemoryWorkPlanTest, ConstantsAndIdentitiesMatchFrozenContract) {
   EXPECT_EQ(Constants::LLM_MAX_ACCOUNTED_BYTES_PER_TASK,
             64ULL * 1024ULL * Constants::BYTES_PER_MB);
   EXPECT_DOUBLE_EQ(Constants::LLM_STREAMING_CV_WARNING_PCT, 5.0);
-  EXPECT_EQ(Constants::LLM_JSON_SCHEMA_VERSION, 1);
+  EXPECT_EQ(Constants::LLM_JSON_SCHEMA_VERSION, 2);
   EXPECT_STREQ(Constants::LLM_JSON_MODE_NAME, "llm_memory");
   EXPECT_EQ(Constants::LLM_WEIGHT_PASSES_PER_WORK_UNIT, 1u);
   EXPECT_EQ(Constants::LLM_KV_REPLAY_FACTOR, 1u);
   EXPECT_STREQ(Constants::LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION,
-               "llm-memory-v1-cpu-decode-contiguous");
+               "llm-memory-v2-cpu-decode-contiguous");
   EXPECT_STREQ(Constants::LLM_CPU_PREFILL_PAGED_METHODOLOGY_VERSION,
-               "llm-memory-v1-cpu-prefill-paged");
+               "llm-memory-v2-cpu-prefill-paged");
   EXPECT_STREQ(Constants::LLM_COMPONENT_IDENTITY_VERSION,
                "llm-memory-components-v1");
   EXPECT_STREQ(Constants::LLM_LOGICAL_PROFILE_VERSION,
@@ -699,15 +700,15 @@ TEST(LlmMemoryWorkPlanTest, ConstantsAndIdentitiesMatchFrozenContract) {
   EXPECT_EQ(build_llm_methodology_version(
                 LlmMemoryBackend::Cpu, LlmPhase::Decode,
                 LlmKvLayout::Paged),
-            "llm-memory-v1-cpu-decode-paged");
+            "llm-memory-v2-cpu-decode-paged");
   EXPECT_EQ(build_llm_methodology_version(
                 LlmMemoryBackend::Metal, LlmPhase::Prefill,
                 LlmKvLayout::Paged),
-            "llm-memory-v1-metal-prefill-paged");
+            "llm-memory-v2-metal-prefill-paged");
   EXPECT_EQ(build_llm_methodology_version(
                 LlmMemoryBackend::Metal, LlmPhase::Decode,
                 LlmKvLayout::Paged),
-            "llm-memory-v1-metal-decode-paged");
+            "llm-memory-v2-metal-decode-paged");
 
   EXPECT_EQ(llm_seed_domain_value(LlmSeedDomain::WeightBuffer),
             0x4C4C4D5745494748ULL);
@@ -1423,7 +1424,7 @@ TEST(LlmMemoryWorkPlanTest,
             LlmMemoryBackend::Metal);
   EXPECT_EQ(draft.auxiliary_preflight.effective_workers, 0u);
   EXPECT_EQ(draft.candidate.methodology_version,
-            "llm-memory-v1-metal-decode-contiguous");
+            "llm-memory-v2-metal-decode-contiguous");
   EXPECT_EQ(draft.candidate.component_identities.backend_executor_version,
             LlmMetalDecodeContiguousVersion::EXECUTOR);
   EXPECT_EQ(draft.candidate.component_identities.schedule_version,
@@ -1462,7 +1463,7 @@ TEST(LlmMemoryWorkPlanTest,
   EXPECT_FALSE(draft.candidate.valid);
   ASSERT_TRUE(draft.candidate.geometry.valid);
   EXPECT_EQ(draft.candidate.methodology_version,
-            "llm-memory-v1-metal-decode-paged");
+            "llm-memory-v2-metal-decode-paged");
   ASSERT_TRUE(
       draft.candidate.component_identities.permutation_version.has_value());
   EXPECT_EQ(
@@ -1597,7 +1598,7 @@ TEST(LlmMemoryWorkPlanTest,
   EXPECT_EQ(logical.layout_metadata_read_bytes_per_work_unit, 0u);
 
   EXPECT_EQ(candidate.methodology_version,
-            "llm-memory-v1-metal-prefill-contiguous");
+            "llm-memory-v2-metal-prefill-contiguous");
   EXPECT_EQ(candidate.component_identities.logical_profile_version,
             Constants::LLM_PREFILL_LOGICAL_PROFILE_VERSION);
   EXPECT_EQ(candidate.component_identities.kv_layout_version,
@@ -2079,7 +2080,7 @@ TEST(LlmMemoryWorkPlanTest,
   EXPECT_EQ(logical.layout_metadata_read_bytes_per_work_unit, 240u);
 
   EXPECT_EQ(candidate.methodology_version,
-            "llm-memory-v1-metal-prefill-paged");
+            "llm-memory-v2-metal-prefill-paged");
   EXPECT_EQ(candidate.component_identities.logical_profile_version,
             Constants::LLM_PREFILL_LOGICAL_PROFILE_VERSION);
   EXPECT_EQ(candidate.component_identities.kv_layout_version,
@@ -2938,7 +2939,7 @@ TEST(LlmMemoryWorkPlanTest,
   EXPECT_EQ(plan.backend, LlmMemoryBackend::Cpu);
   EXPECT_EQ(plan.phase, LlmPhase::Decode);
   EXPECT_EQ(plan.kv_layout, LlmKvLayout::Paged);
-  EXPECT_EQ(plan.methodology_version, "llm-memory-v1-cpu-decode-paged");
+  EXPECT_EQ(plan.methodology_version, "llm-memory-v2-cpu-decode-paged");
 
   const LlmGeometry& geometry = plan.geometry;
   ASSERT_TRUE(geometry.valid) << geometry.reason_code;
@@ -5045,9 +5046,9 @@ TEST(LlmMemoryWorkPlanTest,
                   : LlmPrefillVersion::CHECKSUM_ORACLE);
   }
   EXPECT_EQ(contiguous.methodology_version,
-            "llm-memory-v1-cpu-prefill-contiguous");
+            "llm-memory-v2-cpu-prefill-contiguous");
   EXPECT_EQ(paged.methodology_version,
-            "llm-memory-v1-cpu-prefill-paged");
+            "llm-memory-v2-cpu-prefill-paged");
   EXPECT_FALSE(contiguous.component_identities.permutation_version.has_value());
   ASSERT_TRUE(paged.component_identities.permutation_version.has_value());
   EXPECT_EQ(*paged.component_identities.permutation_version,
@@ -5670,5 +5671,130 @@ TEST(LlmMemoryWorkPlanTest,
               kExpected[index].block);
     EXPECT_EQ(trace.events[index].visit_token_count,
               kExpected[index].visit_tokens);
+  }
+}
+
+TEST(LlmMemoryWorkPlanTest, TheoreticalPrefillOverflowIsNullableWithoutRejectingByteWork) {
+  auto request = exact_prefill_request(128, 128);
+  request.query_head_count = size_t{1} << 40;
+  request.head_dimension = 4096;
+  const auto plan = resolve_llm_prefill_plan(request);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  EXPECT_EQ(plan.causal_token_pairs_per_sequence, 8256u);
+  ASSERT_TRUE(plan.logical_attention_pairs.has_value());
+  EXPECT_EQ(*plan.logical_attention_pairs, 8256ULL * (size_t{1} << 40) * request.layer_count * request.batch_size);
+  EXPECT_FALSE(plan.logical_attention_fma_terms.has_value());
+  EXPECT_EQ(plan.kv_write_bytes_per_work_unit,
+            128 * request.layer_count * request.batch_size * request.k_or_v_record_bytes_per_layer * 2);
+  auto overflowing_bytes = request;
+  overflowing_bytes.k_or_v_record_bytes_per_layer = std::numeric_limits<size_t>::max();
+  EXPECT_FALSE(resolve_llm_prefill_plan(overflowing_bytes).valid);
+  const auto none = calculate_llm_prefill_model_context(std::numeric_limits<size_t>::max(), 1, 1, 1, 1);
+  EXPECT_FALSE(none.causal_token_pairs_per_sequence);
+  EXPECT_FALSE(none.logical_attention_pairs);
+  EXPECT_FALSE(none.logical_attention_fma_terms);
+  const auto pairs_overflow = calculate_llm_prefill_model_context(3, 1, 1, std::numeric_limits<size_t>::max(), 1);
+  EXPECT_EQ(pairs_overflow.causal_token_pairs_per_sequence, 6u);
+  EXPECT_FALSE(pairs_overflow.logical_attention_pairs);
+  EXPECT_FALSE(pairs_overflow.logical_attention_fma_terms);
+}
+
+TEST(LlmMemoryWorkPlanTest, MetalPagedCanonicalExpectedScratchMatchesBothEstimatorPathsAndRejectsOverflow) {
+  for (const LlmPhase phase : {LlmPhase::Decode, LlmPhase::Prefill}) {
+    for (const bool explicit_work : {false, true}) {
+      SCOPED_TRACE(phase == LlmPhase::Decode ? "decode" : "prefill");
+      SCOPED_TRACE(explicit_work);
+      auto request = phase == LlmPhase::Decode ? metal_paged_work_plan_request()
+                                               : metal_prefill_work_plan_request(LlmKvLayout::Paged);
+      auto draft = prepare_llm_memory_work_plan(request);
+      ASSERT_TRUE(draft.valid) << draft.reason_code;
+      auto provisional = build_llm_metal_execution_plan(metal_resource_request(draft.candidate));
+      ASSERT_TRUE(provisional.valid) << provisional.reason_code;
+      ASSERT_TRUE(attach_llm_metal_execution_plan(draft, std::move(provisional)));
+      const auto preflight = draft.auxiliary_preflight;
+      // Both fixtures contain six uint32 table entries; the validation bitset needs one byte.
+      // The fixed envelope covers the 4 KiB hash chunk and bounded identity/stack workspace.
+      constexpr size_t kTableBytes = 6 * sizeof(uint32_t);
+      constexpr size_t kBitsetBytes = 1;
+      constexpr size_t kFixedEnvelope = 16 * 1024;
+      EXPECT_EQ(draft.candidate.geometry.block_table_entries, 6u);
+      EXPECT_EQ(Constants::LLM_CANONICAL_PAGED_EXPECTED_FIXED_SCRATCH_BYTES, kFixedEnvelope);
+      EXPECT_EQ(preflight.canonical_expected_scratch_bytes, kTableBytes + kBitsetBytes + kFixedEnvelope);
+      const auto* runtime = get_llm_metal_execution_plan(draft.candidate);
+      ASSERT_NE(runtime, nullptr);
+      ASSERT_TRUE(runtime->resources.paged_layout.has_value());
+      const auto& layout = *runtime->resources.paged_layout;
+      EXPECT_EQ(layout.memory.validation_bitset_bytes, kBitsetBytes);
+      EXPECT_EQ(layout.memory.transient_peak_bytes, kTableBytes + kBitsetBytes);
+      const auto table = materialize_llm_kv_block_table(layout, 42);
+      ASSERT_TRUE(table.valid) << table.reason_code;
+      EXPECT_EQ(table.entries.size(), 6u);
+      EXPECT_EQ(table.entries.capacity() * sizeof(uint32_t), kTableBytes);
+
+      LlmMemoryConfig config;
+      config.backend = LlmMemoryBackend::Metal;
+      config.phase = phase;
+      config.kv_layout = LlmKvLayout::Paged;
+      config.loop_count = 12;
+      config.user_specified_iterations = explicit_work;
+      const auto estimated = calculate_llm_runner_auxiliary_estimate(config, preflight);
+      ASSERT_TRUE(estimated.valid) << estimated.reason_code;
+      auto without_scratch = preflight;
+      without_scratch.canonical_expected_scratch_bytes = 0;
+      const auto control = calculate_llm_runner_auxiliary_estimate(config, without_scratch);
+      ASSERT_TRUE(control.valid);
+      EXPECT_EQ(estimated.fixed_metadata_bytes - control.fixed_metadata_bytes,
+                kTableBytes + kBitsetBytes + kFixedEnvelope);
+      EXPECT_EQ(estimated.orchestration_auxiliary_bytes - control.orchestration_auxiliary_bytes,
+                kTableBytes + kBitsetBytes + kFixedEnvelope);
+      EXPECT_EQ(estimated.total_auxiliary_bytes - control.total_auxiliary_bytes,
+                kTableBytes + kBitsetBytes + kFixedEnvelope);
+      EXPECT_EQ(estimated.checksum_auxiliary_bytes, control.checksum_auxiliary_bytes);
+
+      auto exact = build_llm_metal_execution_plan(
+          metal_resource_request(draft.candidate, estimated.total_auxiliary_bytes));
+      ASSERT_TRUE(exact.valid) << exact.reason_code;
+      auto plan = finalize_llm_memory_work_plan(std::move(draft), std::move(exact),
+          estimated.checksum_auxiliary_bytes, estimated.orchestration_auxiliary_bytes);
+      ASSERT_TRUE(plan.valid) << plan.reason_code;
+      const auto finalized = calculate_llm_runner_auxiliary_estimate(config, plan);
+      ASSERT_TRUE(finalized.valid) << finalized.reason_code;
+      for (const auto field : {&LlmRunnerAuxiliaryEstimate::measurement_record_bytes,
+                              &LlmRunnerAuxiliaryEstimate::loop_record_bytes,
+                              &LlmRunnerAuxiliaryEstimate::calibration_record_bytes,
+                              &LlmRunnerAuxiliaryEstimate::calibration_identity_bytes,
+                              &LlmRunnerAuxiliaryEstimate::aggregate_value_bytes,
+                              &LlmRunnerAuxiliaryEstimate::statistics_workspace_bytes,
+                              &LlmRunnerAuxiliaryEstimate::warning_record_bytes,
+                              &LlmRunnerAuxiliaryEstimate::fixed_metadata_bytes,
+                              &LlmRunnerAuxiliaryEstimate::retained_checksum_bytes,
+                              &LlmRunnerAuxiliaryEstimate::checksum_auxiliary_bytes,
+                              &LlmRunnerAuxiliaryEstimate::orchestration_auxiliary_bytes,
+                              &LlmRunnerAuxiliaryEstimate::total_auxiliary_bytes}) {
+        // Preflight additionally reserves 64 KiB for each runtime-dependent
+        // identity. Each canonical record charges two doubled identities;
+        // fixed metadata charges eight doubled frozen strings and two active
+        // strings at four times capacity. This reserve is deliberately absent
+        // from the finalized estimate; the canonical scratch itself is equal.
+        constexpr size_t kIdentityGrowth = 64 * 1024;
+        EXPECT_EQ(LlmMetalPlannerAccounting::RUNTIME_IDENTITY_GROWTH_RESERVE_BYTES, kIdentityGrowth);
+        const size_t canonical_count = 3 * (explicit_work ? 2 : 5 + Constants::LLM_CALIBRATION_MAX_CORRECTIONS);
+        const size_t identity_reserve = 4 * kIdentityGrowth * canonical_count;
+        const size_t fixed_reserve = 24 * kIdentityGrowth;
+        const size_t expected_reserve = field == &LlmRunnerAuxiliaryEstimate::calibration_identity_bytes ? identity_reserve :
+            field == &LlmRunnerAuxiliaryEstimate::fixed_metadata_bytes ? fixed_reserve :
+            field == &LlmRunnerAuxiliaryEstimate::orchestration_auxiliary_bytes ||
+            field == &LlmRunnerAuxiliaryEstimate::total_auxiliary_bytes ? identity_reserve + fixed_reserve : 0;
+        EXPECT_EQ(estimated.*field - finalized.*field, expected_reserve);
+      }
+      auto overflowing = preflight;
+      overflowing.canonical_expected_scratch_bytes = std::numeric_limits<size_t>::max();
+      EXPECT_FALSE(calculate_llm_runner_auxiliary_estimate(config, overflowing).valid);
+      auto* metal = get_llm_metal_execution_plan(plan);
+      ASSERT_NE(metal, nullptr);
+      ASSERT_TRUE(metal->resources.paged_layout.has_value());
+      metal->resources.paged_layout->memory.transient_peak_bytes = std::numeric_limits<size_t>::max();
+      EXPECT_FALSE(calculate_llm_runner_auxiliary_estimate(config, plan).valid);
+    }
   }
 }

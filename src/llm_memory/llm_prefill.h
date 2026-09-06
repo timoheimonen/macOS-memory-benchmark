@@ -28,6 +28,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -201,6 +202,18 @@ struct LlmPrefillPlanRequest {
   size_t kv_block_tokens = 0;
 };
 
+/** Theoretical context only; null fields denote arithmetic overflow, never byte work. */
+struct LlmPrefillModelContext {
+  std::optional<size_t> causal_token_pairs_per_sequence;
+  std::optional<size_t> logical_attention_pairs;
+  std::optional<size_t> logical_attention_fma_terms;
+};
+
+/** Pure allocation-free context calculation. Each dependent overflow remains null;
+ * callers must independently validate payload/prefix/layout arithmetic. */
+LlmPrefillModelContext calculate_llm_prefill_model_context(size_t prompt_tokens,
+    size_t layers, size_t batch, size_t query_heads, size_t head_dimension) noexcept;
+
 /**
  * Backend-neutral exact prefill geometry, payload, and optional paged costs.
  *
@@ -218,13 +231,13 @@ struct LlmPrefillPlan {
   size_t final_query_tile_tokens = 0;
   size_t tile_count = 0;
   size_t attention_prefix_token_visits_per_sequence = 0;
-  size_t causal_token_pairs_per_sequence = 0;
+  std::optional<size_t> causal_token_pairs_per_sequence;
   size_t layer_count = 0;
   size_t batch_size = 0;
   size_t query_head_count = 0;
   size_t head_dimension = 0;
-  size_t logical_attention_pairs = 0;
-  size_t logical_attention_fma_terms = 0;
+  std::optional<size_t> logical_attention_pairs;
+  std::optional<size_t> logical_attention_fma_terms;
   size_t k_or_v_record_bytes_per_layer = 0;
   size_t kv_record_bytes_per_layer = 0;
   size_t kv_bytes_per_token = 0;

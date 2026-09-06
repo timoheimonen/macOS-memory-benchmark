@@ -623,6 +623,24 @@ bool checked_llm_prefill_floor_sum(
   return true;
 }
 
+LlmPrefillModelContext calculate_llm_prefill_model_context(size_t prompt_tokens,
+    size_t layers, size_t batch, size_t query_heads, size_t head_dimension) noexcept {
+  LlmPrefillModelContext context;
+  size_t pairs = 0;
+  if (checked_llm_prefill_triangular(prompt_tokens, pairs)) {
+    context.causal_token_pairs_per_sequence = pairs;
+    size_t owners = 0;
+    if (NumericUtils::checked_multiply(layers, batch, owners) &&
+        NumericUtils::checked_multiply(owners, query_heads, owners) &&
+        NumericUtils::checked_multiply(owners, pairs, pairs)) {
+      context.logical_attention_pairs = pairs;
+      if (NumericUtils::checked_multiply(pairs, head_dimension, pairs))
+        context.logical_attention_fma_terms = pairs;
+    }
+  }
+  return context;
+}
+
 LlmPrefillPlan resolve_llm_prefill_plan(
     const LlmPrefillPlanRequest& request) {
   LlmPrefillPlan plan;
@@ -703,31 +721,14 @@ LlmPrefillPlan resolve_llm_prefill_plan(
   }
   plan.attention_prefix_token_visits_per_sequence = full_tile_visits;
 
-  if (!checked_llm_prefill_triangular(
-          request.prompt_tokens,
-          plan.causal_token_pairs_per_sequence)) {
-    plan.reason_code = LlmPrefillReason::CAUSAL_TOKEN_PAIRS_OVERFLOW;
-    return plan;
-  }
+  const auto context = calculate_llm_prefill_model_context(request.prompt_tokens,
+      request.layer_count, request.batch_size, request.query_head_count, request.head_dimension);
+  plan.causal_token_pairs_per_sequence = context.causal_token_pairs_per_sequence;
+  plan.logical_attention_pairs = context.logical_attention_pairs;
+  plan.logical_attention_fma_terms = context.logical_attention_fma_terms;
   size_t layer_batch_count = 0;
-  if (!NumericUtils::checked_multiply(
-          request.layer_count, request.batch_size, layer_batch_count) ||
-      !NumericUtils::checked_multiply(
-          layer_batch_count, request.query_head_count,
-          plan.logical_attention_pairs) ||
-      !NumericUtils::checked_multiply(
-          plan.logical_attention_pairs,
-          plan.causal_token_pairs_per_sequence,
-          plan.logical_attention_pairs)) {
-    plan.reason_code =
-        LlmPrefillReason::LOGICAL_ATTENTION_PAIRS_OVERFLOW;
-    return plan;
-  }
-  if (!NumericUtils::checked_multiply(
-          plan.logical_attention_pairs, request.head_dimension,
-          plan.logical_attention_fma_terms)) {
-    plan.reason_code =
-        LlmPrefillReason::LOGICAL_ATTENTION_FMA_TERMS_OVERFLOW;
+  if (!NumericUtils::checked_multiply(request.layer_count, request.batch_size, layer_batch_count)) {
+    plan.reason_code = LlmPrefillReason::LOGICAL_ATTENTION_PAIRS_OVERFLOW;
     return plan;
   }
 

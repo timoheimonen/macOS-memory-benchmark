@@ -42,4 +42,10 @@ struct LlmHostEnvironmentSnapshot {
  */
 LlmHostEnvironmentSnapshot capture_llm_host_environment() noexcept;
 
+/** Stream SHA-256 of the executable path once on the cold command path.
+ * Returns empty on lookup/read failure. This binds a file, not signed execution
+ * attestation; concurrent replacement of that file is outside this evidence.
+ */
+std::string capture_llm_binary_sha256() noexcept;
+
 #endif  // LLM_ENVIRONMENT_H

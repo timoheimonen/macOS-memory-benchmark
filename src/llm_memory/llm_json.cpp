@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -507,14 +508,12 @@ OrderedJson methodology_json(const LlmMemoryWorkPlan& plan) {
                              : "worker-join-and-json-serialization");
 
   OrderedJson output;
-  output["methodology_version"] = plan.methodology_version;
   output["backend"] = llm_memory_backend_to_string(plan.backend);
   output["phase"] = llm_phase_to_string(plan.phase);
   output["kv_layout"] = llm_kv_layout_to_string(plan.kv_layout);
   output["work_unit_kind"] = llm_work_unit_kind_to_string(plan.work_unit_kind);
   output["weight_passes_per_work_unit"] = plan.weight_passes_per_work_unit;
   output["kv_replay_factor"] = plan.kv_replay_factor;
-  output["schedule_version"] = plan.component_identities.schedule_version;
   output["warmup_policy"] = "same-shape-excluded-steady-state-warm-memory";
   output["context_policy"] = plan.phase == LlmPhase::Decode ? "fixed-visible-context-including-current-token-slot"
                                                             : "full-prompt-population-with-tiled-causal-prefix-scans";
@@ -542,11 +541,8 @@ OrderedJson methodology_json(const LlmMemoryWorkPlan& plan) {
   output["maximum_accounted_bytes_per_task"] = decimal_string(Constants::LLM_MAX_ACCOUNTED_BYTES_PER_TASK);
   output["repeatability_cv_warning_threshold_pct"] = Constants::LLM_STREAMING_CV_WARNING_PCT;
   output["calibration_excluded_from_results"] = true;
+  output["snapshot_policy"] = "bounded-loop-snapshots";
   output["timed_region_exclusions"] = std::move(exclusions);
-  output["resource_abi_version"] = plan.component_identities.resource_abi_version;
-  output["buffer_pattern_version"] = plan.component_identities.buffer_pattern_version;
-  output["write_pattern_version"] = plan.component_identities.write_pattern_version;
-  output["checksum_pattern_version"] = plan.component_identities.checksum_pattern_version;
   return output;
 }
 
@@ -566,9 +562,7 @@ OrderedJson geometry_json(const LlmGeometry& geometry) {
         {"tile_count", decimal_string(geometry.prefill->tile_count)},
         {"attention_prefix_token_visits_per_sequence",
          decimal_string(geometry.prefill->attention_prefix_token_visits_per_sequence)},
-        {"causal_token_pairs_per_sequence", decimal_string(geometry.prefill->causal_token_pairs_per_sequence)},
-        {"logical_attention_pairs", decimal_string(geometry.prefill->logical_attention_pairs)},
-        {"logical_attention_fma_terms", decimal_string(geometry.prefill->logical_attention_fma_terms)}};
+        };
   }
 
   OrderedJson output;
@@ -900,18 +894,13 @@ OrderedJson statistics_json(const DescriptiveStatistics& statistics, bool availa
 }
 
 OrderedJson metric_aggregate_json(const LlmMetricAggregate& aggregate, const char* units) {
-  OrderedJson values = OrderedJson::array();
-  for (double value : aggregate.values) {
-    values.push_back(finite_or_null(value));
-  }
+  const size_t count = aggregate.statistics.sample_count;
   OrderedJson output;
   output["units"] = units;
-  output["sample_count"] = aggregate.values.size();
-  output["headline_semantics"] =
-      aggregate.values.empty() ? "unavailable" : (aggregate.values.size() == 1 ? "single_measurement" : "median_p50");
+  output["sample_count"] = count;
+  output["headline_semantics"] = count == 0 ? "unavailable" : count == 1 ? "single_measurement" : "median_p50";
   output["headline"] = optional_finite_or_null(aggregate.headline);
-  output["values"] = std::move(values);
-  output["statistics"] = statistics_json(aggregate.statistics, !aggregate.values.empty());
+  output["statistics"] = statistics_json(aggregate.statistics, count != 0);
   return output;
 }
 
@@ -919,7 +908,8 @@ OrderedJson scenario_aggregate_json(const LlmScenarioAggregate& aggregate) {
   OrderedJson output;
   output["scenario"] = llm_scenario_to_string(aggregate.scenario);
   output["status"] = std::string(aggregate.status);
-  output["stability_quality"] = std::string(aggregate.stability_quality);
+  output["observed_cv_classification"] = std::string(aggregate.observed_cv_classification);
+  output["accepted_measurement_ids"] = aggregate.accepted_measurement_ids;
   output["cv_warning_threshold_pct"] = Constants::LLM_STREAMING_CV_WARNING_PCT;
   output["synthetic_work_unit_latency_seconds"] =
       metric_aggregate_json(aggregate.work_unit_latency_seconds, "seconds_per_synthetic_memory_work_unit");
@@ -1133,7 +1123,7 @@ OrderedJson resources_json(const LlmMemoryWorkPlan& plan, const LlmResourcePrepa
   OrderedJson output;
   output["valid"] = preparation.valid;
   output["reason_code"] = preparation.reason_code;
-  output["model_plan_identity"] = non_empty_or_null(plan.plan_identity);
+  output["model_ref"] = plan.plan_identity.empty() ? OrderedJson(nullptr) : OrderedJson("resolved_plan");
   output["mappings"] = std::move(mappings);
   output["descriptors"] = std::move(descriptors);
   output["executor_auxiliary"] = executor_auxiliary_json(preparation.auxiliary);
@@ -1170,13 +1160,10 @@ OrderedJson model_work_plan_json(const LlmMemoryWorkPlan& plan) {
   OrderedJson output;
   output["valid"] = plan.valid;
   output["reason_code"] = plan.reason_code;
-  output["plan_identity"] = non_empty_or_null(plan.plan_identity);
-  output["methodology_version"] = plan.methodology_version;
   output["backend"] = llm_memory_backend_to_string(plan.backend);
   output["phase"] = llm_phase_to_string(plan.phase);
   output["kv_layout"] = llm_kv_layout_to_string(plan.kv_layout);
   output["work_unit_kind"] = llm_work_unit_kind_to_string(plan.work_unit_kind);
-  output["component_identity"] = non_empty_or_null(plan.component_identities.identity);
   output["weight_passes_per_work_unit"] = plan.weight_passes_per_work_unit;
   output["kv_replay_factor"] = plan.kv_replay_factor;
   output["requested_workers"] = number_or_null(cpu.requested_workers, cpu_available);
@@ -1202,7 +1189,9 @@ OrderedJson scenario_work_plan_json(const LlmScenarioWorkPlan& plan, LlmScenario
   output["work_unit_kind"] = llm_work_unit_kind_to_string(plan.work_unit_kind);
   output["kv_write_kind"] = llm_kv_write_kind_to_string(plan.kv_write_kind);
   output["explicit_iterations"] = available ? OrderedJson(plan.explicit_iterations) : OrderedJson(nullptr);
-  output["model_plan_identity"] = available ? non_empty_or_null(plan.model_plan_identity) : OrderedJson(nullptr);
+  output["work_policy"] = !available ? OrderedJson(nullptr) : OrderedJson(plan.explicit_iterations ?
+      "explicit_fixed_work" : "automatic_calibration");
+  output["model_ref"] = "resolved_plan";
   output["scenario_seed_uint64_decimal"] = decimal_or_null(plan.scenario_seed, available);
   output["work_units"] = number_or_null(plan.work_units, available);
   output["weight_read_bytes_per_work_unit"] = decimal_or_null(plan.weight_read_bytes_per_work_unit, available);
@@ -1226,22 +1215,6 @@ OrderedJson scenario_work_plan_json(const LlmScenarioWorkPlan& plan, LlmScenario
   output["maximum_work_units_by_guardrail"] = number_or_null(plan.maximum_work_units_by_guardrail, available);
   output["effective_maximum_work_units"] = number_or_null(plan.effective_maximum_work_units, available);
   output["plan_identity"] = available ? non_empty_or_null(plan.plan_identity) : OrderedJson(nullptr);
-  return output;
-}
-
-OrderedJson frozen_scenario_plans_json(const LlmFrozenScenarioPlans& frozen) {
-  OrderedJson scenarios = OrderedJson::array();
-  for (LlmScenario scenario : kScenarios) {
-    scenarios.push_back(scenario_work_plan_json(frozen.scenarios[scenario_index(scenario)], scenario));
-  }
-
-  OrderedJson output;
-  output["valid"] = frozen.valid;
-  output["reason_code"] = frozen.reason_code;
-  output["explicit_iterations"] = frozen.valid ? OrderedJson(frozen.explicit_iterations) : OrderedJson(nullptr);
-  output["model_plan_identity"] = frozen.valid ? non_empty_or_null(frozen.model_plan_identity) : OrderedJson(nullptr);
-  output["plan_identity"] = frozen.valid ? non_empty_or_null(frozen.plan_identity) : OrderedJson(nullptr);
-  output["scenarios"] = std::move(scenarios);
   return output;
 }
 
@@ -1329,7 +1302,7 @@ OrderedJson metal_grid_plan_json(const LlmMetalGridPlan& grid) {
   return output;
 }
 
-OrderedJson metal_task_evidence_json(const LlmMetalTaskEvidence& metal) {
+OrderedJson metal_task_evidence_json(const LlmMetalRuntimeEvidence& metal) {
   OrderedJson pipeline;
   pipeline["available"] = metal.timed_pipeline_available;
   pipeline["label"] = metal.timed_pipeline_available ? non_empty_or_null(metal.pipeline_label) : OrderedJson(nullptr);
@@ -1343,8 +1316,6 @@ OrderedJson metal_task_evidence_json(const LlmMetalTaskEvidence& metal) {
   timing["valid"] = metal.timing_evaluated ? OrderedJson(metal.timing_valid) : OrderedJson(nullptr);
   timing["gpu_start_seconds"] = metal.timing_evaluated ? finite_or_null(metal.gpu_start_seconds) : OrderedJson(nullptr);
   timing["gpu_end_seconds"] = metal.timing_evaluated ? finite_or_null(metal.gpu_end_seconds) : OrderedJson(nullptr);
-  timing["gpu_elapsed_seconds"] =
-      positive_finite_or_null(metal.gpu_elapsed_seconds, metal.timing_evaluated && metal.timing_valid);
   timing["host_submit_to_completion_seconds"] =
       positive_finite_or_null(metal.host_submit_to_completion_seconds, metal.host_timing_evaluated);
   timing["host_wait_seconds"] = positive_finite_or_null(metal.host_wait_seconds, metal.host_timing_evaluated);
@@ -1361,38 +1332,11 @@ OrderedJson metal_task_evidence_json(const LlmMetalTaskEvidence& metal) {
   commands["timed_compute_encoders"] = metal.timed_compute_encoder_count;
   commands["timed_workload_dispatches"] = metal.timed_workload_dispatch_count;
 
-  OrderedJson checksum;
-  checksum["algorithm_version"] = metal.checksum_algorithm_version;
-  checksum["evaluated"] = metal.checksum_evaluated;
-  checksum["valid"] = metal.checksum_evaluated ? OrderedJson(metal.checksum_valid) : OrderedJson(nullptr);
-  checksum["expected"] =
-      metal.checksum_evaluated ? metal_dual_mod32_checksum_json(metal.expected_checksum) : OrderedJson(nullptr);
-  checksum["actual"] =
-      metal.checksum_evaluated ? metal_dual_mod32_checksum_json(metal.actual_checksum) : OrderedJson(nullptr);
-
-  OrderedJson validation;
-  validation["post_validation_evaluated"] = metal.post_validation_evaluated;
-  validation["post_validation_valid"] =
-      metal.post_validation_evaluated ? OrderedJson(metal.post_validation_valid) : OrderedJson(nullptr);
-  validation["kv_write_evaluated"] = metal.kv_write_validation_evaluated;
-  validation["kv_write_valid"] =
-      metal.kv_write_validation_evaluated
-          ? OrderedJson(metal.kv_write_validation_valid)
-          : OrderedJson(nullptr);
-  validation["padding_canary_applicable"] = metal.padding_canary_applicable;
-  validation["padding_canary_evaluated"] =
-      metal.padding_canary_applicable ? OrderedJson(metal.padding_canary_evaluated) : OrderedJson(nullptr);
-  validation["padding_canary_valid"] = metal.padding_canary_applicable && metal.padding_canary_evaluated
-                                           ? OrderedJson(metal.padding_canary_valid)
-                                           : OrderedJson(nullptr);
-
   OrderedJson output;
   output["pipeline"] = std::move(pipeline);
   output["grid"] = metal.grid_plan_available ? metal_grid_plan_json(metal.grid_plan) : OrderedJson(nullptr);
   output["timing"] = std::move(timing);
   output["commands"] = std::move(commands);
-  output["checksum"] = std::move(checksum);
-  output["validation"] = std::move(validation);
   output["error"] = metal_error_json(metal.error);
   return output;
 }
@@ -1408,12 +1352,11 @@ bool compact_checksum_evaluated(const LlmTaskExecutionEvidence& execution) noexc
 }
 
 bool measurement_checksum_evaluated(const LlmMeasurementState& measurement) noexcept {
-  const LlmExecutorResult* cpu = get_llm_cpu_task_evidence(measurement.execution);
+  const LlmCpuRuntimeEvidence* cpu = get_llm_cpu_task_evidence(measurement.execution);
   if (measurement.execution_evidence_available && cpu != nullptr) {
-    return cpu->checksum_evaluated && cpu->expected_checksums.size() == cpu->requested_workers &&
-           cpu->actual_checksums.size() == cpu->requested_workers;
+    return cpu->checksum_evaluated && cpu->actual_checksums.size() == cpu->requested_workers;
   }
-  const LlmMetalTaskEvidence* const metal = get_llm_metal_task_evidence(measurement.execution);
+  const LlmMetalRuntimeEvidence* const metal = get_llm_metal_task_evidence(measurement.execution);
   return measurement.execution_evidence_available && metal != nullptr && metal->checksum_evaluated;
 }
 
@@ -1424,10 +1367,44 @@ const char* checksum_status(bool evaluated, bool valid) noexcept {
   return valid ? "valid" : "invalid";
 }
 
+const char* cold_check_name(LlmColdCheckKind kind) noexcept {
+  switch (kind) {
+    case LlmColdCheckKind::PostValidationStructure: return "post-validation-structure";
+    case LlmColdCheckKind::KvAppendFinal: return "kv-append-final";
+    case LlmColdCheckKind::KvPrefillFinalSamples: return "kv-prefill-final-samples";
+    case LlmColdCheckKind::KvAppendUnchanged: return "kv-append-unchanged";
+    case LlmColdCheckKind::KvPaddingCanary: return "kv-padding-canary";
+  }
+  return "unknown";
+}
+
+OrderedJson cold_checks_json(const LlmColdChecks& expected, const LlmColdChecks* observed) {
+  OrderedJson output = OrderedJson::array();
+  for (size_t i = 0; i < expected.size(); ++i) {
+    const bool applicable = expected[i].applicable;
+    const bool matched = observed && (*observed)[i].kind == expected[i].kind &&
+        (*observed)[i].applicable == applicable;
+    const bool evaluated = matched && (*observed)[i].evaluated;
+    output.push_back(OrderedJson{{"kind", cold_check_name(expected[i].kind)}, {"applicable", applicable},
+        {"evaluated", applicable ? OrderedJson(evaluated) : OrderedJson(nullptr)},
+        {"valid", applicable && evaluated ? OrderedJson((*observed)[i].valid) : OrderedJson(nullptr)},
+        {"reason_code", !applicable ? "not-applicable" : !matched ? "execution-evidence-unavailable" :
+            std::string((*observed)[i].reason_code)}});
+  }
+  return output;
+}
+
+OrderedJson cpu_raw_json(const std::optional<MachTimingSnapshot>& raw) {
+  if (!raw) return nullptr;
+  return OrderedJson{{"start_ticks", decimal_string(raw->start_ticks)},
+      {"stop_ticks", decimal_string(raw->stop_ticks)}, {"delta_ticks", decimal_string(raw->delta_ticks)},
+      {"timebase_numer", raw->numer}, {"timebase_denom", raw->denom}};
+}
+
 OrderedJson compact_execution_json(const LlmTaskExecutionEvidence& execution, std::string_view fallback_reason_code,
-                                   std::string_view checksum_algorithm_version) {
+                                   std::string_view /*checksum_algorithm_version*/) {
   const bool available = execution.available;
-  const LlmMetalTaskEvidence* const metal =
+  const LlmMetalRuntimeEvidence* const metal =
       available && execution.metal_evidence_available && execution.metal.has_value() ? &*execution.metal : nullptr;
   const bool checksum_evaluated = compact_checksum_evaluated(execution);
   const bool checksum_valid = metal != nullptr ? metal->checksum_valid : execution.checksum_valid;
@@ -1435,12 +1412,7 @@ OrderedJson compact_execution_json(const LlmTaskExecutionEvidence& execution, st
   OrderedJson checksum;
   checksum["status"] = checksum_status(checksum_evaluated, checksum_valid);
   checksum["reason_code"] = reason_code;
-  checksum["algorithm_version"] =
-      metal != nullptr ? metal->checksum_algorithm_version : std::string(checksum_algorithm_version);
   checksum["checksum_valid"] = checksum_evaluated ? OrderedJson(checksum_valid) : OrderedJson(nullptr);
-  checksum["expected_run_checksum"] = !checksum_evaluated ? OrderedJson(nullptr)
-                                      : metal != nullptr  ? metal_dual_mod32_checksum_json(metal->expected_checksum)
-                                                          : run_checksum_json(execution.expected_run_checksum);
   checksum["actual_run_checksum"] = !checksum_evaluated ? OrderedJson(nullptr)
                                     : metal != nullptr  ? metal_dual_mod32_checksum_json(metal->actual_checksum)
                                                         : run_checksum_json(execution.actual_run_checksum);
@@ -1451,6 +1423,7 @@ OrderedJson compact_execution_json(const LlmTaskExecutionEvidence& execution, st
   output["valid"] = available ? OrderedJson(execution.valid) : OrderedJson(nullptr);
   output["elapsed_seconds"] = positive_finite_or_null(
       execution.elapsed_seconds, available && execution.timing_evaluated && execution.timing_valid);
+  output["timing"]["cpu_raw"] = cpu_raw_json(execution.cpu_raw);
   const bool cpu_available = available && execution.cpu_evidence_available;
   output["requested_workers"] = number_or_null(execution.requested_workers, cpu_available);
   output["created_workers"] = number_or_null(execution.created_workers, cpu_available);
@@ -1468,41 +1441,47 @@ OrderedJson compact_execution_json(const LlmTaskExecutionEvidence& execution, st
   return output;
 }
 
+OrderedJson plan_ref_json(const LlmMemoryResult& result, LlmPlanHandle handle,
+                          std::optional<LlmScenario> expected_scenario = std::nullopt) {
+  if (handle == kLlmNoTaskIndex) return nullptr;
+  if (handle >= result.scenario_plans.size() || result.snapshot_plan_refs.size() != result.scenario_plans.size() ||
+      result.snapshot_plan_order.size() != result.scenario_plans.size() ||
+      result.snapshot_plan_refs[handle] >= result.snapshot_plan_order.size() ||
+      result.snapshot_plan_order[result.snapshot_plan_refs[handle]] != handle) {
+    throw std::invalid_argument("invalid-canonical-plan-reference");
+  }
+  if (expected_scenario && result.scenario_plans[handle].plan.scenario != *expected_scenario)
+    throw std::invalid_argument("contradictory-canonical-plan-scenario");
+  return result.snapshot_plan_refs[handle];
+}
+
 OrderedJson calibration_attempt_json(const LlmCalibrationAttempt& attempt, size_t attempt_index,
-                                     std::string_view checksum_algorithm_version) {
-  const bool plan_available = !attempt.work_plan_identity.empty();
+                                     const LlmMemoryResult& result, const LlmMemoryWorkPlan& model_plan, std::string_view checksum_algorithm_version) {
   OrderedJson output;
   output["attempt_index"] = attempt_index;
   output["scenario"] = llm_scenario_to_string(attempt.scenario);
-  output["work_unit_kind"] = llm_work_unit_kind_to_string(attempt.work_unit_kind);
-  output["kv_write_kind"] = llm_kv_write_kind_to_string(attempt.kv_write_kind);
+  output["plan_ref"] = plan_ref_json(result, attempt.plan_handle, attempt.scenario);
   output["purpose"] = std::string(attempt.purpose);
-  output["explicit_iterations"] = attempt.explicit_iterations;
-  output["work_units"] = number_or_null(attempt.work_units, plan_available);
-  output["weight_read_bytes"] = decimal_or_null(attempt.weight_read_bytes, plan_available);
-  output["kv_read_bytes"] = decimal_or_null(attempt.kv_read_bytes, plan_available);
-  output["kv_write_bytes"] = decimal_or_null(attempt.kv_write_bytes, plan_available);
-  output["effective_model_payload_bytes"] = decimal_or_null(attempt.effective_model_payload_bytes, plan_available);
-  output["layout_metadata_lookup_count"] = decimal_or_null(attempt.layout_metadata_lookup_count, plan_available);
-  output["layout_metadata_read_bytes"] = decimal_or_null(attempt.layout_metadata_read_bytes, plan_available);
-  output["task_accounted_bytes"] = decimal_or_null(attempt.task_accounted_bytes, plan_available);
-  output["work_plan_identity"] = non_empty_or_null(attempt.work_plan_identity);
   output["duration_quality"] = std::string(attempt.duration_quality);
   output["terminal"] = attempt.terminal;
   output["valid"] = attempt.valid;
   output["reason_code"] = std::string(attempt.reason_code);
   output["execution"] = compact_execution_json(attempt.execution, attempt.reason_code, checksum_algorithm_version);
+  const auto& evidence = attempt.execution;
+  const LlmColdChecks* observed = !evidence.available ? nullptr : evidence.cpu_evidence_available ?
+      &evidence.cpu_cold_checks : evidence.metal ? &evidence.metal->cold_checks : nullptr;
+  output["execution"]["validation"]["checks"] = cold_checks_json(required_llm_cold_checks(model_plan, attempt.scenario), observed);
   return output;
 }
 
-OrderedJson excluded_calibration_json(const LlmMemoryResult& result, std::string_view checksum_algorithm_version) {
+OrderedJson excluded_calibration_json(const LlmMemoryResult& result, const LlmMemoryWorkPlan& model_plan, std::string_view checksum_algorithm_version) {
   OrderedJson output = OrderedJson::object();
   for (LlmScenario scenario : kScenarios) {
     const size_t index = scenario_index(scenario);
     OrderedJson attempts = OrderedJson::array();
     for (size_t attempt_index = 0; attempt_index < result.calibration_attempts[index].size(); ++attempt_index) {
       attempts.push_back(calibration_attempt_json(result.calibration_attempts[index][attempt_index], attempt_index,
-                                                  checksum_algorithm_version));
+                                                  result, model_plan, checksum_algorithm_version));
     }
     output[llm_scenario_to_string(scenario)] = std::move(attempts);
   }
@@ -1555,11 +1534,13 @@ OrderedJson counters_json(const LlmMemoryResult& result) {
 OrderedJson checkpoint_lifecycle_json(const LlmMemoryResult& result) {
   OrderedJson output;
   output["checkpoint_failed"] = result.checkpoint_failed;
-  output["logical_checkpoint_attempts"] = result.logical_checkpoint_attempts;
-  output["successful_logical_checkpoints"] = result.successful_logical_checkpoints;
-  output["terminal_checkpoint_attempted"] = result.terminal_checkpoint_attempted;
-  output["terminal_checkpoint_completed"] = result.terminal_checkpoint_completed;
-  output["checkpoint_policy"] = "after-each-terminal-measurement-and-at-command-terminal";
+  output["observation_point"] = "before-current-snapshot-preparation";
+  output["prior_file_writer_attempts"] = result.prior_file_writer_attempts;
+  output["prior_successful_file_writes"] = result.prior_successful_file_writes;
+  output["current_request"] = std::string(result.snapshot_request);
+  output["current_persistence_success"] = nullptr;
+  output["snapshot_interval_loops"] = result.snapshot_interval_loops;
+  output["checkpoint_policy"] = "bounded-loop-snapshots";
   output["file_checkpoint_failure_is_terminal_and_not_retried"] = true;
   output["stdout_intermediate_checkpoints_are_lazy"] = true;
   return output;
@@ -1594,9 +1575,9 @@ OrderedJson loop_records_json(const LlmMemoryResult& result) {
 OrderedJson measurement_execution_json(const LlmMeasurementState& measurement) {
   const bool attempted = measurement.attempted;
   const bool available = measurement.execution_evidence_available;
-  const LlmTaskExecutionResult& execution = measurement.execution;
-  const LlmExecutorResult* cpu = get_llm_cpu_task_evidence(execution);
-  const LlmMetalTaskEvidence* const metal = get_llm_metal_task_evidence(execution);
+  const LlmRetainedExecution& execution = measurement.execution;
+  const LlmCpuRuntimeEvidence* cpu = get_llm_cpu_task_evidence(execution);
+  const LlmMetalRuntimeEvidence* const metal = get_llm_metal_task_evidence(execution);
   const bool valid = available && execution.status == LlmTaskExecutionStatus::Complete &&
                      execution.reason_code == LlmBackendReason::VALID && execution.validation.evaluated &&
                      execution.validation.valid && execution.timing.evaluated && execution.timing.valid;
@@ -1604,8 +1585,11 @@ OrderedJson measurement_execution_json(const LlmMeasurementState& measurement) {
   output["status"] = !attempted ? "not_run" : (!available ? "unavailable" : (valid ? "valid" : "invalid"));
   output["reason_code"] = available ? execution.reason_code : std::string(measurement.reason_code);
   output["valid"] = available ? OrderedJson(valid) : OrderedJson(nullptr);
-  output["elapsed_seconds"] = positive_finite_or_null(
-      execution.timing.elapsed_seconds, available && execution.timing.evaluated && execution.timing.valid);
+  output["timing"] = OrderedJson{{"evaluated", available && execution.timing.evaluated},
+      {"valid", available && execution.timing.evaluated ? OrderedJson(execution.timing.valid) : OrderedJson(nullptr)},
+      {"diagnostic_elapsed_seconds", measurement.status != LlmMeasurementStatus::Measured &&
+          available && execution.timing.evaluated ? finite_or_null(execution.timing.elapsed_seconds) : OrderedJson(nullptr)}};
+  output["timing"]["cpu_raw"] = cpu_raw_json(execution.timing.cpu_raw);
   const bool cpu_available = available && cpu != nullptr;
   output["requested_workers"] = number_or_null(cpu_available ? cpu->requested_workers : 0, cpu_available);
   output["created_workers"] = number_or_null(cpu_available ? cpu->created_workers : 0, cpu_available);
@@ -1616,144 +1600,101 @@ OrderedJson measurement_execution_json(const LlmMeasurementState& measurement) {
   output["kernel_succeeded"] = cpu_available ? OrderedJson(cpu->kernel_succeeded) : OrderedJson(nullptr);
   output["timer_started"] = cpu_available ? OrderedJson(cpu->timer_started) : OrderedJson(nullptr);
   output["timer_stopped"] = cpu_available ? OrderedJson(cpu->timer_stopped) : OrderedJson(nullptr);
-  output["post_validation_evaluated"] =
-      cpu_available ? OrderedJson(cpu->post_validation_evaluated) : OrderedJson(nullptr);
-  output["post_validation_valid"] =
-      cpu_available && cpu->post_validation_evaluated ? OrderedJson(cpu->post_validation_valid) : OrderedJson(nullptr);
   if (metal != nullptr) {
     output["metal"] = metal_task_evidence_json(*metal);
   }
   return output;
 }
 
-OrderedJson measurement_checksum_json(const LlmMeasurementState& measurement, const LlmMemoryWorkPlan& model_plan) {
+OrderedJson measurement_checksum_json(const LlmMeasurementState& measurement, const LlmMemoryWorkPlan& /*model_plan*/) {
   const bool evaluated = measurement_checksum_evaluated(measurement);
-  const LlmTaskExecutionResult& execution = measurement.execution;
-  const LlmExecutorResult* cpu = get_llm_cpu_task_evidence(execution);
-  const LlmMetalTaskEvidence* const metal = get_llm_metal_task_evidence(execution);
+  const LlmRetainedExecution& execution = measurement.execution;
+  const LlmCpuRuntimeEvidence* cpu = get_llm_cpu_task_evidence(execution);
+  const LlmMetalRuntimeEvidence* const metal = get_llm_metal_task_evidence(execution);
   const bool checksum_valid =
       evaluated && ((cpu != nullptr && cpu->checksum_valid) || (metal != nullptr && metal->checksum_valid));
   OrderedJson output;
   output["status"] = checksum_status(evaluated, checksum_valid);
   output["reason_code"] =
       measurement.execution_evidence_available ? execution.reason_code : std::string(measurement.reason_code);
-  output["initialization_pattern_version"] = model_plan.component_identities.buffer_pattern_version;
-  output["write_pattern_version"] = model_plan.component_identities.write_pattern_version;
-  output["checksum_pattern_version"] = model_plan.component_identities.checksum_pattern_version;
   output["checksum_valid"] = evaluated ? OrderedJson(checksum_valid) : OrderedJson(nullptr);
-  output["expected_worker_checksums"] =
-      evaluated && cpu != nullptr ? worker_checksums_json(cpu->expected_checksums) : OrderedJson(nullptr);
   output["actual_worker_checksums"] =
       evaluated && cpu != nullptr ? worker_checksums_json(cpu->actual_checksums) : OrderedJson(nullptr);
-  output["expected_run_checksum"] = !evaluated       ? OrderedJson(nullptr)
-                                    : cpu != nullptr ? run_checksum_json(cpu->expected_run_checksum)
-                                                     : metal_dual_mod32_checksum_json(metal->expected_checksum);
   output["actual_run_checksum"] = !evaluated       ? OrderedJson(nullptr)
                                   : cpu != nullptr ? run_checksum_json(cpu->actual_run_checksum)
                                                    : metal_dual_mod32_checksum_json(metal->actual_checksum);
   return output;
 }
 
-OrderedJson calibration_indexes_json(size_t count) {
-  OrderedJson output = OrderedJson::array();
-  for (size_t index = 0; index < count; ++index) {
-    output.push_back(index);
-  }
-  return output;
-}
-
-OrderedJson measurement_json(const LlmMeasurementState& measurement, const LlmMemoryResult& result,
+OrderedJson measurement_json(const LlmMeasurementState& measurement, size_t id, const LlmMemoryResult& result,
                              const LlmMemoryWorkPlan& model_plan) {
-  const bool plan_available = measurement.frozen_plan_index < kLlmScenarioCount &&
-                              result.frozen_scenario_plans.scenarios[measurement.frozen_plan_index].valid;
-  const LlmScenarioWorkPlan* frozen_plan =
-      plan_available ? &result.frozen_scenario_plans.scenarios[measurement.frozen_plan_index] : nullptr;
-
-  OrderedJson working_set;
-  working_set["bytes"] = decimal_string(measurement.working_set_bytes);
-  working_set["full_size_physical_mappings"] = true;
-  working_set["cacheable"] = true;
-  working_set["kv_layout"] = llm_kv_layout_to_string(model_plan.kv_layout);
-  working_set["fixed_visible_context_tokens"] = model_plan.geometry.decode.has_value()
-                                                    ? OrderedJson(model_plan.geometry.decode->visible_context_tokens)
-                                                    : OrderedJson(nullptr);
-  working_set["current_token_slot_included"] =
-      model_plan.phase == LlmPhase::Decode ? OrderedJson(true) : OrderedJson(nullptr);
-
+  const auto metrics = derive_llm_measurement_metrics(measurement);
+  const bool measured = measurement.status == LlmMeasurementStatus::Measured;
+  const auto& completed = measurement.execution.completion;
   OrderedJson output;
+  output["measurement_id"] = id;
+  output["plan_ref"] = plan_ref_json(result, measurement.plan_handle, measurement.scenario);
   output["scenario"] = llm_scenario_to_string(measurement.scenario);
-  output["work_unit_kind"] = llm_work_unit_kind_to_string(measurement.work_unit_kind);
-  output["kv_write_kind"] = llm_kv_write_kind_to_string(measurement.kv_write_kind);
   output["loop_index"] = measurement.loop_index;
   output["order_position"] = measurement.order_position;
   output["status"] = llm_measurement_status_to_string(measurement.status);
   output["reason_code"] = std::string(measurement.reason_code);
   output["attempted"] = measurement.attempted;
-  const bool workers_applicable = model_plan.backend == LlmMemoryBackend::Cpu;
-  output["requested_workers"] = number_or_null(measurement.requested_workers, workers_applicable);
-  output["effective_workers"] = number_or_null(measurement.effective_workers, workers_applicable);
-  output["qos_successful_workers"] = number_or_null(measurement.qos_successful_workers,
-                                                    workers_applicable && measurement.execution_evidence_available);
-  output["qos_failed_workers"] =
-      number_or_null(measurement.qos_failed_workers, workers_applicable && measurement.execution_evidence_available);
-  output["frozen_plan_index"] = number_or_null(measurement.frozen_plan_index, plan_available);
-  output["frozen_work_plan_identity"] =
-      frozen_plan == nullptr ? OrderedJson(nullptr) : non_empty_or_null(frozen_plan->plan_identity);
-  output["scenario_seed_uint64_decimal"] =
-      frozen_plan == nullptr ? OrderedJson(nullptr) : decimal_string(frozen_plan->scenario_seed);
-  output["explicit_iterations"] = plan_available ? OrderedJson(measurement.explicit_iterations) : OrderedJson(nullptr);
-  output["work_policy"] =
-      !plan_available ? OrderedJson(nullptr)
-                      : OrderedJson(measurement.explicit_iterations ? "explicit_fixed_work" : "automatic_calibration");
+  const auto* cpu_plan = get_llm_cpu_execution_plan(model_plan);
+  const auto* cpu_runtime = get_llm_cpu_task_evidence(measurement.execution);
+  output["requested_workers"] = number_or_null(cpu_plan ? cpu_plan->requested_workers : 0, cpu_plan != nullptr);
+  output["effective_workers"] = number_or_null(cpu_plan ? cpu_plan->effective_workers : 0, cpu_plan != nullptr);
+  output["qos_successful_workers"] = number_or_null(cpu_runtime ? cpu_runtime->qos_successful_workers : 0,
+      measurement.execution_evidence_available && cpu_runtime != nullptr);
+  output["qos_failed_workers"] = number_or_null(cpu_runtime ? cpu_runtime->qos_failed_workers : 0,
+      measurement.execution_evidence_available && cpu_runtime != nullptr);
+  const size_t attempts = result.calibration_attempt_counts[scenario_index(measurement.scenario)];
+  output["calibration_attempt_count"] = attempts;
+  OrderedJson attempt_indexes = OrderedJson::array();
+  for (size_t index = 0; index < attempts; ++index) attempt_indexes.push_back(index);
+  output["calibration_attempt_indexes"] = std::move(attempt_indexes);
+  output["working_set"] = OrderedJson{{"bytes", decimal_string(model_plan.geometry.total_data_mapping_bytes)},
+      {"full_size_physical_mappings", true}, {"cacheable", true},
+      {"kv_layout", llm_kv_layout_to_string(model_plan.kv_layout)},
+      {"fixed_visible_context_tokens", model_plan.geometry.decode ?
+          OrderedJson(model_plan.geometry.decode->visible_context_tokens) : OrderedJson(nullptr)},
+      {"current_token_slot_included", model_plan.phase == LlmPhase::Decode ? OrderedJson(true) : OrderedJson(nullptr)}};
+  const auto* canonical = find_llm_scenario_plan(result, measurement.plan_handle);
+  const bool fractions = canonical && measurement.scenario == LlmScenario::Mixed &&
+      canonical->plan.effective_model_payload_bytes_per_work_unit != 0;
+  const auto fraction = [&](size_t bytes) -> OrderedJson {
+    return fractions ? finite_or_null(static_cast<double>(static_cast<long double>(bytes) /
+        canonical->plan.effective_model_payload_bytes_per_work_unit)) : OrderedJson(nullptr);
+  };
+  output["weight_payload_fraction"] = fraction(canonical ? canonical->plan.weight_read_bytes_per_work_unit : 0);
+  output["kv_read_payload_fraction"] = fraction(canonical ? canonical->plan.kv_read_bytes_per_work_unit : 0);
+  output["kv_write_payload_fraction"] = fraction(canonical ? canonical->plan.kv_write_bytes_per_work_unit : 0);
   output["duration_quality"] = std::string(measurement.duration_quality);
-  output["calibration_attempt_count"] = measurement.calibration_attempt_count;
-  output["calibration_attempt_indexes"] = calibration_indexes_json(measurement.calibration_attempt_count);
-  // Work-unit counts remain JSON integers, while all exact potentially-large
-  // counts and byte quantities remain decimal strings, including zero-valued
-  // not-run records. This keeps field types independent of run status.
-  output["planned_work_units"] = measurement.planned_work_units;
-  output["completed_work_units"] = measurement.completed_work_units;
-  output["weight_read_bytes_per_work_unit"] = decimal_string(measurement.weight_read_bytes_per_work_unit);
-  output["kv_read_bytes_per_work_unit"] = decimal_string(measurement.kv_read_bytes_per_work_unit);
-  output["kv_write_bytes_per_work_unit"] = decimal_string(measurement.kv_write_bytes_per_work_unit);
-  output["effective_model_payload_bytes_per_work_unit"] =
-      decimal_string(measurement.effective_model_payload_bytes_per_work_unit);
-  output["layout_metadata_lookup_count_per_work_unit"] =
-      decimal_string(measurement.layout_metadata_lookup_count_per_work_unit);
-  output["layout_metadata_read_bytes_per_work_unit"] =
-      decimal_string(measurement.layout_metadata_read_bytes_per_work_unit);
-  output["accounted_bytes_per_work_unit"] = decimal_string(measurement.accounted_bytes_per_work_unit);
-  output["planned_weight_read_bytes"] = decimal_string(measurement.planned_weight_read_bytes);
-  output["planned_kv_read_bytes"] = decimal_string(measurement.planned_kv_read_bytes);
-  output["planned_kv_write_bytes"] = decimal_string(measurement.planned_kv_write_bytes);
-  output["planned_effective_model_payload_bytes"] = decimal_string(measurement.planned_effective_model_payload_bytes);
-  output["completed_effective_model_payload_bytes"] =
-      decimal_string(measurement.completed_effective_model_payload_bytes);
-  output["planned_layout_metadata_lookup_count"] = decimal_string(measurement.planned_layout_metadata_lookup_count);
-  output["completed_layout_metadata_lookup_count"] = decimal_string(measurement.completed_layout_metadata_lookup_count);
-  output["planned_layout_metadata_read_bytes"] = decimal_string(measurement.planned_layout_metadata_read_bytes);
-  output["completed_layout_metadata_read_bytes"] = decimal_string(measurement.completed_layout_metadata_read_bytes);
-  output["planned_task_accounted_bytes"] = decimal_string(measurement.planned_task_accounted_bytes);
-  output["completed_task_accounted_bytes"] = decimal_string(measurement.completed_task_accounted_bytes);
-  output["elapsed_seconds"] = optional_finite_or_null(measurement.elapsed_seconds);
-  output["synthetic_work_unit_latency_seconds"] =
-      optional_finite_or_null(measurement.synthetic_work_unit_latency_seconds);
-  output["synthetic_memory_work_units_per_second"] =
-      optional_finite_or_null(measurement.synthetic_memory_work_units_per_second);
-  output["effective_model_payload_gb_s"] = optional_finite_or_null(measurement.effective_model_payload_gb_s);
-  output["weight_payload_fraction"] = optional_finite_or_null(measurement.weight_payload_fraction);
-  output["kv_read_payload_fraction"] = optional_finite_or_null(measurement.kv_read_payload_fraction);
-  output["kv_write_payload_fraction"] = optional_finite_or_null(measurement.kv_write_payload_fraction);
-  output["working_set"] = std::move(working_set);
+  output["completed_work_units"] = completed.completed_work_units;
+  output["completed_effective_model_payload_bytes"] = decimal_string(completed.completed_effective_model_payload_bytes);
+  output["completed_layout_metadata_lookup_count"] = decimal_string(completed.completed_layout_metadata_lookup_count);
+  output["completed_layout_metadata_read_bytes"] = decimal_string(completed.completed_layout_metadata_read_bytes);
+  output["completed_task_accounted_bytes"] = decimal_string(completed.completed_task_accounted_bytes);
+  output["completion_derivation"] = measured && model_plan.backend == LlmMemoryBackend::Cpu
+      ? OrderedJson("accepted-plan-derived") : OrderedJson(nullptr);
+  output["elapsed_seconds"] = positive_finite_or_null(measurement.execution.timing.elapsed_seconds, measured);
+  output["synthetic_work_unit_latency_seconds"] = optional_finite_or_null(metrics.latency_seconds);
+  output["synthetic_memory_work_units_per_second"] = optional_finite_or_null(metrics.work_units_per_second);
+  output["effective_model_payload_gb_s"] = optional_finite_or_null(metrics.payload_gb_s);
   output["execution"] = measurement_execution_json(measurement);
   output["checksum"] = measurement_checksum_json(measurement, model_plan);
+  const auto* cpu = get_llm_cpu_task_evidence(measurement.execution);
+  const auto* metal = get_llm_metal_task_evidence(measurement.execution);
+  const LlmColdChecks* observed = !measurement.execution_evidence_available ? nullptr :
+      cpu ? &cpu->cold_checks : metal ? &metal->cold_checks : nullptr;
+  output["execution"]["validation"]["checks"] = cold_checks_json(required_llm_cold_checks(model_plan, measurement.scenario), observed);
   return output;
 }
 
 OrderedJson measurements_json(const LlmMemoryResult& result, const LlmMemoryWorkPlan& model_plan) {
   OrderedJson output = OrderedJson::array();
-  for (const LlmMeasurementState& measurement : result.measurements) {
-    output.push_back(measurement_json(measurement, result, model_plan));
+  for (size_t id = 0; id < result.measurements.size(); ++id) {
+    output.push_back(measurement_json(result.measurements[id], id, result, model_plan));
   }
   return output;
 }
@@ -1774,24 +1715,55 @@ OrderedJson software_json(const LlmResultMetadata& metadata) {
   return output;
 }
 
-OrderedJson resolved_plan_json(const LlmMemoryWorkPlan& plan, const LlmFrozenScenarioPlans& frozen,
+OrderedJson resolved_plan_json(const LlmMemoryWorkPlan& plan, const LlmMemoryResult& result,
                                const LlmBackendEvidence& backend_evidence) {
   OrderedJson output;
   output["valid"] = plan.valid;
   output["reason_code"] = plan.reason_code;
   output["plan_identity"] = non_empty_or_null(plan.plan_identity);
-  output["methodology_version"] = plan.methodology_version;
   output["backend"] = llm_memory_backend_to_string(plan.backend);
   output["phase"] = llm_phase_to_string(plan.phase);
   output["kv_layout"] = llm_kv_layout_to_string(plan.kv_layout);
   output["work_unit_kind"] = llm_work_unit_kind_to_string(plan.work_unit_kind);
   output["geometry"] = geometry_json(plan.geometry);
+  OrderedJson context = nullptr;
+  if (plan.geometry.prefill) {
+    context = OrderedJson::object();
+    const auto append = [&](const char* name, const std::optional<size_t>& quantity) {
+      context[name] = quantity ? decimal_string(*quantity) : OrderedJson(nullptr);
+      context[std::string(name) + "_reason_code"] = quantity ? "valid" : "arithmetic-overflow";
+    };
+    append("causal_token_pairs_per_sequence", plan.geometry.prefill->causal_token_pairs_per_sequence);
+    append("logical_attention_pairs", plan.geometry.prefill->logical_attention_pairs);
+    append("logical_attention_fma_terms", plan.geometry.prefill->logical_attention_fma_terms);
+  }
+  output["model_context"] = OrderedJson{{"prefill", std::move(context)}};
   output["layout"] = layout_json(plan, backend_evidence);
   output["resources"] = resolved_resources_json(plan);
   output["component_identities"] = component_identities_json(plan.component_identities);
+  output["component_identities"]["run_policy_version"] = "llm-run-policy-bounded-loop-snapshots-v1";
   output["methodology"] = methodology_json(plan);
   output["model_work_plan"] = model_work_plan_json(plan);
-  output["frozen_scenario_work_plans"] = frozen_scenario_plans_json(frozen);
+  OrderedJson plans = OrderedJson::array();
+  for (auto handle : result.snapshot_plan_order) {
+    (void)plan_ref_json(result, handle);
+    const auto& entry = result.scenario_plans.at(handle);
+    OrderedJson item = scenario_work_plan_json(entry.plan, entry.plan.scenario);
+    const auto& expected = entry.expected;
+    item["expected_checksum"] = OrderedJson{
+        {"status", expected.available ? "available" : "unavailable"},
+        {"reason_code", expected.reason_code},
+        {"expected_worker_checksums", expected.available && plan.backend == LlmMemoryBackend::Cpu
+            ? worker_checksums_json(expected.cpu_workers) : OrderedJson(nullptr)},
+        {"expected_run_checksum", !expected.available ? OrderedJson(nullptr) : plan.backend == LlmMemoryBackend::Cpu
+            ? run_checksum_json(expected.cpu_run) : metal_dual_mod32_checksum_json(expected.metal_run)}};
+    plans.push_back(std::move(item));
+  }
+  output["scenario_plans"] = std::move(plans);
+  OrderedJson frozen = OrderedJson::object();
+  for (auto scenario : kScenarios) frozen[llm_scenario_to_string(scenario)] =
+      plan_ref_json(result, result.frozen_plan_handles[scenario_index(scenario)], scenario);
+  output["frozen_plan_refs"] = std::move(frozen);
   return output;
 }
 
@@ -1995,7 +1967,7 @@ OrderedJson backend_evidence_json(const LlmMemoryWorkPlan& plan, const LlmBacken
 OrderedJson calibration_json(const LlmMemoryResult& result, const LlmMemoryWorkPlan& model_plan) {
   OrderedJson output;
   output["excluded_from_results"] = true;
-  output["attempts"] = excluded_calibration_json(result, model_plan.component_identities.checksum_pattern_version);
+  output["attempts"] = excluded_calibration_json(result, model_plan, model_plan.component_identities.checksum_pattern_version);
   return output;
 }
 
@@ -2066,7 +2038,9 @@ std::vector<std::string> collect_quality_warning_tokens(const LlmMemoryWorkPlan&
     append_warning(warnings, "main-thread-qos-not-applied");
   }
   if (std::any_of(result.measurements.begin(), result.measurements.end(),
-                  [](const LlmMeasurementState& measurement) { return measurement.qos_failed_workers > 0; })) {
+                  [](const LlmMeasurementState& measurement) {
+                    const auto* cpu = get_llm_cpu_task_evidence(measurement.execution);
+                    return cpu && cpu->qos_failed_workers > 0; })) {
     append_warning(warnings, "worker-qos-not-applied");
   }
   if (metadata.l2_data_cache_bytes > 0 && plan.geometry.valid &&
@@ -2179,7 +2153,7 @@ LlmJsonPeakEstimate calculate_json_peak_from_identity_sizes(const LlmMemoryConfi
   }
 
   size_t measurement_identity_bytes = 0;
-  if (!NumericUtils::checked_multiply(config.loop_count, scenario_identity_bytes_per_loop,
+  if (!NumericUtils::checked_multiply(static_cast<size_t>(1), scenario_identity_bytes_per_loop,
                                       measurement_identity_bytes)) {
     return estimate;
   }
@@ -2213,7 +2187,9 @@ LlmJsonPeakEstimate calculate_json_peak_from_identity_sizes(const LlmMemoryConfi
     return estimate;
   }
   task_evidence_records = planned_measurements;
-  if (backend == LlmMemoryBackend::Metal) {
+  size_t canonical_plans = 0;
+  if (!NumericUtils::checked_multiply(calibration_attempts_per_scenario + 1, kLlmScenarioCount, canonical_plans)) return estimate;
+  {
     size_t calibration_task_records = 0;
     if (!NumericUtils::checked_multiply(calibration_attempts_per_scenario, kLlmScenarioCount,
                                         calibration_task_records) ||
@@ -2223,7 +2199,10 @@ LlmJsonPeakEstimate calculate_json_peak_from_identity_sizes(const LlmMemoryConfi
   }
   const size_t task_record_peak_bytes =
       backend == LlmMemoryBackend::Metal ? kJsonMetalTaskPeakBytes : kJsonMeasurementPeakBytes;
-  if (!NumericUtils::checked_multiply(planned_measurements, effective_workers, worker_checksum_records) ||
+  size_t expected_and_actual_records = 0;
+  if (!NumericUtils::checked_add(planned_measurements, canonical_plans, expected_and_actual_records) ||
+      !NumericUtils::checked_add(task_evidence_records, canonical_plans, task_evidence_records) ||
+      !NumericUtils::checked_multiply(expected_and_actual_records, effective_workers, worker_checksum_records) ||
       !NumericUtils::checked_multiply(raw_input_bytes, kJsonInputStringExpansionFactor, estimate.input_string_bytes) ||
       !NumericUtils::checked_multiply(task_evidence_records, task_record_peak_bytes,
                                       estimate.measurement_record_bytes) ||
@@ -2322,8 +2301,9 @@ nlohmann::ordered_json build_llm_memory_json(const LlmMemoryConfig& config, cons
   output["kv_layout"] = llm_kv_layout_to_string(model_plan.kv_layout);
   output["methodology_version"] = model_plan.methodology_version;
   output["software"] = software_json(metadata);
+  output["build_manifest"] = metadata.build_manifest;
   output["configuration"] = configuration_json(config);
-  output["resolved_plan"] = resolved_plan_json(model_plan, result.frozen_scenario_plans, backend_evidence);
+  output["resolved_plan"] = resolved_plan_json(model_plan, result, backend_evidence);
   output["backend_evidence"] =
       backend_evidence_json(model_plan, backend_evidence, metadata.json_peak_estimate, !config.output_file.empty());
   output["memory_budget"] = memory_budget_json(
@@ -2335,7 +2315,7 @@ nlohmann::ordered_json build_llm_memory_json(const LlmMemoryConfig& config, cons
   output["status"] = llm_run_status_to_string(result.status);
   output["reason_code"] = result.reason_code;
   output["results_complete"] = result.results_complete;
-  output["conclusions_valid"] = result.conclusions_valid;
+  output["run_accepted"] = result.run_accepted;
   output["interpretation"] = interpretation_json(model_plan);
 
   // Additional lifecycle and audit evidence remains part of schema v1 but is
