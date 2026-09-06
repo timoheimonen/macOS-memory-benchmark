@@ -106,3 +106,101 @@ TEST(LlmMetalChecksumHelperIntegrationTest, SharedAffineLanesExposeBoundedConten
     EXPECT_NE(actual[1], actual[7]);
   }
 }
+
+TEST(LlmMetalChecksumHelperIntegrationTest, ReductionPreservesSixModuloSumsAcrossPartialGroups) {
+  @autoreleasepool {
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    if (device == nil) {
+      GTEST_SKIP() << "metal-device-unavailable";
+    }
+    // Exercise the production reduction with independently generated lane values.
+    // This is a helper/dispatch contract test, not evidence of payload loads.
+    std::string source(LlmMetalKernelContract::kSource);
+    source += R"MSL(
+kernel void llm_reduction_probe(
+    constant LlmMetalResources& resources [[buffer(0)]],
+    threadgroup uint* reduction [[threadgroup(0)]],
+    uint global_id [[thread_position_in_grid]],
+    uint thread_index [[thread_index_in_threadgroup]],
+    uint threads_per_threadgroup [[threads_per_threadgroup]],
+    uint simd_width [[threads_per_simdgroup]],
+    uint simd_lane [[thread_index_in_simdgroup]]) {
+  const uint n = global_id + 1u;
+  publish_task_checksum(resources, uint2(n, 0xffffffffu),
+      uint2(n * 0x9e3779b1u, n * n), uint2(0x80000000u + n, 7u),
+      reduction, thread_index, threads_per_threadgroup);
+}
+)MSL";
+    NSString* source_string = [[NSString alloc] initWithBytes:source.data()
+                                                    length:source.size()
+                                                  encoding:NSUTF8StringEncoding];
+    ASSERT_NE(source_string, nil);
+    MTLCompileOptions* options = [[MTLCompileOptions alloc] init];
+    options.languageVersion = MTLLanguageVersion2_3;
+    options.preprocessorMacros = @{@"LLM_METAL_DECODE_CONTIGUOUS" : @1,
+                                  @"LLM_METAL_DECODE_PAGED" : @0,
+                                  @"LLM_METAL_PREFILL_CONTIGUOUS" : @0,
+                                  @"LLM_METAL_PREFILL_PAGED" : @0};
+    NSError* error = nil;
+    id<MTLLibrary> library = [device newLibraryWithSource:source_string options:options error:&error];
+    ASSERT_NE(library, nil) << (error == nil ? "no compiler diagnostic" : error.description.UTF8String);
+    id<MTLFunction> function = [library newFunctionWithName:@"llm_reduction_probe"];
+    ASSERT_NE(function, nil);
+    id<MTLComputePipelineState> pipeline = [device newComputePipelineStateWithFunction:function error:&error];
+    ASSERT_NE(pipeline, nil);
+    id<MTLArgumentEncoder> arguments = [function newArgumentEncoderWithBufferIndex:0];
+    ASSERT_NE(arguments, nil);
+    id<MTLBuffer> argument_buffer = [device newBufferWithLength:arguments.encodedLength
+                                                       options:MTLResourceStorageModeShared];
+    constexpr size_t kStatusWords = LlmMetalKernelContract::kTimedStatusWordCount;
+    id<MTLBuffer> status = [device newBufferWithLength:kStatusWords * sizeof(uint32_t)
+                                            options:MTLResourceStorageModeShared];
+    ASSERT_NE(argument_buffer, nil);
+    ASSERT_NE(status, nil);
+    [arguments setArgumentBuffer:argument_buffer offset:0];
+    [arguments setBuffer:status offset:0 atIndex:LlmMetalKernelContract::kStatusChecksumResourceId];
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    ASSERT_NE(queue, nil);
+    const size_t width = pipeline.threadExecutionWidth;
+    ASSERT_GT(width, 1U);
+    ASSERT_GE(pipeline.maxTotalThreadsPerThreadgroup, 2 * width + 1);
+    const std::array<size_t, 7> group_sizes = {1, width - 1, width, width + 1,
+                                              2 * width - 1, 2 * width, 2 * width + 1};
+    for (size_t group_size : group_sizes) {
+      for (size_t count : {group_size, 3 * group_size + 1}) {
+        SCOPED_TRACE("threads=" + std::to_string(count) + ", group=" + std::to_string(group_size));
+        auto* words = static_cast<uint32_t*>(status.contents);
+        for (size_t i = 0; i < kStatusWords; ++i) {
+          words[i] = 0;
+        }
+        id<MTLCommandBuffer> command = [queue commandBuffer];
+        id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+        ASSERT_NE(encoder, nil);
+        [encoder setComputePipelineState:pipeline];
+        [encoder setBuffer:argument_buffer offset:0 atIndex:0];
+        [encoder useResource:status usage:MTLResourceUsageRead | MTLResourceUsageWrite];
+        [encoder setThreadgroupMemoryLength:group_size * 6 * sizeof(uint32_t) atIndex:0];
+        [encoder dispatchThreads:MTLSizeMake(count, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(group_size, 1, 1)];
+        [encoder endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        ASSERT_EQ(command.status, MTLCommandBufferStatusCompleted)
+            << (command.error == nil ? "no command diagnostic" : command.error.description.UTF8String);
+        std::array<uint32_t, 6> expected{};
+        for (uint32_t n = 1; n <= count; ++n) {
+          expected[0] += n;
+          expected[1] += UINT32_MAX;
+          expected[2] += n * 0x9e3779b1U;
+          expected[3] += n * n;
+          expected[4] += 0x80000000U + n;
+          expected[5] += 7U;
+        }
+        for (size_t component = 0; component < expected.size(); ++component) {
+          EXPECT_EQ(words[LlmMetalKernelContract::kWeightChecksumAIndex + component], expected[component]);
+        }
+        EXPECT_EQ(words[LlmMetalKernelContract::kLayoutMetadataLookupCountIndex], 0U);
+      }
+    }
+  }
+}

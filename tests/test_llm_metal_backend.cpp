@@ -4768,3 +4768,54 @@ TEST(LlmMetalBackendTest, PendingColdChecksPreserveAllApplicabilityCombinations)
     }
   }
 }
+
+TEST_F(LlmMetalBackendIntegrationTest, PrefillElementWidthsAndWideSingleTokenPreserveTaskContractIntegration) {
+  struct Case {
+    size_t prompt_tokens;
+    size_t query_tile_tokens;
+    size_t head_dimension;
+    size_t block_tokens;
+  };
+  // Include a wide P=Q=1 record: replacing token control with vector control
+  // must preserve this supported case as well as narrow, split-token tails.
+  constexpr std::array<Case, 4> kCases = {{{1, 1, 131072, 1},
+                                          {17, 1, 3, 4},
+                                          {257, 257, 64, 128},
+                                          {129, 16, 5, 16}}};
+  for (LlmKvLayout layout : {LlmKvLayout::Contiguous, LlmKvLayout::Paged}) {
+    for (size_t element_bytes : {1U, 2U, 4U}) {
+      for (const Case& test_case : kCases) {
+        SCOPED_TRACE("P=" + std::to_string(test_case.prompt_tokens) +
+                     ", E=" + std::to_string(element_bytes) +
+                     ", layout=" + std::to_string(static_cast<int>(layout)));
+        LlmMemoryConfig config = metal_config();
+        config.phase = LlmPhase::Prefill;
+        config.kv_layout = layout;
+        backend_ = create_llm_metal_backend();
+        ASSERT_EQ(backend_->initialize(config).status, LlmBackendStatus::Ready);
+        LlmGeometryRequest request;
+        request.active_weight_bytes = 4097;
+        request.layer_count = 2;
+        request.batch_size = 2;
+        request.query_head_count = 1;
+        request.kv_head_count = 1;
+        request.head_dimension = test_case.head_dimension;
+        request.kv_element_bytes = element_bytes;
+        request.phase = LlmPhase::Prefill;
+        request.kv_layout = layout;
+        request.prompt_tokens = test_case.prompt_tokens;
+        request.attention_query_tile_tokens = test_case.query_tile_tokens;
+        request.kv_block_tokens = layout == LlmKvLayout::Paged ? test_case.block_tokens : 0;
+        const LlmGeometry geometry = resolve_llm_geometry(request);
+        ASSERT_TRUE(geometry.valid) << geometry.reason_code;
+        ASSERT_EQ(geometry.k_or_v_record_bytes_per_layer, test_case.head_dimension * element_bytes);
+        LlmMemoryWorkPlan plan = build_device_plan(geometry, "prefill-element-width-and-record-boundary");
+        resolve_and_prepare(plan);
+        for (LlmScenario scenario : {LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed}) {
+          expect_complete_scenario_task(plan, scenario, 1);
+          expect_complete_scenario_task(plan, scenario, 3);
+        }
+      }
+    }
+  }
+}
