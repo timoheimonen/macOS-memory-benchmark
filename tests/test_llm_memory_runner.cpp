@@ -2117,7 +2117,9 @@ TEST(LlmMemoryRunnerTest, StopAfterLastSuccessfulTaskRetainsCompleteAcceptedEvid
   EXPECT_EQ(result.counters.measured_measurements, 9u);
   EXPECT_EQ(result.logical_checkpoint_attempts, 4u);
   ASSERT_EQ(checkpoints.size(), 4u);
-  EXPECT_FALSE(checkpoints[8].interruption_requested);
+  EXPECT_EQ(checkpoints[2].kind, LlmCheckpointKind::MeasurementTerminal);
+  EXPECT_EQ(checkpoints[2].measured_measurements, 9u);
+  EXPECT_FALSE(checkpoints[2].interruption_requested);
   EXPECT_TRUE(checkpoints.back().interruption_requested);
 }
 
@@ -2153,7 +2155,9 @@ TEST(LlmMemoryRunnerTest, StopHookExceptionAfterLastMeasurementInvalidatesOtherw
   EXPECT_FALSE(result.run_accepted);
   EXPECT_EQ(result.counters.measured_measurements, 9u);
   ASSERT_EQ(checkpoints.size(), 4u);
-  EXPECT_EQ(checkpoints[8].kind, LlmCheckpointKind::MeasurementTerminal);
+  EXPECT_EQ(checkpoints[2].kind, LlmCheckpointKind::MeasurementTerminal);
+  EXPECT_EQ(checkpoints[2].measured_measurements, 9u);
+  EXPECT_EQ(checkpoints[2].status, LlmRunStatus::Complete);
   EXPECT_EQ(checkpoints.back().kind, LlmCheckpointKind::CommandTerminal);
   EXPECT_EQ(checkpoints.back().status, LlmRunStatus::Failed);
 }
