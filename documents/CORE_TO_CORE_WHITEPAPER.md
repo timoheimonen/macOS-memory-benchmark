@@ -500,15 +500,16 @@ validation of current affinity behavior, current scheduler placement, or current
 Relevant deterministic coverage includes:
 
 - work-plan targets derived from an excluded pilot and exact duration-window boundary classification;
-- responder-work overflow rejection and deterministic timer/thread-startup failure states;
+- responder-work overflow rejection before thread startup;
 - scenario-order rotation;
 - loop-record sample ranges that count only samples appended to the pooled population;
 - CLI short/long options, supported sweeps, duplicate sweep-key rejection, and run-count guards;
 - calibrated console/audit messages;
 - schema-2 work plans, loop records, completion fields, nullable values, and affinity interpretability.
 
-The runner also has Apple Silicon integration coverage for a headline plus sample window and for a zero-sample internal
-execution path. Those tests exercise the real two-thread ARM64 handoff and are hardware/runtime-sensitive.
+The runner integration test checks responder cleanup when initiator startup fails. Executable CLI integration tests
+exercise the real two-thread ARM64 handoff and check calibrated JSON output, sweep completion metadata, and stdout
+routing. These paths are hardware/runtime-sensitive.
 
 For manual validation, prefer several loops and inspect:
 
