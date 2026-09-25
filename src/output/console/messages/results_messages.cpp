@@ -383,9 +383,4 @@ std::string benchmark_reason_coordinator_exception(const std::string& error) {
   return "standard benchmark coordinator exception: " + error;
 }
 
-std::string benchmark_reason_latency_chain_setup_failed(
-    const std::string& phase_name) {
-  return "failed to construct " + phase_name + " latency chain";
-}
-
 } // namespace Messages

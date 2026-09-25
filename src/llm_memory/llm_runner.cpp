@@ -2358,27 +2358,6 @@ int run_llm_memory_suite(const LlmMemoryConfig& config,
   }
 }
 
-const char* llm_runner_task_kind_to_string(LlmRunnerTaskKind kind) noexcept {
-  switch (kind) {
-    case LlmRunnerTaskKind::Warmup:
-      return "warmup";
-    case LlmRunnerTaskKind::Calibration:
-      return "calibration";
-    case LlmRunnerTaskKind::Measurement:
-      return "measurement";
-  }
-  return "unknown";
-}
-
-const char* llm_checkpoint_kind_to_string(LlmCheckpointKind kind) noexcept {
-  switch (kind) {
-    case LlmCheckpointKind::MeasurementTerminal:
-      return "measurement-terminal";
-    case LlmCheckpointKind::CommandTerminal:
-      return "command-terminal";
-  }
-  return "unknown";
-}
 
 void prepare_llm_result_snapshot(LlmMemoryResult& result) {
   ++result.snapshot_preparation_attempts;

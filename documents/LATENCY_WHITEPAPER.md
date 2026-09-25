@@ -134,20 +134,12 @@ so stride must be a multiple of 8.
 
 The following behaviors are explicitly covered by unit tests:
 
-- **Null buffers, zero/misaligned strides, and one-node buffers are rejected with exact reasons**
-  (`SetupLatencyChainRejectsInvalidInputsWithExactReasons`)
-- **The minimum two-node chain is accepted at pointer-sized and default strides**
-  (`SetupLatencyChainAcceptsMinimumTwoNodeChainsAtSupportedStrides`)
-- **A constructed chain visits every aligned in-buffer node exactly once and returns to its head**
-  (`SetupLatencyChainCreatesValidChain`)
-- **Pointer count, touched-page count, page size, and stride diagnostics are exact**
-  (`SetupLatencyChainCollectsDiagnostics`)
-- **A locality window that cannot contain two stride-spaced nodes is rejected**
-  (`SetupLatencyChainWithTooSmallTlbLocalityFails`)
-- **A locality-using box mode with a zero locality window is rejected**
-  (`SetupLatencyChainWithBoxModeAndZeroLocalityFails`)
+- **Null buffers, zero/misaligned strides, one-node buffers, unusable locality windows, and box modes without
+  locality are rejected with exact reasons** (`SetupLatencyChainRejectsInvalidInputsWithExactReasons`).
+- **Two-node and four-node chains at pointer-sized and default strides visit every aligned in-buffer node exactly
+  once and return to the head** (`SetupLatencyChainCreatesValidChain`).
 - **Equal explicit seeds reproduce the chain, different seeds change it, and same-random box mode reuses one
-  permutation across boxes** (`ExplicitSeedsAreReproducibleAndSameRandomModeReusesBoxPermutation`)
+  permutation across boxes** (`ExplicitSeedsAreReproducibleAndSameRandomModeReusesBoxPermutation`).
 
 These tests validate setup correctness and failure handling before timing is run.
 

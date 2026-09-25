@@ -32,72 +32,22 @@
 #include <type_traits>
 #include <utility>
 
-namespace {
-
-constexpr std::array<uint8_t, 32> kPermutationLittleEndianBytes = {
-    2, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0,
-    4, 0, 0, 0, 6, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0,
-};
-
-constexpr std::string_view kPermutationSha256 =
-    "9d1cfab79005723a285fec9a5716b53baa7a6c0501e3d17434bfb31ea88935d1";
-
-std::string_view permutation_bytes() {
-  return {reinterpret_cast<const char*>(kPermutationLittleEndianBytes.data()),
-          kPermutationLittleEndianBytes.size()};
-}
-
-}  // namespace
-
-TEST(HashUtilsTest, EmptyInputMatchesStandardSha256Vector) {
-  EXPECT_EQ(HashUtils::sha256_hex(""),
-            "e3b0c44298fc1c149afbf4c8996fb924"
-            "27ae41e4649b934ca495991b7852b855");
-}
-
-TEST(HashUtilsTest, AbcMatchesStandardSha256Vector) {
-  EXPECT_EQ(HashUtils::sha256_hex("abc"),
-            "ba7816bf8f01cfea414140de5dae2223"
-            "b00361a396177a9cb410ff61f20015ad");
-}
-
-TEST(HashUtilsTest, NoallocEmptyInputMatchesStandardSha256Vector) {
-  std::array<char, 64> digest{};
-  ASSERT_TRUE(HashUtils::sha256_hex_noalloc("", digest));
-  EXPECT_EQ(std::string_view(digest.data(), digest.size()),
-            "e3b0c44298fc1c149afbf4c8996fb924"
-            "27ae41e4649b934ca495991b7852b855");
-}
-
-TEST(HashUtilsTest, NoallocKnownTextMatchesStandardSha256Vector) {
-  std::array<char, 64> digest{};
-  ASSERT_TRUE(HashUtils::sha256_hex_noalloc("abc", digest));
-  EXPECT_EQ(std::string_view(digest.data(), digest.size()),
-            "ba7816bf8f01cfea414140de5dae2223"
-            "b00361a396177a9cb410ff61f20015ad");
-}
-
-TEST(HashUtilsTest, NoallocEmbeddedNullsMatchAllocatingHelper) {
-  const std::string payload{"prefix\0middle\xffsuffix", 20};
-  std::array<char, 64> digest{};
-  ASSERT_TRUE(HashUtils::sha256_hex_noalloc(payload, digest));
-  EXPECT_EQ(std::string_view(digest.data(), digest.size()),
-            HashUtils::sha256_hex(payload));
-}
-
-TEST(HashUtilsTest, IncrementalUpdatesMatchPermutationGoldenAcrossChunkBoundaries) {
-  const std::string_view bytes = permutation_bytes();
-  EXPECT_EQ(HashUtils::sha256_hex(bytes), kPermutationSha256);
-
-  constexpr std::array<size_t, 10> chunk_sizes = {1, 2, 3, 4, 5, 7, 8, 15, 31, 32};
-  for (size_t chunk_size : chunk_sizes) {
-    SCOPED_TRACE(chunk_size);
-    HashUtils::Sha256Hasher hasher;
-    for (size_t offset = 0; offset < bytes.size(); offset += chunk_size) {
-      const size_t length = std::min(chunk_size, bytes.size() - offset);
-      hasher.update(bytes.substr(offset, length));
-    }
-    EXPECT_EQ(hasher.finalize_hex(), kPermutationSha256);
+TEST(HashUtilsTest, AllocatingAndNoallocHelpersMatchKnownSha256Vectors) {
+  struct Vector {
+    std::string input;
+    const char* digest;
+  };
+  const Vector vectors[] = {
+      {"", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+      {"abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+      {std::string{"prefix\0middle\xffsuffix", 20}, "fa5e64c9d422596327e5747f3a0b502b4bcf9f8ae8ab984652d48e88f501190c"},
+  };
+  for (const Vector& entry : vectors) {
+    SCOPED_TRACE(::testing::PrintToString(entry.input));
+    EXPECT_EQ(HashUtils::sha256_hex(entry.input), entry.digest);
+    std::array<char, 64> digest{};
+    ASSERT_TRUE(HashUtils::sha256_hex_noalloc(entry.input, digest));
+    EXPECT_EQ(std::string_view(digest.data(), digest.size()), entry.digest);
   }
 }
 

@@ -148,69 +148,30 @@ TEST_F(BufferManagerTest, InvalidPatternAllocationRequestsFailBeforeSystemCalls)
   }
 }
 
-TEST_F(BufferManagerTest, PatternInitializationRejectsInvalidInputs) {
-  struct InvalidInputCase {
+TEST_F(BufferManagerTest, PeakAccountingUsesModeSpecificLiveBuffers) {
+  struct AllocationCase {
     const char* name;
-    bool allocate_mappings;
-    size_t buffer_size;
-    std::string expected_reason;
+    size_t main_mb;
+    bool only_latency;
+    bool patterns;
+    bool custom_cache;
+    size_t expected_mb;
   };
-  const InvalidInputCase cases[] = {
-      {"missing mappings", false, 512, Messages::error_main_buffers_not_allocated()},
-      {"zero size", true, 0, Messages::error_buffer_size_zero_generic()},
-  };
-
-  for (const InvalidInputCase& test_case : cases) {
-    SCOPED_TRACE(test_case.name);
-    PatternBuffers buffers;
-    if (test_case.allocate_mappings) {
-      const BenchmarkConfig config = make_pattern_config();
-      ASSERT_EQ(allocate_pattern_buffers(config, buffers), EXIT_SUCCESS);
-    }
-
-    testing::internal::CaptureStderr();
-    const int result = initialize_pattern_buffers(buffers, test_case.buffer_size);
-    const std::string error = testing::internal::GetCapturedStderr();
-
-    EXPECT_EQ(result, EXIT_FAILURE);
-    EXPECT_EQ(error, Messages::error_prefix() + test_case.expected_reason + "\n");
+  for (const AllocationCase& entry : {AllocationCase{"cache peak", 1, false, false, false, 6},
+                                      AllocationCase{"latency custom cache", 0, true, false, true, 43},
+                                      AllocationCase{"patterns", 1, false, true, true, 2}}) {
+    SCOPED_TRACE(entry.name);
+    BenchmarkConfig config;
+    config.buffer_size = entry.main_mb * Constants::BYTES_PER_MB;
+    config.l1_buffer_size = Constants::BYTES_PER_MB;
+    config.l2_buffer_size = 2 * Constants::BYTES_PER_MB;
+    config.only_latency = entry.only_latency;
+    config.run_patterns = entry.patterns;
+    config.use_custom_cache_size = entry.custom_cache;
+    config.custom_buffer_size = 43 * Constants::BYTES_PER_MB;
+    config.max_total_allowed_mb = 0;
+    size_t total_memory_bytes = 0;
+    ASSERT_EQ(calculate_total_allocation_bytes(config, total_memory_bytes), EXIT_SUCCESS);
+    EXPECT_EQ(total_memory_bytes, entry.expected_mb * Constants::BYTES_PER_MB);
   }
-}
-
-TEST_F(BufferManagerTest, PeakAccountingUsesLargerCachePhaseInsteadOfMainPhase) {
-  BenchmarkConfig config;
-  config.buffer_size = Constants::BYTES_PER_MB;
-  config.l1_buffer_size = Constants::BYTES_PER_MB;
-  config.l2_buffer_size = 2 * Constants::BYTES_PER_MB;
-  config.max_total_allowed_mb = 0;
-
-  size_t total_memory_bytes = 0;
-  ASSERT_EQ(calculate_total_allocation_bytes(config, total_memory_bytes), EXIT_SUCCESS);
-  EXPECT_EQ(total_memory_bytes, 6 * Constants::BYTES_PER_MB);
-}
-
-TEST_F(BufferManagerTest, PeakAccountingHandlesLatencyOnlyCustomCacheWithMainDisabled) {
-  BenchmarkConfig config;
-  config.buffer_size = 0;
-  config.only_latency = true;
-  config.use_custom_cache_size = true;
-  config.custom_buffer_size = 43 * Constants::BYTES_PER_MB;
-  config.max_total_allowed_mb = 0;
-
-  size_t total_memory_bytes = 0;
-  ASSERT_EQ(calculate_total_allocation_bytes(config, total_memory_bytes), EXIT_SUCCESS);
-  EXPECT_EQ(total_memory_bytes, 43 * Constants::BYTES_PER_MB);
-}
-
-TEST_F(BufferManagerTest, PeakAccountingPatternsSkipLatencyAndCacheBuffers) {
-  BenchmarkConfig config;
-  config.buffer_size = Constants::BYTES_PER_MB;
-  config.run_patterns = true;
-  config.use_custom_cache_size = true;
-  config.custom_buffer_size = 43 * Constants::BYTES_PER_MB;
-  config.max_total_allowed_mb = 0;
-
-  size_t total_memory_bytes = 0;
-  ASSERT_EQ(calculate_total_allocation_bytes(config, total_memory_bytes), EXIT_SUCCESS);
-  EXPECT_EQ(total_memory_bytes, 2 * Constants::BYTES_PER_MB);
 }

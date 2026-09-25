@@ -75,22 +75,6 @@ inline constexpr const char* TRANSIENT_BYTES_OVERFLOW =
     "layout-transient-bytes-overflow";
 inline constexpr const char* MEMORY_BUDGET_OVERFLOW =
     "layout-memory-budget-overflow";
-inline constexpr const char* LOOKUP_COUNT_OVERFLOW =
-    "decode-lookup-count-overflow";
-inline constexpr const char* LOOKUP_BYTES_OVERFLOW =
-    "decode-lookup-bytes-overflow";
-inline constexpr const char* WORK_UNIT_COUNT_ZERO = "work-unit-count-zero";
-inline constexpr const char* WORK_UNIT_CAP_EXCEEDED =
-    "work-unit-cap-exceeded";
-inline constexpr const char* TASK_TOTAL_OVERFLOW =
-    "decode-task-total-overflow";
-inline constexpr const char* ACCOUNTED_BYTES_ZERO =
-    "accounted-bytes-per-work-unit-zero";
-inline constexpr const char* GUARDRAIL_BELOW_ONE_WORK_UNIT =
-    "guardrail-below-one-work-unit";
-inline constexpr const char* TASK_ACCOUNTED_BYTES_CAP_EXCEEDED =
-    "task-accounted-bytes-cap-exceeded";
-inline constexpr const char* INVALID_SCENARIO = "invalid-scenario";
 inline constexpr const char* WORKER_COUNT_ZERO = "worker-count-zero";
 inline constexpr const char* OWNERSHIP_COUNT_OVERFLOW =
     "block-ownership-count-overflow";
@@ -351,51 +335,6 @@ materialize_llm_kv_block_table_in_place(
     size_t hash_chunk_entries = 1024,
     const LlmKvStopRequested& stop_requested = {});
 
-/** Checked paged metadata accounting for one complete decode task. */
-struct LlmPagedDecodeWorkloadPlan {
-  bool valid = false;
-  std::string reason_code = LlmKvLayoutReason::INVALID_SCENARIO;
-  LlmScenario scenario = LlmScenario::WeightsOnly;
-  std::string layout_geometry_identity;
-  std::string layout_identity;
-  size_t work_units = 0;
-  size_t effective_model_payload_bytes_per_work_unit = 0;
-  size_t layout_metadata_lookup_count_per_layer_sequence = 0;
-  size_t layout_metadata_lookup_count_per_work_unit = 0;
-  size_t layout_metadata_read_bytes_per_work_unit = 0;
-  size_t accounted_bytes_per_work_unit = 0;
-  size_t maximum_work_units_by_work_unit_cap = 0;
-  size_t maximum_work_units_by_guardrail = 0;
-  size_t effective_maximum_work_units = 0;
-  size_t effective_model_payload_bytes = 0;
-  size_t layout_metadata_lookup_count = 0;
-  size_t layout_metadata_read_bytes = 0;
-  size_t task_accounted_bytes = 0;
-  std::string identity;
-};
-
-/**
- * Resolve checked decode lookup and model-plus-metadata task totals.
- *
- * The workload identity is always reconstructed from `layout` and a complete,
- * self-consistent materialized permutation identity; callers cannot substitute
- * an arbitrary layout string. Both the shared work-unit ceiling and the 64 GiB
- * accounted-byte guardrail apply.
- *
- * @param layout Valid geometry used to materialize `permutation`.
- * @param scenario Decode scenario whose KV lookups are being accounted.
- * @param work_units Positive number of complete decode steps in the task.
- * @param effective_model_payload_bytes_per_work_unit Scenario payload without
- *        layout-metadata bytes.
- * @param permutation Frozen materialized table identity matching `layout`.
- * @return A complete canonical task plan, or a stable invalid reason.
- * @throws std::bad_alloc If canonical identity storage cannot be allocated.
- */
-LlmPagedDecodeWorkloadPlan build_llm_paged_decode_workload_plan(
-    const LlmKvLayoutPlan& layout, LlmScenario scenario, size_t work_units,
-    size_t effective_model_payload_bytes_per_work_unit,
-    const LlmKvPermutationIdentity& permutation);
-
 /** One contiguous logical-block range owned by exactly one CPU worker. */
 struct LlmKvCpuBlockAssignment {
   size_t layer_index = 0;
@@ -548,31 +487,5 @@ bool validate_llm_kv_layout_identity(
     const LlmKvLayoutPlan& layout,
     const LlmKvPermutationIdentity& permutation,
     std::string_view identity) noexcept;
-
-/**
- * Canonically bind a frozen workload to CPU ownership semantics.
- *
- * Both typed inputs must be valid, carry canonical component identities, and
- * reference the same geometry identity.
- *
- * @return Length-prefixed identity, or empty for invalid/mismatched inputs.
- * @throws std::bad_alloc If identity storage cannot be allocated.
- */
-std::string serialize_llm_kv_cpu_execution_identity(
-    const LlmPagedDecodeWorkloadPlan& workload,
-    const LlmKvCpuOwnershipPlan& ownership);
-
-/**
- * Canonically bind a frozen workload to Metal segment semantics.
- *
- * Both typed inputs must be valid, carry canonical component identities, and
- * reference the same geometry identity.
- *
- * @return Length-prefixed identity, or empty for invalid/mismatched inputs.
- * @throws std::bad_alloc If identity storage cannot be allocated.
- */
-std::string serialize_llm_kv_metal_execution_identity(
-    const LlmPagedDecodeWorkloadPlan& workload,
-    const LlmKvMetalSegmentPlan& segments);
 
 #endif  // LLM_KV_LAYOUT_H

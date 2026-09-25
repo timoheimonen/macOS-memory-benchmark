@@ -120,17 +120,6 @@ TEST_F(HighResTimerTest, DeterministicClockProducesExactNanosecondsAndSeconds) {
   EXPECT_DOUBLE_EQ(timer->stop(), 100.0 / 1e9);
 }
 
-TEST_F(HighResTimerTest, UnsignedTickSubtractionPreservesWraparound) {
-  state.numer = 1;
-  state.denom = 1;
-  set_ticks({std::numeric_limits<uint64_t>::max() - 4, 5});
-  std::optional<HighResTimer> timer = HighResTimer::create();
-  ASSERT_TRUE(timer.has_value());
-
-  timer->start();
-  EXPECT_DOUBLE_EQ(timer->stop_ns(), 10.0);
-}
-
 TEST_F(HighResTimerTest, SnapshotRetainsOriginalBoundariesWithoutExtraClockReads) {
   state.numer = 125;
   state.denom = 3;

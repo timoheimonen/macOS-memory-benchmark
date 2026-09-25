@@ -1482,7 +1482,7 @@ Recommended validation commands:
 - GPU help smoke check: `./memory_benchmark --gpu-bandwidth --help`
 - LLM help smoke check: `./memory_benchmark --llm-memory --help`
 - Deterministic LLM tests:
-  `./test_runner '--gtest_filter=ModeSelectorTest.*:LlmMemoryContractTest.*:LlmMemoryConfigTest.*:LlmMemoryWorkPlanTest.*:LlmMemoryExecutorTest.*:LlmMemoryRunnerTest.*:LlmMemoryJsonTest.*:LlmMemoryOutputTest.*:MessagesTest.*'`
+  `./test_runner '--gtest_filter=ModeSelectorTest.*:LlmMemoryConfigTest.*:LlmMemoryWorkPlanTest.*:LlmMemoryExecutorTest.*:LlmMemoryRunnerTest.*:LlmMemoryJsonTest.*:LlmMemoryOutputTest.*:Messages*Test.*'`
 - Real LLM ARM64 and bounded executable transport contracts:
   `./test_runner '--gtest_filter=*LlmMemory*Integration*:*ExecutableCliIntegration*'`
 - LLM Metal decode and prefill for contiguous and paged KV:

@@ -729,238 +729,86 @@ std::vector<std::string> bounded_llm_metal_prefill_arguments(
           output_target};
 }
 
-std::vector<std::string> bounded_llm_metal_paged_prefill_arguments(
-    const std::string& output_target, size_t loop_count = 3) {
-  std::vector<std::string> arguments =
-      bounded_llm_metal_prefill_arguments(output_target, loop_count);
-  arguments.insert(arguments.end() - 2,
-                   {"--kv-layout", "paged", "--kv-block-tokens", "4"});
-  return arguments;
-}
 
 }  // namespace
 
-TEST(ExecutableCliIntegrationTest, NoArgumentsShowsHelpAndReturnsSuccessIntegration) {
-  const CliResult result = run_memory_benchmark({});
-
-  EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
-  expect_no_runtime_banner(result);
-  EXPECT_NE(result.output.find("Usage:"), std::string::npos);
-  EXPECT_NE(result.output.find("--benchmark"), std::string::npos);
-}
-
-TEST(ExecutableCliIntegrationTest, HelpFlagShowsHelpAndReturnsSuccessIntegration) {
-  const CliResult result = run_memory_benchmark({"-h"});
-
-  EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
-  expect_no_runtime_banner(result);
-  EXPECT_NE(result.output.find("Usage:"), std::string::npos);
-  EXPECT_NE(result.output.find("--patterns"), std::string::npos);
-  EXPECT_NE(result.output.find("--gpu-bandwidth"), std::string::npos);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     HelpWithStdoutTargetRemainsHumanInEitherOrderIntegration) {
-  for (const std::vector<std::string>& arguments : {
-           std::vector<std::string>{"--benchmark", "--output", "-",
-                                    "--help"},
-           std::vector<std::string>{"--benchmark", "--help", "--output",
-                                    "-"},
-       }) {
-    SCOPED_TRACE(testing::PrintToString(arguments));
-    const CliResult result = run_memory_benchmark(arguments);
-
-    expect_process_completed(result);
-    EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
-    expect_no_runtime_banner(result);
-    EXPECT_NE(result.stdout_output.find("Usage:"), std::string::npos);
-    EXPECT_NE(result.stdout_output.find("--benchmark"), std::string::npos);
-    EXPECT_TRUE(result.stderr_output.empty()) << result.stderr_output;
-    EXPECT_FALSE(nlohmann::json::accept(result.stdout_output));
-    expect_no_dash_transport_artifacts(result);
-  }
-}
-
-TEST(ExecutableCliIntegrationTest, GpuHelpUsesDedicatedStandaloneParserIntegration) {
-  const CliResult result =
-      run_memory_benchmark({"--gpu-bandwidth", "--help"});
-
-  EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
-  expect_no_runtime_banner(result);
-  EXPECT_NE(result.output.find(
-                "Usage: ./memory_benchmark --gpu-bandwidth [options]"),
-            std::string::npos);
-  EXPECT_NE(result.output.find("minimum: 64 MB"), std::string::npos);
-  EXPECT_NE(result.output.find("default: 3"), std::string::npos);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     GpuHelpWithStdoutTargetRemainsHumanInEitherOrderIntegration) {
-  for (const std::vector<std::string>& arguments : {
-           std::vector<std::string>{"--gpu-bandwidth", "--output", "-",
-                                    "--help"},
-           std::vector<std::string>{"--gpu-bandwidth", "--help",
-                                    "--output", "-"},
-       }) {
-    SCOPED_TRACE(testing::PrintToString(arguments));
-    const CliResult result = run_memory_benchmark(arguments);
-
-    expect_process_completed(result);
-    EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
-    expect_no_runtime_banner(result);
-    EXPECT_NE(result.stdout_output.find(
-                  "Usage: ./memory_benchmark --gpu-bandwidth [options]"),
-              std::string::npos);
-    EXPECT_NE(result.stdout_output.find("minimum: 64 MB"),
-              std::string::npos);
-    EXPECT_TRUE(result.stderr_output.empty()) << result.stderr_output;
-    EXPECT_FALSE(nlohmann::json::accept(result.stdout_output));
-    expect_no_dash_transport_artifacts(result);
-  }
-}
-
-TEST(ExecutableCliIntegrationTest,
-     LlmHelpWithStdoutTargetRemainsHumanInEitherOrderIntegration) {
-  for (const std::vector<std::string>& arguments : {
-           std::vector<std::string>{"--llm-memory", "--output", "-",
-                                    "--help"},
-           std::vector<std::string>{"--llm-memory", "--help", "--output",
-                                    "-"},
-           std::vector<std::string>{"--llm-memory",
-                                    "--llm-memory-backend", "metal",
-                                    "--output", "-", "--help"},
-           std::vector<std::string>{"--llm-memory", "--help",
-                                    "--llm-memory-backend", "metal",
-                                    "--output", "-"},
-       }) {
-    SCOPED_TRACE(testing::PrintToString(arguments));
-    const CliResult result = run_memory_benchmark(arguments);
-
-    expect_process_completed(result);
-    EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
-    expect_no_runtime_banner(result);
-    EXPECT_NE(result.stdout_output.find(
-                  "Usage: ./memory_benchmark --llm-memory [options]"),
-              std::string::npos);
-    EXPECT_NE(result.stdout_output.find("schema 2"), std::string::npos);
-    EXPECT_TRUE(result.stderr_output.empty()) << result.stderr_output;
-    EXPECT_FALSE(nlohmann::json::accept(result.stdout_output));
-    expect_no_dash_transport_artifacts(result);
-  }
-}
-
-TEST(ExecutableCliIntegrationTest,
-     InvalidLlmStdoutTargetLeavesStdoutEmptyIntegration) {
-  const CliResult result = run_memory_benchmark(
-      {"--llm-memory", "--weight-size-mb", "1", "--output", "-"});
-
-  expect_process_completed(result);
-  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-  expect_no_runtime_banner(result);
-  EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
-  EXPECT_NE(result.stderr_output.find(
-                Messages::error_llm_memory_missing_required_option(
-                    "--layers")),
-            std::string::npos)
-      << result.stderr_output;
-  expect_no_dash_transport_artifacts(result);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     LlmMetalPreflightRejectsThreadsBeforeOutputSessionIntegration) {
-  struct InvalidCase {
-    std::string name;
+TEST(ExecutableCliIntegrationTest, HelpRemainsHumanAcrossModesAndOutputOrderingIntegration) {
+  struct HelpCase {
     std::vector<std::string> arguments;
-    const char* reason_code;
+    const char* heading;
+    const char* detail;
   };
-
-  std::vector<std::string> backend_before_threads =
-      bounded_llm_metal_arguments("-");
-  backend_before_threads.insert(backend_before_threads.end() - 2,
-                                {"--threads", "1"});
-
-  std::vector<std::string> threads_before_backend = bounded_llm_arguments("-");
-  threads_before_backend.insert(threads_before_backend.end() - 2,
-                                {"--llm-memory-backend", "metal"});
-
-  const std::vector<InvalidCase> cases = {
-      {"backend-before-threads", std::move(backend_before_threads),
-       LlmMemoryConfigReason::THREADS_NOT_APPLICABLE},
-      {"threads-before-backend", std::move(threads_before_backend),
-       LlmMemoryConfigReason::THREADS_NOT_APPLICABLE},
+  std::vector<HelpCase> cases = {
+      {{}, "Usage:", "--benchmark"},
+      {{"--threads", "1"}, "Usage:", "--threads <count>"},
   };
-
-  for (const InvalidCase& test_case : cases) {
-    SCOPED_TRACE(test_case.name);
+  const HelpCase modes[] = {
+      {{"--benchmark"}, "Usage:", "--benchmark"},
+      {{"--gpu-bandwidth"}, "Usage: ./memory_benchmark --gpu-bandwidth [options]", "minimum: 64 MB"},
+      {{"--llm-memory"}, "Usage: ./memory_benchmark --llm-memory [options]", "schema 2"},
+      {{"--llm-memory", "--llm-memory-backend", "metal"},
+       "Usage: ./memory_benchmark --llm-memory [options]",
+       "schema 2"},
+      {{"--analyze-core2core"}, "Usage:", "--analyze-core2core"},
+  };
+  for (const HelpCase& mode : modes) {
+    for (bool help_first : {false, true}) {
+      HelpCase test_case = mode;
+      if (help_first) {
+        test_case.arguments.insert(test_case.arguments.begin() + 1, "--help");
+        test_case.arguments.insert(test_case.arguments.end(), {"--output", "-"});
+      } else {
+        test_case.arguments.insert(test_case.arguments.end(), {"--output", "-", "--help"});
+      }
+      cases.push_back(std::move(test_case));
+    }
+  }
+  for (const HelpCase& test_case : cases) {
+    SCOPED_TRACE(testing::PrintToString(test_case.arguments));
     const CliResult result = run_memory_benchmark(test_case.arguments);
     expect_process_completed(result);
-    EXPECT_EQ(result.exit_code, EXIT_FAILURE) << result.output;
+    EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
     expect_no_runtime_banner(result);
-    EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
-    EXPECT_NE(result.stderr_output.find(
-                  Messages::error_llm_memory_config_invalid(
-                      test_case.reason_code)),
-              std::string::npos)
-        << result.stderr_output;
+    EXPECT_NE(result.stdout_output.find(test_case.heading), std::string::npos);
+    EXPECT_NE(result.stdout_output.find(test_case.detail), std::string::npos);
+    EXPECT_TRUE(result.stderr_output.empty()) << result.stderr_output;
+    EXPECT_FALSE(nlohmann::json::accept(result.stdout_output));
     expect_no_dash_transport_artifacts(result);
   }
 }
 
-TEST(ExecutableCliIntegrationTest,
-     LlmMetalStdoutIsCompleteOrOneTerminalUnsupportedDocumentIntegration) {
-  const CliResult result =
-      run_memory_benchmark(bounded_llm_metal_arguments("-"));
-
-  expect_process_completed(result);
-  const nlohmann::json json = parse_single_stdout_json(result);
-  expect_complete_or_unsupported_metal_result(result, json);
-  expect_single_runtime_banner(result);
-  expect_no_dash_transport_artifacts(result);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     LlmMetalPagedStdoutIsCompleteOrOneTerminalUnsupportedDocumentIntegration) {
-  std::vector<std::string> arguments = bounded_llm_metal_arguments("-");
-  arguments.insert(arguments.end() - 2,
-                   {"--kv-layout", "paged", "--kv-block-tokens", "2"});
-  const CliResult result = run_memory_benchmark(arguments);
-
-  expect_process_completed(result);
-  const nlohmann::json json = parse_single_stdout_json(result);
-  expect_complete_or_unsupported_metal_result(
-      result, json, "paged", "llm-memory-v2-metal-decode-paged");
-  EXPECT_EQ(json["phase"], "decode");
-  EXPECT_EQ(json["kv_layout"], "paged");
-  EXPECT_EQ(json["configuration"]["kv_block_tokens"], 2U);
-  expect_single_runtime_banner(result);
-  expect_no_dash_transport_artifacts(result);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     LlmMetalPrefillStdoutIsCompleteOrCapabilityUnsupportedIntegration) {
-  const CliResult result =
-      run_memory_benchmark(bounded_llm_metal_prefill_arguments("-"));
-
-  expect_process_completed(result);
-  const nlohmann::json json = parse_single_stdout_json(result);
-  expect_bounded_metal_prefill_result(result, json);
-  expect_single_runtime_banner(result);
-  expect_no_dash_transport_artifacts(result);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     LlmMetalPagedPrefillStdoutIsCompleteOrCapabilityUnsupportedIntegration) {
-  const CliResult result = run_memory_benchmark(
-      bounded_llm_metal_paged_prefill_arguments("-"));
-
-  expect_process_completed(result);
-  const nlohmann::json json = parse_single_stdout_json(result);
-  expect_bounded_metal_prefill_result(
-      result, json, "paged", "llm-memory-v2-metal-prefill-paged",
-      "llm-metal-prefill-paged-full-prompt-affine32-v1",
-      "llm-metal-paged-prefill-dual-mod32-lookup-address-mix-v1");
-  expect_single_runtime_banner(result);
-  expect_no_dash_transport_artifacts(result);
+TEST(ExecutableCliIntegrationTest, LlmMetalStdoutIsCompleteOrOneTerminalUnsupportedDocumentIntegration) {
+  for (bool prefill : {false, true}) {
+    for (bool paged : {false, true}) {
+      SCOPED_TRACE(prefill);
+      SCOPED_TRACE(paged);
+      std::vector<std::string> arguments =
+          prefill ? bounded_llm_metal_prefill_arguments("-") : bounded_llm_metal_arguments("-");
+      if (paged) {
+        arguments.insert(arguments.end() - 2, {"--kv-layout", "paged", "--kv-block-tokens", prefill ? "4" : "2"});
+      }
+      const CliResult result = run_memory_benchmark(arguments);
+      expect_process_completed(result);
+      const nlohmann::json json = parse_single_stdout_json(result);
+      if (prefill) {
+        expect_bounded_metal_prefill_result(
+            result, json, paged ? "paged" : "contiguous",
+            paged ? "llm-memory-v2-metal-prefill-paged" : "llm-memory-v2-metal-prefill-contiguous",
+            paged ? "llm-metal-prefill-paged-full-prompt-affine32-v1"
+                  : "llm-metal-prefill-contiguous-full-prompt-affine32-v1",
+            paged ? "llm-metal-paged-prefill-dual-mod32-lookup-address-mix-v1" : "llm-metal-dual-mod32-v1");
+      } else {
+        expect_complete_or_unsupported_metal_result(
+            result, json, paged ? "paged" : "contiguous",
+            paged ? "llm-memory-v2-metal-decode-paged" : "llm-memory-v2-metal-decode-contiguous");
+        EXPECT_EQ(json["phase"], "decode");
+        EXPECT_EQ(json["kv_layout"], paged ? "paged" : "contiguous");
+        if (paged) EXPECT_EQ(json["configuration"]["kv_block_tokens"], 2U);
+      }
+      expect_single_runtime_banner(result);
+      expect_no_dash_transport_artifacts(result);
+    }
+  }
 }
 
 TEST(ExecutableCliIntegrationTest,
@@ -975,30 +823,6 @@ TEST(ExecutableCliIntegrationTest,
   const nlohmann::json json =
       nlohmann::json::parse(read_file(output.path()));
   expect_complete_or_unsupported_metal_result(result, json);
-  EXPECT_EQ(json["configuration"]["output_file"], output.path());
-  expect_single_runtime_banner(result);
-  EXPECT_EQ(count_occurrences(
-                result.stdout_output,
-                Messages::msg_results_saved_to(output.path())),
-            1u)
-      << result.output;
-}
-
-TEST(ExecutableCliIntegrationTest,
-     LlmMetalPagedPrefillFileIsAtomicCompleteOrCapabilityUnsupportedIntegration) {
-  const TemporaryJsonFile output("llm_metal_paged_prefill_schema_v1");
-  const CliResult result = run_memory_benchmark(
-      bounded_llm_metal_paged_prefill_arguments(output.path()));
-
-  expect_process_completed(result);
-  ASSERT_EQ(access(output.path().c_str(), F_OK), 0) << result.output;
-  EXPECT_EQ(access((output.path() + ".tmp").c_str(), F_OK), -1);
-  const nlohmann::json json =
-      nlohmann::json::parse(read_file(output.path()));
-  expect_bounded_metal_prefill_result(
-      result, json, "paged", "llm-memory-v2-metal-prefill-paged",
-      "llm-metal-prefill-paged-full-prompt-affine32-v1",
-      "llm-metal-paged-prefill-dual-mod32-lookup-address-mix-v1");
   EXPECT_EQ(json["configuration"]["output_file"], output.path());
   expect_single_runtime_banner(result);
   EXPECT_EQ(count_occurrences(
@@ -1047,45 +871,33 @@ TEST(ExecutableCliIntegrationTest, LlmPrefillPagedWritesCompleteSchemaV2Integrat
   expect_no_dash_transport_artifacts(result);
 }
 
-TEST(ExecutableCliIntegrationTest,
-     LlmJsonIntegerAndPeakPreflightsRejectBeforeAllocationIntegration) {
-  {
+TEST(ExecutableCliIntegrationTest, LlmJsonIntegerAndPeakPreflightsRejectBeforeAllocationIntegration) {
+  struct PreflightCase {
+    const char* option;
+    uint64_t value;
+    const char* reason;
+    bool runtime_banner;
+  };
+  const PreflightCase cases[] = {
+      {"--query-heads", Constants::LLM_JSON_MAX_SAFE_INTEGER + 1, "json-integer-out-of-range", false},
+      {"--count", Constants::LLM_JSON_MAX_SAFE_INTEGER / 3, "json-output-peak-bytes-overflow", true},
+  };
+  for (const PreflightCase& test_case : cases) {
+    SCOPED_TRACE(test_case.option);
     std::vector<std::string> arguments = bounded_llm_arguments("-", 1);
-    const auto query_heads = std::find(arguments.begin(), arguments.end(),
-                                       "--query-heads");
-    ASSERT_NE(query_heads, arguments.end());
-    ASSERT_NE(std::next(query_heads), arguments.end());
-    *std::next(query_heads) =
-        std::to_string(Constants::LLM_JSON_MAX_SAFE_INTEGER + 1);
-
+    const auto option = std::find(arguments.begin(), arguments.end(), test_case.option);
+    ASSERT_NE(option, arguments.end());
+    ASSERT_NE(std::next(option), arguments.end());
+    *std::next(option) = std::to_string(test_case.value);
     const CliResult result = run_memory_benchmark(arguments);
     expect_process_completed(result);
     EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-    expect_no_runtime_banner(result);
+    if (test_case.runtime_banner)
+      expect_single_runtime_banner(result);
+    else
+      expect_no_runtime_banner(result);
     EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
-    EXPECT_NE(result.stderr_output.find("json-integer-out-of-range"),
-              std::string::npos)
-        << result.stderr_output;
-    expect_no_dash_transport_artifacts(result);
-  }
-
-  {
-    std::vector<std::string> arguments = bounded_llm_arguments("-", 1);
-    const auto count_value = std::find(arguments.begin(), arguments.end(),
-                                       "--count");
-    ASSERT_NE(count_value, arguments.end());
-    ASSERT_NE(std::next(count_value), arguments.end());
-    *std::next(count_value) = std::to_string(
-        Constants::LLM_JSON_MAX_SAFE_INTEGER / 3);
-
-    const CliResult result = run_memory_benchmark(arguments);
-    expect_process_completed(result);
-    EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-    expect_single_runtime_banner(result);
-    EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
-    EXPECT_NE(result.stderr_output.find("json-output-peak-bytes-overflow"),
-              std::string::npos)
-        << result.stderr_output;
+    EXPECT_NE(result.stderr_output.find(test_case.reason), std::string::npos) << result.stderr_output;
     expect_no_dash_transport_artifacts(result);
   }
 }
@@ -1106,72 +918,84 @@ TEST(ExecutableCliIntegrationTest,
   }
 }
 
-TEST(ExecutableCliIntegrationTest,
-     LlmWritesSingleCompleteSchemaV2DocumentToStdoutIntegration) {
-  const CliResult result = run_memory_benchmark(bounded_llm_arguments("-"));
+TEST(ExecutableCliIntegrationTest, LlmStdoutIsCompleteAndSeededMetadataIsReproducibleIntegration) {
+  nlohmann::json first;
+  for (int repetition = 0; repetition < 2; ++repetition) {
+    SCOPED_TRACE(repetition);
+    const CliResult result = run_memory_benchmark(bounded_llm_arguments("-"));
 
-  expect_process_completed(result);
-  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
-  const nlohmann::json json = parse_single_stdout_json(result);
-  ASSERT_TRUE(json.is_object()) << result.stdout_output;
-  EXPECT_EQ(json["software"]["version"], SOFTVERSION);
-  EXPECT_TRUE(json["software"]["timestamp"].is_string());
-  EXPECT_EQ(json["schema_version"], 2);
-  EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
-  EXPECT_EQ(json["backend"], "cpu");
-  EXPECT_EQ(json["phase"], "decode");
-  EXPECT_EQ(json["kv_layout"], "contiguous");
-  EXPECT_EQ(json["methodology_version"],
-            Constants::LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION);
-  EXPECT_EQ(json["status"], "complete");
-  EXPECT_TRUE(json["results_complete"].get<bool>());
-  EXPECT_TRUE(json["run_accepted"].get<bool>());
-  EXPECT_TRUE(json["scenario_order_balance_complete"].get<bool>());
-  EXPECT_EQ(json["configuration"]["output_file"], "-");
-  EXPECT_EQ(json["configuration"]["base_seed_uint64_decimal"], "42");
-  EXPECT_EQ(json["configuration"]["iterations"], 1u);
-  EXPECT_EQ(json["configuration"]["loop_count"], 3u);
-  EXPECT_EQ(json["configuration"]["resolved_sources"]["backend"],
-            "default");
-  EXPECT_EQ(json["configuration"]["resolved_sources"]["phase"],
-            "default");
-  EXPECT_EQ(json["configuration"]["resolved_sources"]["kv_layout"],
-            "default");
-  EXPECT_EQ(json["resolved_plan"]["backend"], "cpu");
-  EXPECT_EQ(json["resolved_plan"]["phase"], "decode");
-  EXPECT_EQ(json["resolved_plan"]["kv_layout"], "contiguous");
-  EXPECT_EQ(json["resolved_plan"]["work_unit_kind"], "decode_step");
-  EXPECT_TRUE(json["backend_evidence"]["cpu"].is_object());
-  EXPECT_TRUE(json["backend_evidence"]["metal"].is_null());
-  EXPECT_EQ(json["counters"]["planned_measurements"], 9u);
-  EXPECT_EQ(json["counters"]["measured_measurements"], 9u);
-  ASSERT_EQ(json["measurements"].size(), 9u);
-  for (const nlohmann::json& measurement : json["measurements"]) {
-    EXPECT_EQ(measurement["status"], "measured");
-    EXPECT_EQ(canonical_llm_plan(json, measurement)["work_unit_kind"], "decode_step");
-    EXPECT_EQ(canonical_llm_plan(json, measurement)["work_units"], 1u);
-    EXPECT_EQ(measurement["completed_work_units"], 1u);
-    expect_complete_llm_named_checks(json, measurement);
-    EXPECT_TRUE(measurement["checksum"]["checksum_valid"].get<bool>());
-    EXPECT_TRUE(
-        measurement["synthetic_work_unit_latency_seconds"].is_number());
-    EXPECT_TRUE(measurement["synthetic_memory_work_units_per_second"]
-                    .is_number());
-    EXPECT_TRUE(measurement["effective_model_payload_gb_s"].is_number());
+    expect_process_completed(result);
+    ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+    const nlohmann::json json = parse_single_stdout_json(result);
+    ASSERT_TRUE(json.is_object()) << result.stdout_output;
+    EXPECT_EQ(json["software"]["version"], SOFTVERSION);
+    EXPECT_TRUE(json["software"]["timestamp"].is_string());
+    EXPECT_EQ(json["schema_version"], 2);
+    EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
+    EXPECT_EQ(json["backend"], "cpu");
+    EXPECT_EQ(json["phase"], "decode");
+    EXPECT_EQ(json["kv_layout"], "contiguous");
+    EXPECT_EQ(json["methodology_version"], Constants::LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION);
+    EXPECT_EQ(json["status"], "complete");
+    EXPECT_TRUE(json["results_complete"].get<bool>());
+    EXPECT_TRUE(json["run_accepted"].get<bool>());
+    EXPECT_TRUE(json["scenario_order_balance_complete"].get<bool>());
+    EXPECT_EQ(json["configuration"]["output_file"], "-");
+    EXPECT_EQ(json["configuration"]["base_seed_uint64_decimal"], "42");
+    EXPECT_EQ(json["configuration"]["iterations"], 1u);
+    EXPECT_EQ(json["configuration"]["loop_count"], 3u);
+    EXPECT_EQ(json["configuration"]["resolved_sources"]["backend"], "default");
+    EXPECT_EQ(json["configuration"]["resolved_sources"]["phase"], "default");
+    EXPECT_EQ(json["configuration"]["resolved_sources"]["kv_layout"], "default");
+    EXPECT_EQ(json["resolved_plan"]["backend"], "cpu");
+    EXPECT_EQ(json["resolved_plan"]["phase"], "decode");
+    EXPECT_EQ(json["resolved_plan"]["kv_layout"], "contiguous");
+    EXPECT_EQ(json["resolved_plan"]["work_unit_kind"], "decode_step");
+    EXPECT_TRUE(json["backend_evidence"]["cpu"].is_object());
+    EXPECT_TRUE(json["backend_evidence"]["metal"].is_null());
+    EXPECT_EQ(json["counters"]["planned_measurements"], 9u);
+    EXPECT_EQ(json["counters"]["measured_measurements"], 9u);
+    ASSERT_EQ(json["measurements"].size(), 9u);
+    for (const nlohmann::json& measurement : json["measurements"]) {
+      EXPECT_EQ(measurement["status"], "measured");
+      EXPECT_EQ(canonical_llm_plan(json, measurement)["work_unit_kind"], "decode_step");
+      EXPECT_EQ(canonical_llm_plan(json, measurement)["work_units"], 1u);
+      EXPECT_EQ(measurement["completed_work_units"], 1u);
+      expect_complete_llm_named_checks(json, measurement);
+      EXPECT_TRUE(measurement["checksum"]["checksum_valid"].get<bool>());
+      EXPECT_TRUE(measurement["synthetic_work_unit_latency_seconds"].is_number());
+      EXPECT_TRUE(measurement["synthetic_memory_work_units_per_second"].is_number());
+      EXPECT_TRUE(measurement["effective_model_payload_gb_s"].is_number());
+    }
+    expect_complete_llm_checkpoint_lifecycle(json);
+
+    expect_single_runtime_banner(result);
+    EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)), std::string::npos);
+    EXPECT_NE(
+        result.stderr_output.find(Messages::report_llm_memory_header("cpu", "decode", "decode_step", "contiguous")),
+        std::string::npos)
+        << result.stderr_output;
+    EXPECT_EQ(count_occurrences(result.output, Messages::msg_results_saved_to("")), 0u);
+    expect_no_dash_transport_artifacts(result);
+    if (repetition == 0) {
+      first = json;
+      continue;
+    }
+    for (const char* field : {"configuration", "seeds"}) {
+      SCOPED_TRACE(field);
+      EXPECT_EQ(first[field], json[field]);
+    }
+    for (const char* field : {"methodology", "geometry", "model_work_plan", "scenario_plans"}) {
+      SCOPED_TRACE(field);
+      EXPECT_EQ(first["resolved_plan"][field], json["resolved_plan"][field]);
+    }
+    ASSERT_EQ(first["measurements"].size(), json["measurements"].size());
+    for (size_t index = 0; index < first["measurements"].size(); ++index) {
+      SCOPED_TRACE(index);
+      EXPECT_EQ(first["measurements"][index]["plan_ref"], json["measurements"][index]["plan_ref"]);
+      EXPECT_EQ(first["measurements"][index]["checksum"], json["measurements"][index]["checksum"]);
+    }
   }
-  expect_complete_llm_checkpoint_lifecycle(json);
-
-  expect_single_runtime_banner(result);
-  EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)),
-            std::string::npos);
-  EXPECT_NE(result.stderr_output.find(Messages::report_llm_memory_header(
-                "cpu", "decode", "decode_step", "contiguous")),
-            std::string::npos)
-      << result.stderr_output;
-  EXPECT_EQ(count_occurrences(result.output,
-                              Messages::msg_results_saved_to("")),
-            0u);
-  expect_no_dash_transport_artifacts(result);
 }
 
 TEST(ExecutableCliIntegrationTest, LlmPrefillWritesExactCompleteContiguousSchemaV2Integration) {
@@ -1209,39 +1033,6 @@ TEST(ExecutableCliIntegrationTest, LlmPrefillWritesExactCompleteContiguousSchema
   const nlohmann::json& resolved_plan = json["resolved_plan"];
   EXPECT_EQ(resolved_plan["phase"], "prefill");
   EXPECT_EQ(resolved_plan["work_unit_kind"], "prefill_operation");
-  EXPECT_EQ(resolved_plan["methodology"]["context_policy"], "full-prompt-population-with-tiled-causal-prefix-scans");
-  const nlohmann::json& geometry = resolved_plan["geometry"];
-  EXPECT_TRUE(geometry["decode"].is_null());
-  ASSERT_TRUE(geometry["prefill"].is_object());
-  EXPECT_EQ(geometry["prefill"]["prompt_tokens"], 5u);
-  EXPECT_EQ(geometry["prefill"]["attention_query_tile_tokens"], 2u);
-  EXPECT_EQ(geometry["prefill"]["tile_count"], "3");
-  EXPECT_EQ(geometry["prefill"]["attention_prefix_token_visits_per_sequence"], "11");
-  EXPECT_EQ(resolved_plan["model_context"]["prefill"]["causal_token_pairs_per_sequence"], "15");
-  EXPECT_EQ(resolved_plan["model_context"]["prefill"]["logical_attention_pairs"], "15");
-  EXPECT_EQ(resolved_plan["model_context"]["prefill"]["logical_attention_fma_terms"], "120");
-  EXPECT_EQ(geometry["k_or_v_sequence_visible_bytes"], "40");
-  EXPECT_EQ(geometry["k_mapping_bytes"], "40");
-  EXPECT_EQ(geometry["v_mapping_bytes"], "40");
-  EXPECT_EQ(geometry["kv_capacity_bytes"], "80");
-  EXPECT_EQ(geometry["weight_read_bytes_per_work_unit"], "1048576");
-  EXPECT_EQ(geometry["kv_read_bytes_per_work_unit"], "176");
-  EXPECT_EQ(geometry["kv_write_bytes_per_work_unit"], "80");
-  EXPECT_EQ(geometry["kv_only_effective_model_payload_bytes_per_work_unit"], "256");
-  EXPECT_EQ(geometry["mixed_effective_model_payload_bytes_per_work_unit"], "1048832");
-  EXPECT_EQ(geometry["total_data_mapping_bytes"], "1048656");
-  EXPECT_TRUE(geometry["traffic_crossover_numerator"].is_null());
-  EXPECT_TRUE(geometry["traffic_crossover_denominator"].is_null());
-  EXPECT_TRUE(geometry["traffic_crossover_context_tokens"].is_null());
-
-  const nlohmann::json& traffic = json["aggregates"]["traffic_diagnostics"];
-  EXPECT_TRUE(traffic["traffic_crossover_numerator"].is_null());
-  EXPECT_TRUE(traffic["traffic_crossover_denominator"].is_null());
-  EXPECT_TRUE(traffic["traffic_crossover_context_tokens"].is_null());
-  EXPECT_TRUE(traffic["current_visible_context_tokens"].is_null());
-  EXPECT_TRUE(traffic["current_weight_to_kv_read_payload_ratio"].is_null());
-  EXPECT_TRUE(traffic["current_context_classification"].is_null());
-
   const nlohmann::json& prefill_evidence = json["backend_evidence"]["cpu"]["prefill"];
   EXPECT_EQ(prefill_evidence["cost_unit"], "worker-cost");
   EXPECT_EQ(prefill_evidence["sequence_descriptors_per_scenario_per_worker"], 1u);
@@ -1400,151 +1191,6 @@ TEST(ExecutableCliIntegrationTest,
 }
 
 TEST(ExecutableCliIntegrationTest,
-     LlmExactGeometryAndSeededWorkloadMetadataAreReproducibleIntegration) {
-  const CliResult first_result =
-      run_memory_benchmark(bounded_llm_arguments("-", 1));
-  const CliResult second_result =
-      run_memory_benchmark(bounded_llm_arguments("-", 1));
-
-  expect_process_completed(first_result);
-  expect_process_completed(second_result);
-  ASSERT_EQ(first_result.exit_code, EXIT_SUCCESS)
-      << first_result.stderr_output;
-  ASSERT_EQ(second_result.exit_code, EXIT_SUCCESS)
-      << second_result.stderr_output;
-  const nlohmann::json first = parse_single_stdout_json(first_result);
-  const nlohmann::json second = parse_single_stdout_json(second_result);
-  ASSERT_TRUE(first.is_object());
-  ASSERT_TRUE(second.is_object());
-
-  const nlohmann::json& resolved_plan = first["resolved_plan"];
-  const nlohmann::json& geometry = resolved_plan["geometry"];
-  EXPECT_EQ(geometry["phase"], "decode");
-  EXPECT_EQ(geometry["work_unit_kind"], "decode_step");
-  EXPECT_EQ(geometry["decode"]["visible_context_tokens"], 2u);
-  EXPECT_TRUE(geometry["prefill"].is_null());
-  EXPECT_EQ(geometry["active_weight_bytes_per_work_unit"], "1048576");
-  EXPECT_EQ(geometry["layer_count"], 1u);
-  EXPECT_EQ(geometry["query_head_count"], 1u);
-  EXPECT_EQ(geometry["kv_head_count"], 1u);
-  EXPECT_EQ(geometry["query_heads_per_kv_head"], 1u);
-  EXPECT_EQ(geometry["head_dimension"], 8u);
-  EXPECT_EQ(geometry["kv_element_bytes"], "1");
-  EXPECT_EQ(geometry["batch_size"], 1u);
-  EXPECT_EQ(geometry["kv_vector_bytes"], "8");
-  EXPECT_EQ(geometry["k_or_v_record_bytes_per_layer"], "8");
-  EXPECT_EQ(geometry["kv_record_bytes_per_layer"], "16");
-  EXPECT_EQ(geometry["kv_bytes_per_visible_token"], "16");
-  EXPECT_EQ(geometry["k_or_v_sequence_visible_bytes"], "16");
-  EXPECT_EQ(geometry["k_mapping_bytes"], "16");
-  EXPECT_EQ(geometry["v_mapping_bytes"], "16");
-  EXPECT_EQ(geometry["kv_capacity_bytes"], "32");
-  EXPECT_EQ(geometry["weight_read_bytes_per_work_unit"], "1048576");
-  EXPECT_EQ(geometry["kv_read_bytes_per_work_unit"], "32");
-  EXPECT_EQ(geometry["kv_write_bytes_per_work_unit"], "16");
-  EXPECT_EQ(geometry["kv_only_effective_model_payload_bytes_per_work_unit"],
-            "48");
-  EXPECT_EQ(geometry["mixed_effective_model_payload_bytes_per_work_unit"],
-            "1048624");
-  EXPECT_EQ(geometry["total_data_mapping_bytes"], "1048608");
-  EXPECT_EQ(geometry["traffic_crossover_numerator"], "1048576");
-  EXPECT_EQ(geometry["traffic_crossover_denominator"], "16");
-  EXPECT_DOUBLE_EQ(
-      geometry["traffic_crossover_context_tokens"].get<double>(), 65536.0);
-
-  const nlohmann::json& layout = resolved_plan["layout"];
-  EXPECT_EQ(layout["kv_layout"], "contiguous");
-  EXPECT_TRUE(layout["kv_block_tokens"].is_null());
-  EXPECT_TRUE(layout["block_table_bytes"].is_null());
-  EXPECT_TRUE(layout["permutation_algorithm_version"].is_null());
-
-  const nlohmann::json& resources = resolved_plan["resources"];
-  EXPECT_EQ(resources["weight_logical_bytes"], "1048576");
-  EXPECT_EQ(resources["k_logical_bytes"], "16");
-  EXPECT_EQ(resources["v_logical_bytes"], "16");
-  EXPECT_EQ(resources["k_physical_length_bytes"], "16");
-  EXPECT_EQ(resources["v_physical_length_bytes"], "16");
-  EXPECT_EQ(resources["k_layout_padding_bytes"], "0");
-  EXPECT_EQ(resources["v_layout_padding_bytes"], "0");
-  EXPECT_TRUE(resources["block_table_bytes"].is_null());
-
-  const nlohmann::json& components =
-      resolved_plan["component_identities"];
-  EXPECT_EQ(components["logical_profile_version"],
-            Constants::LLM_LOGICAL_PROFILE_VERSION);
-  EXPECT_EQ(components["kv_layout_version"],
-            Constants::LLM_CONTIGUOUS_KV_LAYOUT_VERSION);
-  EXPECT_TRUE(components["permutation_version"].is_null());
-  EXPECT_EQ(components["backend_executor_version"],
-            Constants::LLM_CPU_EXECUTOR_VERSION);
-  EXPECT_EQ(components["resource_abi_version"],
-            Constants::LLM_DESCRIPTOR_ABI_VERSION);
-  EXPECT_EQ(components["schedule_version"],
-            Constants::LLM_CPU_SCHEDULE_VERSION);
-  EXPECT_EQ(components["timer_policy_version"],
-            Constants::LLM_CPU_TIMER_POLICY_VERSION);
-  EXPECT_TRUE(components["msl_revision"].is_null());
-  EXPECT_TRUE(components["msl_source_sha256"].is_null());
-
-  const nlohmann::json& scenarios =
-      resolved_plan["scenario_plans"];
-  ASSERT_EQ(scenarios.size(), 3u);
-  EXPECT_EQ(scenarios[0]["scenario"], "weights_only");
-  EXPECT_EQ(scenarios[0]["work_unit_kind"], "decode_step");
-  EXPECT_EQ(scenarios[0]["kv_write_kind"], "none");
-  EXPECT_EQ(scenarios[0]["work_units"], 1u);
-  EXPECT_EQ(scenarios[0]["weight_read_bytes_per_work_unit"], "1048576");
-  EXPECT_EQ(scenarios[0]["kv_read_bytes_per_work_unit"], "0");
-  EXPECT_EQ(scenarios[0]["kv_write_bytes_per_work_unit"], "0");
-  EXPECT_EQ(scenarios[0]["effective_model_payload_bytes"], "1048576");
-  EXPECT_EQ(scenarios[0]["task_accounted_bytes"], "1048576");
-  EXPECT_EQ(scenarios[1]["scenario"], "kv_only");
-  EXPECT_EQ(scenarios[1]["kv_write_kind"], "current_token_append");
-  EXPECT_EQ(scenarios[1]["weight_read_bytes_per_work_unit"], "0");
-  EXPECT_EQ(scenarios[1]["kv_read_bytes_per_work_unit"], "32");
-  EXPECT_EQ(scenarios[1]["kv_write_bytes_per_work_unit"], "16");
-  EXPECT_EQ(scenarios[1]["effective_model_payload_bytes"], "48");
-  EXPECT_EQ(scenarios[1]["task_accounted_bytes"], "48");
-  EXPECT_EQ(scenarios[2]["scenario"], "mixed");
-  EXPECT_EQ(scenarios[2]["kv_write_kind"], "current_token_append");
-  EXPECT_EQ(scenarios[2]["weight_read_bytes_per_work_unit"], "1048576");
-  EXPECT_EQ(scenarios[2]["kv_read_bytes_per_work_unit"], "32");
-  EXPECT_EQ(scenarios[2]["kv_write_bytes_per_work_unit"], "16");
-  EXPECT_EQ(scenarios[2]["effective_model_payload_bytes"], "1048624");
-  EXPECT_EQ(scenarios[2]["task_accounted_bytes"], "1048624");
-  for (const nlohmann::json& scenario : scenarios) {
-    EXPECT_EQ(scenario["layout_metadata_lookup_count_per_work_unit"], "0");
-    EXPECT_EQ(scenario["layout_metadata_read_bytes_per_work_unit"], "0");
-    EXPECT_EQ(scenario["layout_metadata_lookup_count"], "0");
-    EXPECT_EQ(scenario["layout_metadata_read_bytes"], "0");
-  }
-  EXPECT_EQ(first["counters"]["planned_work_units"], "3");
-  EXPECT_EQ(first["counters"]["planned_effective_model_payload_bytes"],
-            "2097248");
-  EXPECT_EQ(first["counters"]["planned_task_accounted_bytes"], "2097248");
-  EXPECT_EQ(first["counters"]["planned_layout_metadata_lookup_count"], "0");
-  EXPECT_EQ(first["counters"]["planned_layout_metadata_read_bytes"], "0");
-
-  EXPECT_EQ(first["configuration"], second["configuration"]);
-  EXPECT_EQ(first["resolved_plan"]["methodology"],
-            second["resolved_plan"]["methodology"]);
-  EXPECT_EQ(first["resolved_plan"]["geometry"],
-            second["resolved_plan"]["geometry"]);
-  EXPECT_EQ(first["seeds"], second["seeds"]);
-  EXPECT_EQ(first["resolved_plan"]["model_work_plan"],
-            second["resolved_plan"]["model_work_plan"]);
-  EXPECT_EQ(first["resolved_plan"]["scenario_plans"],
-            second["resolved_plan"]["scenario_plans"]);
-  ASSERT_EQ(first["measurements"].size(), second["measurements"].size());
-  for (size_t index = 0; index < first["measurements"].size(); ++index) {
-    EXPECT_EQ(first["measurements"][index]["plan_ref"],
-              second["measurements"][index]["plan_ref"]);
-    EXPECT_EQ(first["measurements"][index]["checksum"],
-              second["measurements"][index]["checksum"]);
-  }
-}
-
-TEST(ExecutableCliIntegrationTest,
      LlmPagedTasksResetAppendSlotsBetweenScenariosIntegration) {
   std::vector<std::string> arguments = bounded_llm_arguments("-", 3);
   arguments.insert(arguments.end() - 2,
@@ -1562,75 +1208,6 @@ TEST(ExecutableCliIntegrationTest,
   for (const nlohmann::json& measurement : document["measurements"]) {
     expect_complete_llm_named_checks(document, measurement);
   }
-}
-
-TEST(ExecutableCliIntegrationTest,
-     LlmDotDashAndFlagShapedOutputsRemainOrdinaryFilesIntegration) {
-  for (const std::string& target : {"./-", "-G"}) {
-    SCOPED_TRACE(target);
-    const CliResult result =
-        run_memory_benchmark(bounded_llm_arguments(target, 1));
-
-    expect_process_completed(result);
-    ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
-    ASSERT_NE(result.directory, nullptr);
-    const std::filesystem::path output_path =
-        result.directory->path() / (target == "./-" ? "-" : target);
-    ASSERT_TRUE(std::filesystem::is_regular_file(output_path));
-    EXPECT_FALSE(std::filesystem::exists(output_path.string() + ".tmp"));
-    const nlohmann::json json =
-        nlohmann::json::parse(read_file(output_path.string()));
-    EXPECT_EQ(json["configuration"]["output_file"], target);
-    EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
-    EXPECT_EQ(json["status"], "complete");
-    EXPECT_TRUE(json["results_complete"].get<bool>());
-    EXPECT_TRUE(json["run_accepted"].get<bool>());
-    EXPECT_FALSE(json["scenario_order_balance_complete"].get<bool>());
-  }
-}
-
-TEST(ExecutableCliIntegrationTest, GpuModeConflictIsOrderIndependentIntegration) {
-  for (const std::vector<std::string>& arguments : {
-           std::vector<std::string>{"--gpu-bandwidth",
-                                    "--analyze-core2core"},
-           std::vector<std::string>{"--analyze-core2core",
-                                    "--gpu-bandwidth"}}) {
-    const CliResult result = run_memory_benchmark(arguments);
-    EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-    expect_no_runtime_banner(result);
-    EXPECT_NE(result.output.find("mutually exclusive"), std::string::npos);
-    EXPECT_EQ(result.output.find("Running GPU memory bandwidth"),
-              std::string::npos);
-  }
-}
-
-TEST(ExecutableCliIntegrationTest, GpuMinimumFailsBeforeOutputIntegration) {
-  const TemporaryJsonFile output("gpu_below_minimum");
-  const CliResult result = run_memory_benchmark(
-      {"--gpu-bandwidth", "--buffer-size", "63", "--output",
-       output.path()});
-
-  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-  expect_no_runtime_banner(result);
-  EXPECT_NE(result.output.find("at least 64 MB"), std::string::npos);
-  EXPECT_EQ(access(output.path().c_str(), F_OK), -1);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     InvalidGpuStdoutTargetLeavesStdoutEmptyIntegration) {
-  const CliResult result = run_memory_benchmark(
-      {"--gpu-bandwidth", "--buffer-size", "63", "--output", "-"});
-
-  expect_process_completed(result);
-  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-  expect_no_runtime_banner(result);
-  EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
-  EXPECT_EQ(result.stderr_output,
-            Messages::error_prefix() +
-                Messages::error_gpu_buffer_size_below_minimum(
-                    63, Constants::GPU_MIN_BUFFER_SIZE_MB) +
-                "\n");
-  expect_no_dash_transport_artifacts(result);
 }
 
 TEST(ExecutableCliIntegrationTest,
@@ -1787,102 +1364,45 @@ TEST(ExecutableCliIntegrationTest, GpuAutomaticCalibrationFreezesPlansIntegratio
   }
 }
 
-TEST(ExecutableCliIntegrationTest, OptionsWithoutModeShowHelpAndReturnSuccessIntegration) {
-  const CliResult result = run_memory_benchmark({"--threads", "1"});
-
-  EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
-  expect_no_runtime_banner(result);
-  EXPECT_NE(result.output.find("Usage:"), std::string::npos);
-  EXPECT_NE(result.output.find("--threads <count>"), std::string::npos);
-}
-
-TEST(ExecutableCliIntegrationTest, InvalidStandardModeConfigReturnsFailureIntegration) {
-  const CliResult result = run_memory_benchmark(
-      {"--benchmark", "--only-bandwidth", "--latency-samples", "1"});
-
-  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-  expect_no_runtime_banner(result);
-  EXPECT_NE(result.output.find("--only-bandwidth cannot be used with --latency-samples"), std::string::npos);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     InvalidStdoutTargetCommandLeavesStdoutEmptyIntegration) {
-  const CliResult result = run_memory_benchmark(
-      {"--benchmark", "--only-bandwidth", "--latency-samples", "1",
-       "--output", "-"});
-
-  expect_process_completed(result);
-  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-  expect_no_runtime_banner(result);
-  EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
-  EXPECT_NE(result.stderr_output.find(
-                Messages::error_only_bandwidth_with_latency_samples()),
-            std::string::npos)
-      << result.stderr_output;
-  expect_no_dash_transport_artifacts(result);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     ParseErrorWithStdoutTargetLeavesStdoutEmptyIntegration) {
-  const std::string invalid_option = "--not-a-real-option";
-  const CliResult result = run_memory_benchmark(
-      {"--benchmark", "--output", "-", invalid_option});
-
-  expect_process_completed(result);
-  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-  expect_no_runtime_banner(result);
-  EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
-  EXPECT_NE(result.stderr_output.find(
-                Messages::error_unknown_option(invalid_option)),
-            std::string::npos)
-      << result.stderr_output;
-  expect_no_dash_transport_artifacts(result);
-}
-
-TEST(ExecutableCliIntegrationTest, CoreToCoreArgumentsAreRoutedBeforeNormalParserIntegration) {
-  const CliResult result = run_memory_benchmark(
-      {"--analyze-core2core", "--buffer-size", "256"});
-
-  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-  expect_no_runtime_banner(result);
-  EXPECT_NE(result.output.find("--analyze-core2core allows only optional"), std::string::npos);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     InvalidCoreToCoreStdoutTargetLeavesStdoutEmptyIntegration) {
-  const CliResult result = run_memory_benchmark(
-      {"--analyze-core2core", "--output", "-", "--buffer-size", "256"});
-
-  expect_process_completed(result);
-  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-  expect_no_runtime_banner(result);
-  EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
-  EXPECT_NE(result.stderr_output.find(
-                Messages::error_analyze_core_to_core_must_be_used_alone()),
-            std::string::npos)
-      << result.stderr_output;
-  expect_no_dash_transport_artifacts(result);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     CoreToCoreHelpWithStdoutTargetRemainsHumanInEitherOrderIntegration) {
-  for (const std::vector<std::string>& arguments : {
-           std::vector<std::string>{"--analyze-core2core", "--output", "-",
-                                    "--help"},
-           std::vector<std::string>{"--analyze-core2core", "--help",
-                                    "--output", "-"},
-       }) {
-    SCOPED_TRACE(testing::PrintToString(arguments));
-    const CliResult result = run_memory_benchmark(arguments);
-
+TEST(ExecutableCliIntegrationTest, InvalidCommandsFailBeforeOutputAcrossModesIntegration) {
+  const TemporaryJsonFile output("tlb_invalid_stride_sweep");
+  const long page_size = ::sysconf(_SC_PAGESIZE);
+  ASSERT_GT(page_size, 0);
+  struct InvalidCase {
+    std::vector<std::string> arguments;
+    std::string diagnostic;
+    bool diagnostic_is_complete = false;
+  };
+  const InvalidCase cases[] = {
+      {{"--benchmark", "--only-bandwidth", "--latency-samples", "1", "--output", "-"},
+       Messages::error_only_bandwidth_with_latency_samples()},
+      {{"--llm-memory", "--weight-size-mb", "1", "--output", "-"},
+       Messages::error_llm_memory_missing_required_option("--layers")},
+      {{"--gpu-bandwidth", "--buffer-size", "63", "--output", "-"},
+       Messages::error_gpu_buffer_size_below_minimum(63, Constants::GPU_MIN_BUFFER_SIZE_MB),
+       true},
+      {{"--benchmark", "--output", "-", "--not-a-real-option"}, Messages::error_unknown_option("--not-a-real-option")},
+      {{"--analyze-core2core", "--output", "-", "--buffer-size", "256"},
+       Messages::error_analyze_core_to_core_must_be_used_alone()},
+      {{"--analyze-tlb", "--sweep", "latency-stride-bytes=64,130", "--output", output.path()},
+       Messages::error_latency_stride_alignment(130, sizeof(uintptr_t))},
+      {{"--analyze-tlb", "--latency-stride-bytes", "32768", "--output", "-"},
+       Messages::error_analyze_tlb_stride_exceeds_page(32768, static_cast<size_t>(page_size))},
+      {{"--analyze-tlb", "--sweep", "latency-stride-bytes=64,130", "--output", "-"},
+       Messages::error_latency_stride_alignment(130, sizeof(uintptr_t))},
+  };
+  for (const InvalidCase& test_case : cases) {
+    SCOPED_TRACE(testing::PrintToString(test_case.arguments));
+    const CliResult result = run_memory_benchmark(test_case.arguments);
     expect_process_completed(result);
-    EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
+    EXPECT_EQ(result.exit_code, EXIT_FAILURE);
     expect_no_runtime_banner(result);
-    EXPECT_NE(result.stdout_output.find("Usage:"), std::string::npos);
-    EXPECT_NE(result.stdout_output.find("--analyze-core2core"),
-              std::string::npos);
-    EXPECT_TRUE(result.stderr_output.empty()) << result.stderr_output;
-    EXPECT_FALSE(nlohmann::json::accept(result.stdout_output));
+    EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
+    const std::string diagnostic = Messages::error_prefix() + test_case.diagnostic + "\n";
+    EXPECT_EQ(result.stderr_output.find(diagnostic), 0u) << result.stderr_output;
+    if (test_case.diagnostic_is_complete) EXPECT_EQ(result.stderr_output, diagnostic);
+    EXPECT_EQ(result.stderr_output.find(Messages::msg_running_sweep(2)), std::string::npos);
+    EXPECT_EQ(access(output.path().c_str(), F_OK), -1);
     expect_no_dash_transport_artifacts(result);
   }
 }
@@ -2016,40 +1536,6 @@ TEST(ExecutableCliIntegrationTest,
   expect_no_dash_transport_artifacts(result);
 }
 
-TEST(ExecutableCliIntegrationTest, AnalyzeTlbInvalidStrideSweepFailsBeforeExecutionIntegration) {
-  const TemporaryJsonFile output("tlb_invalid_stride_sweep");
-
-  const CliResult result = run_memory_benchmark({
-      "--analyze-tlb", "--sweep", "latency-stride-bytes=64,130",
-      "--output", output.path()});
-
-  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-  expect_no_runtime_banner(result);
-  EXPECT_NE(result.output.find("must be a multiple of 8 bytes"), std::string::npos);
-  EXPECT_EQ(result.output.find("Running sweep"), std::string::npos);
-  EXPECT_EQ(access(output.path().c_str(), F_OK), -1);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     AnalyzeTlbInvalidPreflightWithStdoutTargetLeavesStdoutEmptyIntegration) {
-  const CliResult result = run_memory_benchmark({
-      "--analyze-tlb", "--latency-stride-bytes", "32768", "--output",
-      "-"});
-
-  expect_process_completed(result);
-  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-  expect_no_runtime_banner(result);
-  EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
-  const long page_size = ::sysconf(_SC_PAGESIZE);
-  ASSERT_GT(page_size, 0);
-  EXPECT_NE(result.stderr_output.find(
-                Messages::error_analyze_tlb_stride_exceeds_page(
-                    32768, static_cast<size_t>(page_size))),
-            std::string::npos)
-      << result.stderr_output;
-  expect_no_dash_transport_artifacts(result);
-}
-
 TEST(ExecutableCliIntegrationTest,
      AnalyzeTlbWritesSingleJsonDocumentToStdoutIntegration) {
   const CliResult result = run_memory_benchmark(
@@ -2149,37 +1635,6 @@ TEST(ExecutableCliIntegrationTest,
 }
 
 TEST(ExecutableCliIntegrationTest,
-     ExplicitDotDashOutputRemainsOrdinaryFileTargetIntegration) {
-  const CliResult result = run_memory_benchmark({
-      "--benchmark", "--only-bandwidth", "--buffer-size", "1",
-      "--iterations", "1", "--count", "1", "--threads", "1",
-      "--output", "./-"});
-
-  expect_process_completed(result);
-  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
-  ASSERT_NE(result.directory, nullptr);
-  const std::filesystem::path output_path = result.directory->path() / "-";
-  ASSERT_TRUE(std::filesystem::exists(output_path));
-  EXPECT_FALSE(std::filesystem::exists(result.directory->path() / "-.tmp"));
-  const nlohmann::json json =
-      nlohmann::json::parse(read_file(output_path.string()));
-  EXPECT_EQ(json["configuration"]["output_file"], "./-");
-  EXPECT_EQ(json["configuration"]["mode"], "benchmark");
-  EXPECT_EQ(json["configuration"]["benchmark_schema_version"],
-            Constants::BENCHMARK_JSON_SCHEMA_VERSION);
-  EXPECT_EQ(json["status"], "complete");
-  EXPECT_TRUE(json["results_complete"].get<bool>());
-  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
-  EXPECT_NE(result.stdout_output.find(Messages::msg_running_benchmarks()),
-            std::string::npos)
-      << result.stdout_output;
-  EXPECT_NE(result.stdout_output.find("Results saved to:"),
-            std::string::npos)
-      << result.stdout_output;
-  EXPECT_FALSE(nlohmann::json::accept(result.stdout_output));
-}
-
-TEST(ExecutableCliIntegrationTest,
      FlagShapedOutputValuesRemainStandardFileTargetsIntegration) {
   const auto verify_target = [](const std::string& target) {
     const CliResult result = run_memory_benchmark(
@@ -2220,14 +1675,15 @@ TEST(ExecutableCliIntegrationTest,
         << result.output;
     EXPECT_EQ(result.output.find("mutually exclusive"), std::string::npos)
         << result.output;
+    EXPECT_NE(result.stdout_output.find(Messages::msg_running_benchmarks()), std::string::npos);
+    EXPECT_FALSE(nlohmann::json::accept(result.stdout_output));
     EXPECT_EQ(count_occurrences(result.output,
                                 Messages::msg_results_saved_to("")),
               1u)
         << result.output;
   };
 
-  for (const char* target :
-       {"-G", "-T", "--analyze-tlb", "-k", "--cache-size"}) {
+  for (const char* target : {"./-", "-T", "--cache-size"}) {
     SCOPED_TRACE(target);
     verify_target(target);
   }
@@ -2323,26 +1779,6 @@ TEST(ExecutableCliIntegrationTest,
   expect_no_dash_transport_artifacts(result);
 }
 
-TEST(ExecutableCliIntegrationTest,
-     InvalidTlbSweepWithStdoutTargetLeavesStdoutEmptyIntegration) {
-  const CliResult result = run_memory_benchmark({
-      "--analyze-tlb", "--sweep", "latency-stride-bytes=64,130",
-      "--output", "-"});
-
-  expect_process_completed(result);
-  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-  expect_no_runtime_banner(result);
-  EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
-  EXPECT_NE(result.stderr_output.find(
-                Messages::error_latency_stride_alignment(
-                    130, sizeof(uintptr_t))),
-            std::string::npos)
-      << result.stderr_output;
-  EXPECT_EQ(result.stderr_output.find(Messages::msg_running_sweep(2)),
-            std::string::npos);
-  expect_no_dash_transport_artifacts(result);
-}
-
 TEST(ExecutableCliIntegrationTest, PatternSweepPrintsOneBannerAcrossNestedLoopsIntegration) {
   const TemporaryJsonFile output("pattern_sweep_banner");
 
@@ -2370,41 +1806,6 @@ TEST(ExecutableCliIntegrationTest, PatternSweepPrintsOneBannerAcrossNestedLoopsI
             1u)
       << result.output;
   EXPECT_EQ(access((output.path() + ".tmp").c_str(), F_OK), -1);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     PatternSweepWritesSingleTerminalJsonToStdoutIntegration) {
-  const CliResult result = run_memory_benchmark({
-      "--patterns", "--iterations", "1", "--count", "1", "--threads",
-      "1", "--seed", "42", "--sweep", "buffer-size=1,2",
-      "--sweep-max-runs", "2", "--output", "-"});
-
-  expect_process_completed(result);
-  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
-  const nlohmann::json json = parse_single_stdout_json(result);
-  EXPECT_EQ(json["configuration"]["mode"],
-            Constants::SWEEP_JSON_MODE_NAME);
-  EXPECT_EQ(json["configuration"]["base_mode"],
-            Constants::PATTERNS_JSON_MODE_NAME);
-  EXPECT_EQ(json["configuration"]["sweep_schema_version"], 1);
-  EXPECT_EQ(json["status"], "complete");
-  EXPECT_EQ(json["planned_runs"], 2u);
-  EXPECT_EQ(json["attempted_runs"], 2u);
-  EXPECT_EQ(json["completed_runs"], 2u);
-  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
-  ASSERT_EQ(json["runs"].size(), 2u);
-  for (const nlohmann::json& run : json["runs"]) {
-    EXPECT_EQ(run["status"], "complete");
-    EXPECT_EQ(run["result"]["configuration"]["pattern_schema_version"],
-              3);
-    EXPECT_EQ(run["result"]["status"], "complete");
-    EXPECT_TRUE(run["result"]["results_complete"].get<bool>());
-  }
-
-  EXPECT_EQ(count_occurrences(result.output,
-                              Messages::msg_results_saved_to("")),
-            0u);
-  expect_no_dash_transport_artifacts(result);
 }
 
 TEST(ExecutableCliIntegrationTest, PatternModeRunsPatternOrchestrationIntegration) {

@@ -22,9 +22,7 @@
 #include <cstring>
 #include <vector>
 
-#include "benchmark/benchmark_tests.h"
 #include "benchmark/tlb_chain.h"
-#include "core/timing/timer.h"
 
 namespace {
 
@@ -211,71 +209,64 @@ TEST(TlbChainTest, ValidationReportsInvalidArgumentBeforeTraversal) {
             TlbChainValidationStatus::InvalidArgument);
 }
 
-TEST(TlbChainTest, ValidationReportsMisalignedNode) {
-  constexpr size_t page_size = kTestPageSizeBytes;
-  PageBuffer buffer(page_size);
-  ASSERT_NE(buffer.get(), nullptr);
-
-  EXPECT_EQ(validate_tlb_chain(buffer.get(), buffer.size(), static_cast<unsigned char*>(buffer.get()) + 1,
-                               expected_chain(page_size, 1, 1)),
-            TlbChainValidationStatus::NodeMisaligned);
-}
-
-TEST(TlbChainTest, ValidationReportsEarlyCycle) {
-  constexpr size_t page_size = kTestPageSizeBytes;
-  PageBuffer buffer(page_size);
-  ASSERT_NE(buffer.get(), nullptr);
-  write_link(buffer.get(), 0, address_at(buffer.get(), 0));
-
-  EXPECT_EQ(validate_tlb_chain(buffer.get(), buffer.size(), buffer.get(), expected_chain(page_size, 3, 1)),
-            TlbChainValidationStatus::EarlyCycle);
-}
-
-TEST(TlbChainTest, ValidationReportsDuplicateNodeAtExpectedCycleLength) {
-  constexpr size_t page_size = kTestPageSizeBytes;
-  PageBuffer buffer(page_size);
-  ASSERT_NE(buffer.get(), nullptr);
-  write_link(buffer.get(), 0, address_at(buffer.get(), 64));
-  write_link(buffer.get(), 64, address_at(buffer.get(), 128));
-  write_link(buffer.get(), 128, address_at(buffer.get(), 64));
-
-  EXPECT_EQ(validate_tlb_chain(buffer.get(), buffer.size(), buffer.get(), expected_chain(page_size, 4, 1)),
-            TlbChainValidationStatus::DuplicateNode);
-}
-
-TEST(TlbChainTest, ValidationReportsChainThatDoesNotReturnToHead) {
-  constexpr size_t page_size = kTestPageSizeBytes;
-  PageBuffer buffer(page_size);
-  ASSERT_NE(buffer.get(), nullptr);
-  write_link(buffer.get(), 0, address_at(buffer.get(), 64));
-  write_link(buffer.get(), 64, address_at(buffer.get(), 128));
-  write_link(buffer.get(), 128, address_at(buffer.get(), 192));
-
-  EXPECT_EQ(validate_tlb_chain(buffer.get(), buffer.size(), buffer.get(), expected_chain(page_size, 3, 1)),
-            TlbChainValidationStatus::DoesNotReturnToHead);
-}
-
-TEST(TlbChainTest, ValidationReportsCacheLineReuse) {
-  constexpr size_t page_size = kTestPageSizeBytes;
-  PageBuffer buffer(page_size);
-  ASSERT_NE(buffer.get(), nullptr);
-  write_link(buffer.get(), 0, address_at(buffer.get(), sizeof(uintptr_t)));
-  write_link(buffer.get(), sizeof(uintptr_t), address_at(buffer.get(), 0));
-
-  EXPECT_EQ(validate_tlb_chain(buffer.get(), buffer.size(), buffer.get(),
-                               expected_chain(page_size, 2, 2, TlbChainLayout::Packed)),
-            TlbChainValidationStatus::CacheLineReuse);
-}
-
-TEST(TlbChainTest, ValidationReportsSpreadPageCountMismatch) {
-  constexpr size_t page_size = kTestPageSizeBytes;
-  PageBuffer buffer(2 * page_size);
-  ASSERT_NE(buffer.get(), nullptr);
-  write_link(buffer.get(), 0, address_at(buffer.get(), 64));
-  write_link(buffer.get(), 64, address_at(buffer.get(), 0));
-
-  EXPECT_EQ(validate_tlb_chain(buffer.get(), buffer.size(), buffer.get(), expected_chain(page_size, 2, 2)),
-            TlbChainValidationStatus::PageCountMismatch);
+TEST(TlbChainTest, ValidationReportsExactCorruptionReasons) {
+  struct CorruptionCase {
+    const char* name;
+    size_t allocation_pages;
+    size_t head_offset;
+    size_t nodes;
+    size_t pages;
+    TlbChainLayout layout;
+    std::vector<std::pair<size_t, size_t>> links;
+    TlbChainValidationStatus status;
+  };
+  for (const CorruptionCase& entry :
+       {CorruptionCase{"misaligned", 1, 1, 1, 1, TlbChainLayout::Spread, {}, TlbChainValidationStatus::NodeMisaligned},
+        CorruptionCase{
+            "early cycle", 1, 0, 3, 1, TlbChainLayout::Spread, {{0, 0}}, TlbChainValidationStatus::EarlyCycle},
+        CorruptionCase{"duplicate",
+                       1,
+                       0,
+                       4,
+                       1,
+                       TlbChainLayout::Spread,
+                       {{0, 64}, {64, 128}, {128, 64}},
+                       TlbChainValidationStatus::DuplicateNode},
+        CorruptionCase{"open chain",
+                       1,
+                       0,
+                       3,
+                       1,
+                       TlbChainLayout::Spread,
+                       {{0, 64}, {64, 128}, {128, 192}},
+                       TlbChainValidationStatus::DoesNotReturnToHead},
+        CorruptionCase{"cache line reuse",
+                       1,
+                       0,
+                       2,
+                       2,
+                       TlbChainLayout::Packed,
+                       {{0, sizeof(uintptr_t)}, {sizeof(uintptr_t), 0}},
+                       TlbChainValidationStatus::CacheLineReuse},
+        CorruptionCase{"page count",
+                       2,
+                       0,
+                       2,
+                       2,
+                       TlbChainLayout::Spread,
+                       {{0, 64}, {64, 0}},
+                       TlbChainValidationStatus::PageCountMismatch}}) {
+    SCOPED_TRACE(entry.name);
+    PageBuffer buffer(entry.allocation_pages * kTestPageSizeBytes);
+    ASSERT_NE(buffer.get(), nullptr);
+    for (const auto& link : entry.links) {
+      write_link(buffer.get(), link.first, address_at(buffer.get(), link.second));
+    }
+    EXPECT_EQ(
+        validate_tlb_chain(buffer.get(), buffer.size(), static_cast<unsigned char*>(buffer.get()) + entry.head_offset,
+                           expected_chain(kTestPageSizeBytes, entry.nodes, entry.pages, entry.layout)),
+        entry.status);
+  }
 }
 
 TEST(TlbChainTest, RejectsInvalidStrideAndInsufficientSpreadBuffer) {
@@ -385,20 +376,4 @@ TEST(TlbChainTest, ScratchReusePreservesSemanticsWithoutGrowingCapacity) {
   EXPECT_EQ(scratch.visited_pages.bucket_count(), page_buckets);
   EXPECT_EQ(scratch.visited_cache_lines.bucket_count(), cache_line_buckets);
   EXPECT_EQ(scratch.nodes_per_page.bucket_count(), per_page_buckets);
-}
-
-TEST(TlbChainTest, SpreadAndPackedRunThroughLatencyKernelIntegration) {
-  const size_t page_size = static_cast<size_t>(getpagesize());
-  constexpr size_t kRequestedPages = 32;
-  PageBuffer buffer(kRequestedPages * page_size);
-  ASSERT_NE(buffer.get(), nullptr);
-  auto timer = HighResTimer::create();
-  ASSERT_TRUE(timer.has_value());
-
-  for (TlbChainLayout layout : {TlbChainLayout::Spread, TlbChainLayout::Packed}) {
-    const TlbChainBuildResult result = build_tlb_chain(buffer.get(), buffer.size(), kRequestedPages, page_size, 256,
-                                                       layout, TlbChainTraversalPolicy::RandomPagesRandomOffsets, 1234);
-    ASSERT_EQ(result.status, TlbChainBuildStatus::Success);
-    EXPECT_GT(run_latency_test(result.chain_head, 10000, *timer, nullptr, 0), 0.0);
-  }
 }

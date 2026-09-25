@@ -281,24 +281,11 @@ void verify_reverse_copy_kernel_boundaries(CopyKernel kernel) {
 
 }  // namespace
 
-TEST(StandardKernelIntegrationTest, MainReadHonorsTailsAndChecksum) {
-  verify_read_kernel_boundaries(memory_read_loop_asm);
-}
-
-TEST(StandardKernelIntegrationTest, CacheReadHonorsTailsAndChecksum) {
-  verify_read_kernel_boundaries(memory_read_cache_loop_asm);
-}
-
-TEST(StandardKernelIntegrationTest, CacheReadChecksumIncludesUpperVectorLane) {
-  alignas(64) std::array<unsigned char, 32> data{};
-  data[8] = 0x5a;
-  EXPECT_EQ(memory_read_cache_loop_asm(data.data(), data.size()), 0x5aULL);
-}
-
-TEST(PatternKernelIntegrationTest, ReverseReadChecksumIncludesUpperVectorLane) {
-  alignas(64) std::array<unsigned char, 32> data{};
-  data[8] = 0x5a;
-  EXPECT_EQ(memory_read_reverse_loop_asm(data.data(), data.size()), 0x5aULL);
+TEST(StandardKernelIntegrationTest, MainAndCacheReadsHonorTailsAndChecksum) {
+  for (ReadKernel kernel : {memory_read_loop_asm, memory_read_cache_loop_asm}) {
+    SCOPED_TRACE(kernel == memory_read_loop_asm ? "main" : "cache");
+    verify_read_kernel_boundaries(kernel);
+  }
 }
 
 TEST(PatternKernelIntegrationTest, ReverseReadHonorsTailsGuardsAndChecksum) {
@@ -415,92 +402,67 @@ TEST(StandardKernelIntegrationTest, MainAndCacheCopiesHonorExactBoundaries) {
   verify_copy_kernel_boundaries(memory_copy_cache_loop_asm);
 }
 
-TEST(StandardKernelIntegrationTest, StandardKernelsPreserveCalleeSavedRegisters) {
-  alignas(64) std::array<unsigned char, 1024> source{};
-  alignas(64) std::array<unsigned char, 1024> destination{};
+TEST(StandardKernelIntegrationTest, StandardAndPatternKernelsPreserveCalleeSavedRegisters) {
+  std::vector<unsigned char> source(Constants::PATTERN_STRIDE_SUPERPAGE_2MB + Constants::PATTERN_ACCESS_SIZE_BYTES);
+  std::vector<unsigned char> destination(source.size());
   for (size_t index = 0; index < source.size(); ++index) {
     source[index] = static_cast<unsigned char>(index & 0xff);
   }
   constexpr size_t kSize = 513;
 
-  for (ReadKernel kernel : {memory_read_loop_asm,
-                            memory_read_cache_loop_asm}) {
-    EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
-                  reinterpret_cast<uintptr_t>(kernel),
-                  reinterpret_cast<uintptr_t>(source.data()), kSize, 0, 0, 0,
-                  0),
-              1u);
-  }
-  for (WriteKernel kernel : {memory_write_loop_asm,
-                             memory_write_cache_loop_asm}) {
-    EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
-                  reinterpret_cast<uintptr_t>(kernel),
-                  reinterpret_cast<uintptr_t>(destination.data()), kSize, 0,
-                  0, 0, 0),
-              1u);
-  }
-  for (CopyKernel kernel : {memory_copy_loop_asm,
-                            memory_copy_cache_loop_asm}) {
-    EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
-                  reinterpret_cast<uintptr_t>(kernel),
-                  reinterpret_cast<uintptr_t>(destination.data()),
-                  reinterpret_cast<uintptr_t>(source.data()), kSize, 0, 0, 0),
-              1u);
-  }
-
-  ASSERT_EQ(setup_latency_chain(source.data(), source.size(), 256, 0, nullptr,
-                                LatencyChainMode::GlobalRandom, 12345),
-            EXIT_SUCCESS);
-  EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
-                reinterpret_cast<uintptr_t>(memory_latency_chase_asm),
-                reinterpret_cast<uintptr_t>(source.data()), 16, 0, 0, 0, 0),
-              1u);
-}
-
-TEST(PatternKernelIntegrationTest, ReverseAndRandomKernelsPreserveCalleeSavedRegisters) {
-  alignas(64) std::array<unsigned char, 1024> source{};
-  alignas(64) std::array<unsigned char, 1024> destination{};
   const std::array<size_t, 3> indices = {0, 64, 128};
-  for (size_t index = 0; index < source.size(); ++index) {
-    source[index] = static_cast<unsigned char>((index * 17 + 3) & 0xff);
+  const uintptr_t src = reinterpret_cast<uintptr_t>(source.data());
+  const uintptr_t dst = reinterpret_cast<uintptr_t>(destination.data());
+  const uintptr_t index_data = reinterpret_cast<uintptr_t>(indices.data());
+  struct KernelCase {
+    const char* name;
+    uintptr_t function;
+    std::array<uintptr_t, 6> arguments;
+  };
+  std::vector<KernelCase> cases = {
+      {"read", reinterpret_cast<uintptr_t>(memory_read_loop_asm), {src, kSize, 0, 0, 0, 0}},
+      {"write", reinterpret_cast<uintptr_t>(memory_write_loop_asm), {dst, kSize, 0, 0, 0, 0}},
+      {"copy", reinterpret_cast<uintptr_t>(memory_copy_loop_asm), {dst, src, kSize, 0, 0, 0}},
+      {"read_cache", reinterpret_cast<uintptr_t>(memory_read_cache_loop_asm), {src, kSize, 0, 0, 0, 0}},
+      {"write_cache", reinterpret_cast<uintptr_t>(memory_write_cache_loop_asm), {dst, kSize, 0, 0, 0, 0}},
+      {"copy_cache", reinterpret_cast<uintptr_t>(memory_copy_cache_loop_asm), {dst, src, kSize, 0, 0, 0}},
+      {"read_reverse", reinterpret_cast<uintptr_t>(memory_read_reverse_loop_asm), {src, kSize, 0, 0, 0, 0}},
+      {"write_reverse", reinterpret_cast<uintptr_t>(memory_write_reverse_loop_asm), {dst, kSize, 0, 0, 0, 0}},
+      {"copy_reverse", reinterpret_cast<uintptr_t>(memory_copy_reverse_loop_asm), {dst, src, kSize, 0, 0, 0}},
+      {"read_random",
+       reinterpret_cast<uintptr_t>(memory_read_random_loop_asm),
+       {src, index_data, indices.size(), 0, 0, 0}},
+      {"write_random",
+       reinterpret_cast<uintptr_t>(memory_write_random_loop_asm),
+       {dst, index_data, indices.size(), 0, 0, 0}},
+      {"copy_random",
+       reinterpret_cast<uintptr_t>(memory_copy_random_loop_asm),
+       {dst, src, index_data, indices.size(), 0, 0}},
+  };
+  for (size_t stride : {Constants::PATTERN_STRIDE_CACHE_LINE, Constants::PATTERN_STRIDE_PAGE,
+                        Constants::PATTERN_STRIDE_PAGE_16K, Constants::PATTERN_STRIDE_SUPERPAGE_2MB}) {
+    const size_t span = stride + Constants::PATTERN_ACCESS_SIZE_BYTES;
+    cases.push_back({"read_strided",
+                     reinterpret_cast<uintptr_t>(memory_read_strided_phased_loop_asm),
+                     {src, span, stride, 2, 0, 0}});
+    cases.push_back({"write_strided",
+                     reinterpret_cast<uintptr_t>(memory_write_strided_phased_loop_asm),
+                     {dst, span, stride, 2, 0, 0}});
+    cases.push_back({"copy_strided",
+                     reinterpret_cast<uintptr_t>(memory_copy_strided_phased_loop_asm),
+                     {dst, src, span, stride, 2, 0}});
   }
-  constexpr size_t kReverseSize = 513;
-
-  EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
-                reinterpret_cast<uintptr_t>(memory_read_reverse_loop_asm),
-                reinterpret_cast<uintptr_t>(source.data()), kReverseSize, 0, 0,
-                0, 0),
-            1u);
-  EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
-                reinterpret_cast<uintptr_t>(memory_write_reverse_loop_asm),
-                reinterpret_cast<uintptr_t>(destination.data()), kReverseSize,
-                0, 0, 0, 0),
-            1u);
-  EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
-                reinterpret_cast<uintptr_t>(memory_copy_reverse_loop_asm),
-                reinterpret_cast<uintptr_t>(destination.data()),
-                reinterpret_cast<uintptr_t>(source.data()), kReverseSize, 0, 0,
-                0),
-            1u);
-
-  EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
-                reinterpret_cast<uintptr_t>(memory_read_random_loop_asm),
-                reinterpret_cast<uintptr_t>(source.data()),
-                reinterpret_cast<uintptr_t>(indices.data()), indices.size(), 0,
-                0, 0),
-            1u);
-  EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
-                reinterpret_cast<uintptr_t>(memory_write_random_loop_asm),
-                reinterpret_cast<uintptr_t>(destination.data()),
-                reinterpret_cast<uintptr_t>(indices.data()), indices.size(), 0,
-                0, 0),
-            1u);
-  EXPECT_EQ(verify_pattern_callee_saved_registers_asm(
-                reinterpret_cast<uintptr_t>(memory_copy_random_loop_asm),
-                reinterpret_cast<uintptr_t>(destination.data()),
-                reinterpret_cast<uintptr_t>(source.data()),
-                reinterpret_cast<uintptr_t>(indices.data()), indices.size(), 0,
-                0),
+  for (const KernelCase& entry : cases) {
+    SCOPED_TRACE(entry.name);
+    SCOPED_TRACE(::testing::PrintToString(entry.arguments));
+    const auto& args = entry.arguments;
+    EXPECT_EQ(
+        verify_pattern_callee_saved_registers_asm(entry.function, args[0], args[1], args[2], args[3], args[4], args[5]),
+        1u);
+  }
+  ASSERT_EQ(setup_latency_chain(source.data(), 1024, 256, 0, LatencyChainMode::GlobalRandom, 12345), EXIT_SUCCESS);
+  EXPECT_EQ(verify_pattern_callee_saved_registers_asm(reinterpret_cast<uintptr_t>(memory_latency_chase_asm), src, 16, 0,
+                                                      0, 0, 0),
             1u);
 }
 

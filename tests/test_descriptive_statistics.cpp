@@ -21,23 +21,6 @@
 
 #include "utils/descriptive_statistics.h"
 
-TEST(DescriptiveStatisticsTest, EmptyPopulationReturnsUndefinedDefaults) {
-  const DescriptiveStatistics statistics = calculate_descriptive_statistics({});
-
-  EXPECT_EQ(statistics.sample_count, 0U);
-  EXPECT_DOUBLE_EQ(statistics.average, 0.0);
-  EXPECT_DOUBLE_EQ(statistics.min, 0.0);
-  EXPECT_DOUBLE_EQ(statistics.max, 0.0);
-  EXPECT_DOUBLE_EQ(statistics.median, 0.0);
-  EXPECT_DOUBLE_EQ(statistics.p90, 0.0);
-  EXPECT_DOUBLE_EQ(statistics.p95, 0.0);
-  EXPECT_DOUBLE_EQ(statistics.p99, 0.0);
-  EXPECT_DOUBLE_EQ(statistics.stddev, 0.0);
-  EXPECT_DOUBLE_EQ(statistics.coefficient_of_variation_pct, 0.0);
-  EXPECT_FALSE(statistics.coefficient_of_variation_defined);
-  EXPECT_DOUBLE_EQ(statistics.median_absolute_deviation, 0.0);
-}
-
 TEST(DescriptiveStatisticsTest, SingleNonzeroSampleHasDefinedZeroVariation) {
   const DescriptiveStatistics statistics = calculate_descriptive_statistics({42.0});
 

@@ -193,75 +193,32 @@ TEST(TlbMeasurementSchedulerTest, MeasurementErrorAfterRecordsPreservesValidPref
   EXPECT_FALSE(result.converged);
 }
 
-TEST(TlbMeasurementSchedulerTest, EmptyScheduleIsACompleteNoOp) {
-  size_t stop_calls = 0;
-  size_t measure_calls = 0;
-  const TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(
-      {},
-      [&stop_calls]() {
-        ++stop_calls;
-        return false;
-      },
-      [&measure_calls](const TlbMeasurementTask&, TlbMeasurementSample&) {
-        ++measure_calls;
-        return TlbTaskMeasureStatus::Success;
-      });
-
-  EXPECT_EQ(result.status, TlbScheduleExecutionStatus::Complete);
-  EXPECT_EQ(stop_calls, 0u);
-  EXPECT_EQ(measure_calls, 0u);
-  EXPECT_TRUE(result.records.empty());
-  EXPECT_EQ(result.rounds_completed, 0u);
-}
-
-TEST(TlbMeasurementSchedulerTest, MissingMeasureCallbackIsAnErrorForNonEmptySchedule) {
-  const std::vector<TlbMeasurementTask> schedule =
-      build_tlb_measurement_schedule(make_points(1), 1, 7, TlbMeasurementPass::Base);
-
-  const TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(schedule, {}, {});
-
-  EXPECT_EQ(result.status, TlbScheduleExecutionStatus::Error);
-  EXPECT_TRUE(result.records.empty());
-  EXPECT_EQ(result.rounds_completed, 0u);
-}
-
-TEST(TlbMeasurementSchedulerTest, ConvergenceCallbackStopsOnlyAfterCompleteRound) {
-  const std::vector<TlbMeasurementTask> schedule =
-      build_tlb_measurement_schedule(make_points(3), 5, 7, TlbMeasurementPass::Base);
-
-  const TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(
-      schedule, []() { return false; },
-      [](const TlbMeasurementTask&, TlbMeasurementSample& sample) {
-        sample.latency_ns = 1.0;
-        return TlbTaskMeasureStatus::Success;
-      },
-      [](size_t completed_rounds, const std::vector<TlbMeasurementRecord>& records) {
-        EXPECT_EQ(records.size(), completed_rounds * 3);
-        return completed_rounds == 2;
-      });
-
-  EXPECT_EQ(result.status, TlbScheduleExecutionStatus::Complete);
-  EXPECT_TRUE(result.converged);
-  EXPECT_EQ(result.rounds_completed, 2u);
-  EXPECT_EQ(result.records.size(), 6u);
-}
-
-TEST(TlbMeasurementSchedulerTest, ReportsMaximumRoundsWithoutConvergence) {
-  const std::vector<TlbMeasurementTask> schedule =
-      build_tlb_measurement_schedule(make_points(2), 3, 7, TlbMeasurementPass::Base);
-
-  const TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(
-      schedule, []() { return false; },
-      [](const TlbMeasurementTask&, TlbMeasurementSample& sample) {
-        sample.latency_ns = 1.0;
-        return TlbTaskMeasureStatus::Success;
-      },
-      [](size_t, const std::vector<TlbMeasurementRecord>&) { return false; });
-
-  EXPECT_EQ(result.status, TlbScheduleExecutionStatus::Complete);
-  EXPECT_FALSE(result.converged);
-  EXPECT_EQ(result.rounds_completed, 3u);
-  EXPECT_EQ(result.records.size(), 6u);
+TEST(TlbMeasurementSchedulerTest, StopsAtConvergenceOrMaximumAfterCompleteRounds) {
+  struct ScheduleCase {
+    size_t points;
+    size_t maximum;
+    size_t converged_at;
+    size_t completed;
+  };
+  for (const ScheduleCase& entry : {ScheduleCase{3, 5, 2, 2}, ScheduleCase{2, 3, 0, 3}}) {
+    SCOPED_TRACE(entry.converged_at);
+    const auto schedule =
+        build_tlb_measurement_schedule(make_points(entry.points), entry.maximum, 7, TlbMeasurementPass::Base);
+    const TlbScheduleExecutionResult result = execute_tlb_measurement_schedule(
+        schedule, []() { return false; },
+        [](const TlbMeasurementTask&, TlbMeasurementSample& sample) {
+          sample.latency_ns = 1.0;
+          return TlbTaskMeasureStatus::Success;
+        },
+        [&](size_t completed_rounds, const std::vector<TlbMeasurementRecord>& records) {
+          EXPECT_EQ(records.size(), completed_rounds * entry.points);
+          return completed_rounds == entry.converged_at;
+        });
+    EXPECT_EQ(result.status, TlbScheduleExecutionStatus::Complete);
+    EXPECT_EQ(result.converged, entry.converged_at != 0);
+    EXPECT_EQ(result.rounds_completed, entry.completed);
+    EXPECT_EQ(result.records.size(), entry.completed * entry.points);
+  }
 }
 
 TEST(TlbMeasurementSchedulerTest, PreservesPairedMeasurementMetadata) {

@@ -548,8 +548,6 @@ const std::string& benchmark_reason_unknown_loop_exception();
 std::string benchmark_reason_coordinator_exception(const std::string& error);
 const std::string& benchmark_reason_unknown_coordinator_exception();
 std::string benchmark_reason_prepare_failed(const std::string& phase_name);
-std::string benchmark_reason_latency_chain_setup_failed(
-    const std::string& phase_name);
 const std::string& benchmark_reason_invalid_bandwidth_plan();
 const std::string& benchmark_reason_no_worker_partition();
 const std::string& benchmark_reason_copy_payload_overflow();

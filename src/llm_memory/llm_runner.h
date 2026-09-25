@@ -376,7 +376,5 @@ int run_llm_memory_suite(const LlmMemoryConfig& config,
 std::string_view canonicalize_llm_result_reason_code(std::string_view reason_code) noexcept;
 
 /** Stable token helpers for runner task and checkpoint identities. */
-const char* llm_runner_task_kind_to_string(LlmRunnerTaskKind kind) noexcept;
-const char* llm_checkpoint_kind_to_string(LlmCheckpointKind kind) noexcept;
 
 #endif  // LLM_RUNNER_H

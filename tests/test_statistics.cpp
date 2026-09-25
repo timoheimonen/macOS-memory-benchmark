@@ -42,20 +42,20 @@ using test_statistics_helpers::capture_main_bandwidth;
 // ---------------------------------------------------------------------------
 
 // loop_count == 1 must produce no output at all.
-TEST(StatisticsTest, SingleLoopProducesNoOutput) {
-  testing::internal::CaptureStdout();
-  print_statistics(1, {100.0}, kE, kE, kE, kE, kE, kE, kE, kE, kE, kE, kE, kE, kE, kE, false, kE, kE, kE, kE, kE, kE,
-                   kE, kE, false, false);
-  EXPECT_TRUE(testing::internal::GetCapturedStdout().empty());
-}
-
 // only_latency=true with empty latency vectors suppresses output even when
 // loop_count > 1.
-TEST(StatisticsTest, OnlyLatencyModeEmptyLatencyProducesNoOutput) {
-  testing::internal::CaptureStdout();
-  print_statistics(3, {10.0, 20.0, 30.0}, kE, kE, kE, kE, kE, kE, kE, kE, kE, kE, kE, kE, kE, kE, false, kE, kE, kE, kE,
-                   kE, kE, kE, kE, false, true);
-  EXPECT_TRUE(testing::internal::GetCapturedStdout().empty());
+TEST(StatisticsTest, SingleLoopAndEmptyLatencyModeProduceNoOutput) {
+  struct EmptyCase {
+    int loops;
+    bool only_latency;
+  };
+  for (const EmptyCase& entry : {EmptyCase{1, false}, EmptyCase{3, true}}) {
+    SCOPED_TRACE(entry.loops);
+    testing::internal::CaptureStdout();
+    print_statistics(entry.loops, {10.0, 20.0, 30.0}, kE, kE, kE, kE, kE, kE, kE, kE, kE, kE, kE, kE, kE, kE, false, kE,
+                     kE, kE, kE, kE, kE, kE, kE, false, entry.only_latency);
+    EXPECT_TRUE(testing::internal::GetCapturedStdout().empty());
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -64,29 +64,20 @@ TEST(StatisticsTest, OnlyLatencyModeEmptyLatencyProducesNoOutput) {
 
 // only_bandwidth=true: "Main Memory Latency" section must be absent even when
 // latency data is supplied.
-TEST(StatisticsTest, OnlyBandwidthModeOmitsLatencySection) {
-  testing::internal::CaptureStdout();
-  std::vector<double> bw = {10.0, 20.0};
-  std::vector<double> lat = {100.0, 200.0};
-  print_statistics(2, bw, bw, bw, kE, kE, kE, kE, kE, kE, kE, kE, lat, kE, kE, kE, false, kE, kE, kE, kE, kE, kE, kE,
-                   kE, true, false);
-  std::string out = testing::internal::GetCapturedStdout();
-  EXPECT_EQ(out.find("Main Memory Latency"), std::string::npos);
-  EXPECT_NE(out.find("Read Bandwidth"), std::string::npos);
-}
-
-TEST(StatisticsTest, OnlyLatencyModeOmitsPopulatedBandwidthAndIncludesLatency) {
+TEST(StatisticsTest, ModeFlagsSelectPopulatedBandwidthAndLatencySections) {
   const std::vector<double> bandwidth = {10.0, 20.0};
   const std::vector<double> latency = {100.0, 200.0};
-  testing::internal::CaptureStdout();
-  print_statistics(2, bandwidth, bandwidth, bandwidth, kE, kE, kE, kE, kE, kE, kE, kE, latency, kE, kE, kE, false, kE,
-                   kE, kE, kE, kE, kE, kE, kE, false, true);
-  const std::string output = testing::internal::GetCapturedStdout();
-
-  EXPECT_NE(output.find("Main Memory Latency (ns):"), std::string::npos);
-  EXPECT_EQ(output.find("Read Bandwidth (GB/s):"), std::string::npos);
-  EXPECT_EQ(output.find("Write Bandwidth (GB/s):"), std::string::npos);
-  EXPECT_EQ(output.find("Copy Bandwidth (GB/s):"), std::string::npos);
+  for (bool only_latency : {false, true}) {
+    SCOPED_TRACE(only_latency);
+    testing::internal::CaptureStdout();
+    print_statistics(2, bandwidth, bandwidth, bandwidth, kE, kE, kE, kE, kE, kE, kE, kE, latency, kE, kE, kE, false, kE,
+                     kE, kE, kE, kE, kE, kE, kE, !only_latency, only_latency);
+    const std::string output = testing::internal::GetCapturedStdout();
+    EXPECT_EQ(output.find("Main Memory Latency (ns):") != std::string::npos, only_latency);
+    for (const char* label : {"Read Bandwidth (GB/s):", "Write Bandwidth (GB/s):", "Copy Bandwidth (GB/s):"}) {
+      EXPECT_EQ(output.find(label) != std::string::npos, !only_latency) << label;
+    }
+  }
 }
 
 TEST(StatisticsTest, PrintsOnlyAvailableMainBandwidthPopulations) {

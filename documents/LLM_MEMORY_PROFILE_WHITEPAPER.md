@@ -793,8 +793,7 @@ The maintained examples are in [CPU kernel tests](../tests/test_llm_memory_kerne
 [Metal helper tests](../tests/test_llm_metal_checksum.mm) for
 `SharedAffineLanesExposeBoundedContentCollisions`. The
 [Metal backend tests](../tests/test_llm_metal_backend.cpp) contain
-`DecodePagedPermutationAndPaddingHooksAreDetectedIntegration` and
-`PrefillPagedPermutationAndPaddingHooksAreDetectedIntegration`. Their real table/blit mutations differ from
+`PagedPermutationAndPaddingHooksAreDetectedIntegration`, which covers decode and prefill. Its real table/blit mutations differ from
 `force_timed_checksum_mismatch` (host readback altered after execution) and `force_kv_write_validation_mismatch`
 (forced validation boolean), which test result handling. Pure independent checksum-oracle goldens test arithmetic;
 they are not GPU execution evidence. Algorithms and their existing identities remain unchanged by this fault model.

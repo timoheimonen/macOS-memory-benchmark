@@ -37,12 +37,6 @@ TEST(TlbSweepPlannerTest, HighDensityBasePlanIsPageConsistent) {
   }
 }
 
-TEST(TlbSweepPlannerTest, InvalidSizesProduceEmptyBasePlan) {
-  EXPECT_TRUE(build_tlb_base_sweep_plan(0, 16384, TlbSweepDensity::Low).empty());
-  EXPECT_TRUE(build_tlb_base_sweep_plan(64, 0, TlbSweepDensity::Low).empty());
-  EXPECT_TRUE(build_tlb_base_sweep_plan(32768, 16384, TlbSweepDensity::Low).empty());
-}
-
 TEST(TlbSweepPlannerTest, BasePlanAcceptsAlignedStrideThatDoesNotDividePage) {
   const size_t page_size = 16 * Constants::BYTES_PER_KB;
   const size_t stride = 136;

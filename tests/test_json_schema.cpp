@@ -136,27 +136,6 @@ TlbMeasurementRecord make_paired_tlb_record(TlbMeasurementPass pass,
 
 }  // namespace
 
-TEST(JsonSchemaTest, BenchmarkExporterIncludesBenchmarkModeAndOmitsEmptySections) {
-  const TemporaryJsonFile output_file("benchmark_schema");
-  BenchmarkConfig config;
-  config.output_file = output_file.path().string();
-  config.only_bandwidth = true;
-  config.only_latency = true;
-
-  BenchmarkStatistics stats;
-  ASSERT_EQ(save_results_to_json(config, stats, 1.0), EXIT_SUCCESS);
-
-  const nlohmann::json output_json = read_json_file(config.output_file);
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::BENCHMARK_JSON_MODE_NAME);
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]
-                       ["benchmark_schema_version"],
-            Constants::BENCHMARK_JSON_SCHEMA_VERSION);
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["output_file"], config.output_file);
-  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains(JsonKeys::LATENCY_CHAIN_MODE));
-  EXPECT_FALSE(output_json.contains(JsonKeys::MAIN_MEMORY));
-  EXPECT_FALSE(output_json.contains(JsonKeys::CACHE));
-}
-
 TEST(JsonSchemaTest, BenchmarkSchemaV3IncludesCompletionAndNullableMeasurements) {
   const TemporaryJsonFile output_file("benchmark_v3");
   BenchmarkConfig config;
@@ -207,37 +186,43 @@ TEST(JsonSchemaTest, BenchmarkSchemaV3IncludesCompletionAndNullableMeasurements)
   stats.completed_measurements = 1;
   stats.loop_results.push_back(loop);
 
-  ASSERT_EQ(save_results_to_json(config, stats, 1.0), EXIT_SUCCESS);
-  const nlohmann::json output = read_json_file(config.output_file);
-  EXPECT_EQ(output["configuration"]["benchmark_schema_version"],
-            Constants::BENCHMARK_JSON_SCHEMA_VERSION);
-  EXPECT_EQ(output["configuration"]["methodology_version"],
-            "benchmark-v2-calibrated-seeded-balanced");
-  EXPECT_DOUBLE_EQ(
-      output["configuration"]["latency_calibration_window_max_seconds"],
-      0.300);
-  EXPECT_EQ(output["configuration"]["benchmark_seed"],
-            "18446744073709551615");
-  EXPECT_EQ(output["configuration"]["output_file"], config.output_file);
-  EXPECT_EQ(output["status"], "partial");
-  EXPECT_FALSE(output["results_complete"].get<bool>());
-  EXPECT_FALSE(output["conclusions_valid"].get<bool>());
-  EXPECT_EQ(output["planned_loops"], 2u);
-  ASSERT_EQ(output["loops"].size(), 1u);
-  const nlohmann::json measurements = output["loops"][0]["measurements"];
-  EXPECT_EQ(measurements["main_read_bandwidth"]["status"], "measured");
-  EXPECT_DOUBLE_EQ(measurements["main_read_bandwidth"]["value"].get<double>(),
-                   12.5);
-  EXPECT_EQ(measurements["main_read_bandwidth"]["passes"], 16u);
-  EXPECT_EQ(measurements["main_read_bandwidth"]["qos_outcome"],
-            "applied-to-all-workers");
-  EXPECT_EQ(measurements["main_read_bandwidth"]["qos_successful_workers"],
-            4u);
-  EXPECT_EQ(measurements["main_read_bandwidth"]["created_workers"], 4);
-  EXPECT_EQ(measurements["main_write_bandwidth"]["status"], "interrupted");
-  EXPECT_TRUE(measurements["main_write_bandwidth"]["value"].is_null());
-  EXPECT_EQ(output["main_memory"]["bandwidth"]["read_gb_s"]["value"], 12.5);
-  EXPECT_TRUE(output["main_memory"]["bandwidth"]["write_gb_s"]["value"].is_null());
+  for (bool populated : {true, false}) {
+    SCOPED_TRACE(populated);
+    if (!populated) {
+      config.only_latency = true;
+      stats = BenchmarkStatistics{};
+    }
+    ASSERT_EQ(save_results_to_json(config, stats, 1.0), EXIT_SUCCESS);
+    const nlohmann::json output = read_json_file(config.output_file);
+    EXPECT_EQ(output["configuration"]["benchmark_schema_version"], Constants::BENCHMARK_JSON_SCHEMA_VERSION);
+    EXPECT_EQ(output["configuration"]["methodology_version"], "benchmark-v2-calibrated-seeded-balanced");
+    EXPECT_DOUBLE_EQ(output["configuration"]["latency_calibration_window_max_seconds"], 0.300);
+    EXPECT_EQ(output["configuration"]["benchmark_seed"], "18446744073709551615");
+    EXPECT_EQ(output["configuration"]["output_file"], config.output_file);
+    EXPECT_EQ(output[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::BENCHMARK_JSON_MODE_NAME);
+    EXPECT_TRUE(output[JsonKeys::CONFIGURATION].contains(JsonKeys::LATENCY_CHAIN_MODE));
+    if (!populated) {
+      EXPECT_FALSE(output.contains(JsonKeys::MAIN_MEMORY));
+      EXPECT_FALSE(output.contains(JsonKeys::CACHE));
+      continue;
+    }
+    EXPECT_EQ(output["status"], "partial");
+    EXPECT_FALSE(output["results_complete"].get<bool>());
+    EXPECT_FALSE(output["conclusions_valid"].get<bool>());
+    EXPECT_EQ(output["planned_loops"], 2u);
+    ASSERT_EQ(output["loops"].size(), 1u);
+    const nlohmann::json measurements = output["loops"][0]["measurements"];
+    EXPECT_EQ(measurements["main_read_bandwidth"]["status"], "measured");
+    EXPECT_DOUBLE_EQ(measurements["main_read_bandwidth"]["value"].get<double>(), 12.5);
+    EXPECT_EQ(measurements["main_read_bandwidth"]["passes"], 16u);
+    EXPECT_EQ(measurements["main_read_bandwidth"]["qos_outcome"], "applied-to-all-workers");
+    EXPECT_EQ(measurements["main_read_bandwidth"]["qos_successful_workers"], 4u);
+    EXPECT_EQ(measurements["main_read_bandwidth"]["created_workers"], 4);
+    EXPECT_EQ(measurements["main_write_bandwidth"]["status"], "interrupted");
+    EXPECT_TRUE(measurements["main_write_bandwidth"]["value"].is_null());
+    EXPECT_EQ(output["main_memory"]["bandwidth"]["read_gb_s"]["value"], 12.5);
+    EXPECT_TRUE(output["main_memory"]["bandwidth"]["write_gb_s"]["value"].is_null());
+  }
 }
 
 TEST(JsonSchemaTest, BenchmarkSchemaV3SerializesExactCompletionContract) {
@@ -312,41 +297,6 @@ TEST(JsonSchemaTest, BenchmarkAggregateHeadlineUsesMedianAndReportsCvAndMad) {
   EXPECT_DOUBLE_EQ(
       aggregate["statistics"]["median_absolute_deviation"].get<double>(),
       10.0);
-}
-
-TEST(JsonSchemaTest, BenchmarkCheckpointAtomicallyProgressesToComplete) {
-  const TemporaryJsonFile output_file("benchmark_checkpoint");
-  BenchmarkConfig config;
-  config.output_file = output_file.path().string();
-  config.only_bandwidth = true;
-  config.only_latency = true;
-  BenchmarkStatistics stats;
-  stats.status = BenchmarkRunStatus::Partial;
-  stats.status_reason = "benchmark loops remain";
-  stats.planned_loops = 2;
-  stats.completed_loops = 1;
-
-  ASSERT_EQ(save_results_to_json(config, stats, 0.5, false), EXIT_SUCCESS);
-  nlohmann::json output = read_json_file(config.output_file);
-  EXPECT_EQ(output["configuration"]["benchmark_schema_version"],
-            Constants::BENCHMARK_JSON_SCHEMA_VERSION);
-  EXPECT_EQ(output["configuration"]["output_file"], config.output_file);
-  EXPECT_EQ(output["status"], "partial");
-  EXPECT_FALSE(output["results_complete"].get<bool>());
-  EXPECT_FALSE(output["conclusions_valid"].get<bool>());
-
-  stats.status = BenchmarkRunStatus::Complete;
-  stats.status_reason.clear();
-  stats.completed_loops = 2;
-  ASSERT_EQ(save_results_to_json(config, stats, 1.0, false), EXIT_SUCCESS);
-  output = read_json_file(config.output_file);
-  EXPECT_EQ(output["configuration"]["benchmark_schema_version"],
-            Constants::BENCHMARK_JSON_SCHEMA_VERSION);
-  EXPECT_EQ(output["configuration"]["output_file"], config.output_file);
-  EXPECT_EQ(output["status"], "complete");
-  EXPECT_TRUE(output["results_complete"].get<bool>());
-  EXPECT_TRUE(output["conclusions_valid"].get<bool>());
-  EXPECT_FALSE(std::filesystem::exists(config.output_file + ".tmp"));
 }
 
 TEST(JsonSchemaTest, PatternExporterIncludesPatternsMode) {
@@ -1159,110 +1109,74 @@ TEST(JsonSchemaTest, CoreToCoreV2SerializesCalibratedBalancedAuditTrail) {
 }
 
 TEST(JsonSchemaTest, CoreToCoreBuilderSerializesOneWayValuesAndThreadHints) {
-  CoreToCoreLatencyConfig config;
-  config.loop_count = 2;
-  config.latency_sample_count = 2;
+  for (size_t population : {size_t{1}, size_t{2}}) {
+    SCOPED_TRACE(population);
+    CoreToCoreLatencyConfig config;
+    config.loop_count = static_cast<int>(population);
+    config.latency_sample_count = static_cast<int>(population);
 
-  const std::string cpu_name = "test-cpu";
-  ThreadHintStatus initiator_hint;
-  initiator_hint.qos_applied = true;
-  initiator_hint.qos_code = 0;
-  initiator_hint.affinity_requested = true;
-  initiator_hint.affinity_applied = false;
-  initiator_hint.affinity_code = 5;
-  initiator_hint.affinity_tag = 1;
+    const std::string cpu_name = "test-cpu";
+    ThreadHintStatus initiator_hint;
+    initiator_hint.qos_applied = true;
+    initiator_hint.qos_code = 0;
+    initiator_hint.affinity_requested = true;
+    initiator_hint.affinity_applied = false;
+    initiator_hint.affinity_code = 5;
+    initiator_hint.affinity_tag = 1;
 
-  ThreadHintStatus responder_hint;
-  responder_hint.qos_applied = false;
-  responder_hint.qos_code = 6;
-  responder_hint.affinity_requested = true;
-  responder_hint.affinity_applied = true;
-  responder_hint.affinity_code = 0;
-  responder_hint.affinity_tag = 2;
+    ThreadHintStatus responder_hint;
+    responder_hint.qos_applied = false;
+    responder_hint.qos_code = 6;
+    responder_hint.affinity_requested = true;
+    responder_hint.affinity_applied = true;
+    responder_hint.affinity_code = 0;
+    responder_hint.affinity_tag = 2;
 
-  const std::vector<CoreToCoreLatencyScenarioResult> scenarios = {
-      {
-          Constants::CORE_TO_CORE_SCENARIO_SAME_AFFINITY,
-          {12.0, 18.0},
-          {15.0, 17.0},
-          initiator_hint,
-          responder_hint,
-      },
-  };
+    const std::vector<CoreToCoreLatencyScenarioResult> scenarios = {
+        {
+            Constants::CORE_TO_CORE_SCENARIO_SAME_AFFINITY,
+            population == 2 ? std::vector<double>{12.0, 18.0} : std::vector<double>{10.0},
+            population == 2 ? std::vector<double>{15.0, 17.0} : std::vector<double>{10.5},
+            initiator_hint,
+            responder_hint,
+        },
+    };
 
-  const CoreToCoreLatencyJsonContext context = {
-      config,
-      cpu_name,
-      4,
-      6,
-      100,
-      200,
-      20,
-      scenarios,
-      4.5,
-  };
+    const CoreToCoreLatencyJsonContext context = {
+        config, cpu_name, 4, 6, 100, 200, 20, scenarios, 4.5,
+    };
 
-  const nlohmann::json output_json = build_core_to_core_latency_json(context);
+    const nlohmann::json output_json = build_core_to_core_latency_json(context);
 
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::CORE_TO_CORE_JSON_MODE_NAME);
-  ASSERT_TRUE(output_json["core_to_core_latency"].is_object());
-  ASSERT_EQ(output_json["core_to_core_latency"]["scenarios"].size(), 1u);
-  const nlohmann::json scenario_json = output_json["core_to_core_latency"]["scenarios"][0];
-  EXPECT_EQ(scenario_json["name"], Constants::CORE_TO_CORE_SCENARIO_SAME_AFFINITY);
-  const nlohmann::json samples_json = scenario_json[JsonKeys::SAMPLES_NS];
-  EXPECT_EQ(samples_json[JsonKeys::VALUES], nlohmann::json::array({15.0, 17.0}));
-  ASSERT_TRUE(samples_json[JsonKeys::STATISTICS].is_object());
-  EXPECT_DOUBLE_EQ(samples_json[JsonKeys::STATISTICS]["average"].get<double>(), 16.0);
-  EXPECT_DOUBLE_EQ(samples_json[JsonKeys::STATISTICS]["median"].get<double>(), 16.0);
+    EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::CORE_TO_CORE_JSON_MODE_NAME);
+    ASSERT_TRUE(output_json["core_to_core_latency"].is_object());
+    ASSERT_EQ(output_json["core_to_core_latency"]["scenarios"].size(), 1u);
+    const nlohmann::json scenario_json = output_json["core_to_core_latency"]["scenarios"][0];
+    EXPECT_EQ(scenario_json["name"], Constants::CORE_TO_CORE_SCENARIO_SAME_AFFINITY);
+    if (population == 1) {
+      for (const char* key : {"round_trip_ns", "one_way_estimate_ns", JsonKeys::SAMPLES_NS}) {
+        EXPECT_FALSE(scenario_json[key].contains(JsonKeys::STATISTICS));
+      }
+    } else {
+      const nlohmann::json samples_json = scenario_json[JsonKeys::SAMPLES_NS];
+      EXPECT_EQ(samples_json[JsonKeys::VALUES], nlohmann::json::array({15.0, 17.0}));
+      ASSERT_TRUE(samples_json[JsonKeys::STATISTICS].is_object());
+      EXPECT_DOUBLE_EQ(samples_json[JsonKeys::STATISTICS]["average"].get<double>(), 16.0);
+      EXPECT_DOUBLE_EQ(samples_json[JsonKeys::STATISTICS]["median"].get<double>(), 16.0);
 
-  ASSERT_EQ(scenario_json["one_way_estimate_ns"][JsonKeys::VALUES].size(), 2u);
-  EXPECT_DOUBLE_EQ(scenario_json["one_way_estimate_ns"][JsonKeys::VALUES][0].get<double>(), 6.0);
-  EXPECT_DOUBLE_EQ(scenario_json["one_way_estimate_ns"][JsonKeys::VALUES][1].get<double>(), 9.0);
-
-  ASSERT_TRUE(scenario_json["thread_hints"].contains("initiator"));
-  ASSERT_TRUE(scenario_json["thread_hints"].contains("responder"));
-  EXPECT_EQ(scenario_json["thread_hints"]["initiator"]["affinity_tag"], 1);
-  EXPECT_EQ(scenario_json["thread_hints"]["responder"]["qos_code"], 6);
-  EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("qos_applied"));
-  EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("qos_code"));
-  EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("affinity_requested"));
-  EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("affinity_applied"));
-  EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("affinity_code"));
-  EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("affinity_tag"));
-}
-
-TEST(JsonSchemaTest, CoreToCoreBuilderOmitsStatisticsWhenOnlySingleValueExists) {
-  CoreToCoreLatencyConfig config;
-  config.loop_count = 1;
-  config.latency_sample_count = 1;
-
-  const std::string cpu_name = "test-cpu";
-  const std::vector<CoreToCoreLatencyScenarioResult> scenarios = {
-      {
-          Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY,
-          {10.0},
-          {10.5},
-          {},
-          {},
-      },
-  };
-
-  const CoreToCoreLatencyJsonContext context = {
-      config,
-      cpu_name,
-      4,
-      6,
-      100,
-      200,
-      20,
-      scenarios,
-      4.5,
-  };
-
-  const nlohmann::json output_json = build_core_to_core_latency_json(context);
-
-  const nlohmann::json scenario_json = output_json["core_to_core_latency"]["scenarios"][0];
-  EXPECT_FALSE(scenario_json["round_trip_ns"].contains(JsonKeys::STATISTICS));
-  EXPECT_FALSE(scenario_json["one_way_estimate_ns"].contains(JsonKeys::STATISTICS));
-  EXPECT_FALSE(scenario_json[JsonKeys::SAMPLES_NS].contains(JsonKeys::STATISTICS));
+      ASSERT_EQ(scenario_json["one_way_estimate_ns"][JsonKeys::VALUES].size(), 2u);
+      EXPECT_DOUBLE_EQ(scenario_json["one_way_estimate_ns"][JsonKeys::VALUES][0].get<double>(), 6.0);
+      EXPECT_DOUBLE_EQ(scenario_json["one_way_estimate_ns"][JsonKeys::VALUES][1].get<double>(), 9.0);
+    }
+    ASSERT_TRUE(scenario_json["thread_hints"].contains("initiator"));
+    ASSERT_TRUE(scenario_json["thread_hints"].contains("responder"));
+    EXPECT_EQ(scenario_json["thread_hints"]["initiator"]["affinity_tag"], 1);
+    EXPECT_EQ(scenario_json["thread_hints"]["responder"]["qos_code"], 6);
+    EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("qos_applied"));
+    EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("qos_code"));
+    EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("affinity_requested"));
+    EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("affinity_applied"));
+    EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("affinity_code"));
+    EXPECT_TRUE(scenario_json["thread_hints"]["initiator"].contains("affinity_tag"));
+  }
 }

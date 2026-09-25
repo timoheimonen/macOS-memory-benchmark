@@ -24,7 +24,6 @@
  */
 
 #include "core/memory/memory_utils.h"
-#include "core/system/page_size.h"
 #include "output/console/messages/messages_api.h"
 #include <vector>
 #include <string>
@@ -244,17 +243,9 @@ bool latency_chain_mode_uses_locality(LatencyChainMode mode) {
  */
 static int setup_latency_chain_impl(void *buffer, size_t buffer_size, size_t stride,
                                     size_t tlb_locality_bytes,
-                                    LatencyChainDiagnostics* diagnostics,
                                     LatencyChainMode mode,
                                     std::optional<uint64_t> deterministic_seed)
 {
-    if (diagnostics != nullptr) {
-        diagnostics->pointer_count = 0;
-        diagnostics->unique_pages_touched = 0;
-        diagnostics->page_size_bytes = 0;
-        diagnostics->stride_bytes = stride;
-    }
-
     // Validate input parameters
     if (buffer == nullptr) {
         std::cerr << Messages::error_prefix() << Messages::error_buffer_pointer_null_latency_chain() << std::endl;
@@ -280,20 +271,6 @@ static int setup_latency_chain_impl(void *buffer, size_t buffer_size, size_t str
     {
         std::cerr << Messages::error_prefix() << Messages::error_buffer_stride_invalid_latency_chain(num_pointers, buffer_size, stride) << std::endl;
         return EXIT_FAILURE;
-    }
-
-    const size_t page_size = test_hooks_active
-                                 ? active_test_hooks.page_size_bytes
-                                 : get_system_page_size_bytes();
-    const bool collect_page_diagnostics = (diagnostics != nullptr && page_size > 0);
-    std::vector<uint8_t> page_seen;
-    size_t unique_pages_touched = 0;
-    size_t base_page_offset = 0;
-    if (collect_page_diagnostics) {
-        base_page_offset = reinterpret_cast<uintptr_t>(buffer) % page_size;
-        const size_t span_with_offset = base_page_offset + buffer_size;
-        const size_t page_count = (span_with_offset + page_size - 1) / page_size;
-        page_seen.assign(page_count, 0);
     }
 
     const LatencyChainMode effective_mode = resolve_latency_chain_mode(mode, tlb_locality_bytes);
@@ -358,18 +335,6 @@ static int setup_latency_chain_impl(void *buffer, size_t buffer_size, size_t str
             return EXIT_FAILURE;
         }
 
-        if (collect_page_diagnostics) {
-            const size_t page_index = (base_page_offset + current_offset) / page_size;
-            if (page_index >= page_seen.size()) {
-                std::cerr << Messages::error_prefix() << Messages::error_offset_exceeds_bounds(page_index, page_seen.size() - 1) << std::endl;
-                return EXIT_FAILURE;
-            }
-            if (page_seen[page_index] == 0) {
-                page_seen[page_index] = 1;
-                ++unique_pages_touched;
-            }
-        }
-        
         uintptr_t *current_loc = (uintptr_t *)(base_ptr + current_offset);
         
         // Calculate the memory address of the *next* element in the shuffled sequence.
@@ -389,31 +354,20 @@ static int setup_latency_chain_impl(void *buffer, size_t buffer_size, size_t str
         *current_loc = next_addr;
     }
 
-    if (diagnostics != nullptr) {
-        diagnostics->pointer_count = num_pointers;
-        diagnostics->unique_pages_touched = unique_pages_touched;
-        diagnostics->page_size_bytes = page_size;
-        diagnostics->stride_bytes = stride;
-    }
-    
     return EXIT_SUCCESS;
 }
 
 int setup_latency_chain(void* buffer, size_t buffer_size, size_t stride,
                         size_t tlb_locality_bytes,
-                        LatencyChainDiagnostics* diagnostics,
                         LatencyChainMode mode) {
-    return setup_latency_chain_impl(buffer, buffer_size, stride, tlb_locality_bytes,
-                                    diagnostics, mode, std::nullopt);
+  return setup_latency_chain_impl(buffer, buffer_size, stride, tlb_locality_bytes, mode, std::nullopt);
 }
 
 int setup_latency_chain(void* buffer, size_t buffer_size, size_t stride,
                         size_t tlb_locality_bytes,
-                        LatencyChainDiagnostics* diagnostics,
                         LatencyChainMode mode,
                         uint64_t deterministic_seed) {
-    return setup_latency_chain_impl(buffer, buffer_size, stride, tlb_locality_bytes,
-                                    diagnostics, mode, deterministic_seed);
+  return setup_latency_chain_impl(buffer, buffer_size, stride, tlb_locality_bytes, mode, deterministic_seed);
 }
 
 /**

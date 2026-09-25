@@ -222,33 +222,24 @@ fi
                 f"stderr tail:\n{completed.stderr[-4000:]}"
             )
 
-    @unittest.skipUnless(shutil.which("jq"), "jq is optional and is not installed")
-    def test_latency_workflow_accepts_supported_result_with_jq(self):
-        with tempfile.TemporaryDirectory(prefix="script-example-latency-jq-") as temporary:
-            script_dir, completed = self.run_workflow(
-                Path(temporary), "latency_test_script.sh", CURRENT_CUSTOM_FIXTURE
-            )
-            self.assert_success("latency_test_script.sh", completed)
-            final_output = (script_dir / "final_output.txt").read_text(encoding="utf-8")
+    def test_latency_workflow_accepts_supported_result(self):
+        for parser, force_python in (("Python", True), ("jq", False)):
+            with self.subTest(parser=parser):
+                if not force_python and not shutil.which("jq"):
+                    self.skipTest("jq is optional and is not installed")
+                with tempfile.TemporaryDirectory(prefix="script-example-latency-") as temporary:
+                    script_dir, completed = self.run_workflow(
+                        Path(temporary),
+                        "latency_test_script.sh",
+                        CURRENT_CUSTOM_FIXTURE,
+                        force_python=force_python,
+                    )
+                    self.assert_success("latency_test_script.sh", completed)
+                    final_output = (script_dir / "final_output.txt").read_text(encoding="utf-8")
 
-        self.assertIn("Using jq to extract latency sample statistics", completed.stdout)
-        self.assertEqual(final_output.count("TLB Locality:"), 120)
-        self.assertIn('"average": 0.6893617567937856', final_output)
-
-    def test_latency_workflow_accepts_supported_result_with_python(self):
-        with tempfile.TemporaryDirectory(prefix="script-example-latency-python-") as temporary:
-            script_dir, completed = self.run_workflow(
-                Path(temporary),
-                "latency_test_script.sh",
-                CURRENT_CUSTOM_FIXTURE,
-                force_python=True,
-            )
-            self.assert_success("latency_test_script.sh", completed)
-            final_output = (script_dir / "final_output.txt").read_text(encoding="utf-8")
-
-        self.assertIn("Using Python to extract latency sample statistics", completed.stdout)
-        self.assertEqual(final_output.count("TLB Locality:"), 120)
-        self.assertIn('"average": 0.6893617567937856', final_output)
+                self.assertIn(f"Using {parser} to extract latency sample statistics", completed.stdout)
+                self.assertEqual(final_output.count("TLB Locality:"), 120)
+                self.assertIn('"average": 0.6893617567937856', final_output)
 
     def test_stride_tlb_workflow_accepts_supported_result(self):
         with tempfile.TemporaryDirectory(prefix="script-example-stride-tlb-") as temporary:

@@ -38,7 +38,6 @@ struct BenchmarkExecutionState;
 /** @brief Optional kernel-free fault seams for phase preparation tests. */
 struct BenchmarkExecutorTestHooks {
   std::function<bool(const std::string&)> fail_phase_preparation;
-  std::function<bool(const std::string&)> fail_latency_chain_setup;
 };
 
 /**
