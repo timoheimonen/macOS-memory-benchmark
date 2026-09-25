@@ -88,8 +88,9 @@ Test and coverage targets:
 ```bash
 make test                 # deterministic unit suite
 make test-script-examples # current script-example JSON entry paths
+make test-llm-verifier     # independent LLM artifact contract and mutation tests
 make test-integration     # real Apple Silicon/CLI workflows
-make test-all             # all GTest cases, then the focused script-example entry test
+make test-all             # all GTest cases, then script-example and LLM verifier tests
 make coverage-unit        # isolated LLVM report under /tmp
 make coverage-all
 ```
