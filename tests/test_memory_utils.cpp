@@ -39,7 +39,6 @@ class AlignedBuffer {
 class MemoryUtilsTest : public testing::Test {
  protected:
   void SetUp() override {
-    hooks_.page_size_bytes = page_size_bytes;
     hooks_.generated_seed = 0x123456789abcdef0ULL;
     set_memory_utils_test_hooks(&hooks_);
   }
@@ -115,6 +114,8 @@ TEST_F(MemoryUtilsTest, SetupLatencyChainRejectsInvalidInputsWithExactReasons) {
     size_t buffer_size;
     size_t stride;
     std::string expected_reason;
+    size_t locality = 0;
+    LatencyChainMode mode = LatencyChainMode::Auto;
   };
   const InvalidInputCase cases[] = {
       {"null buffer", true, LATENCY_STRIDE_BYTES * 2, LATENCY_STRIDE_BYTES,
@@ -128,13 +129,19 @@ TEST_F(MemoryUtilsTest, SetupLatencyChainRejectsInvalidInputsWithExactReasons) {
        Messages::error_latency_stride_alignment(sizeof(uintptr_t) + 1, sizeof(uintptr_t))},
       {"one-node buffer", false, LATENCY_STRIDE_BYTES, LATENCY_STRIDE_BYTES,
        Messages::error_buffer_stride_invalid_latency_chain(1, LATENCY_STRIDE_BYTES, LATENCY_STRIDE_BYTES)},
+      {"locality too small", false, LATENCY_STRIDE_BYTES * 16, LATENCY_STRIDE_BYTES,
+       Messages::error_buffer_stride_invalid_latency_chain(1, LATENCY_STRIDE_BYTES, LATENCY_STRIDE_BYTES),
+       LATENCY_STRIDE_BYTES},
+      {"box without locality", false, LATENCY_STRIDE_BYTES * 128, LATENCY_STRIDE_BYTES,
+       Messages::error_latency_chain_mode_requires_locality("diff-random-in-box"), 0,
+       LatencyChainMode::DiffRandomInBoxIncreasingBox},
   };
 
   for (const InvalidInputCase& test_case : cases) {
     SCOPED_TRACE(test_case.name);
     testing::internal::CaptureStderr();
-    const int result =
-        setup_latency_chain(test_case.null_buffer ? nullptr : storage.data(), test_case.buffer_size, test_case.stride);
+    const int result = setup_latency_chain(test_case.null_buffer ? nullptr : storage.data(), test_case.buffer_size,
+                                           test_case.stride, test_case.locality, test_case.mode);
     const std::string error = testing::internal::GetCapturedStderr();
 
     EXPECT_EQ(result, EXIT_FAILURE);
@@ -142,103 +149,42 @@ TEST_F(MemoryUtilsTest, SetupLatencyChainRejectsInvalidInputsWithExactReasons) {
   }
 }
 
-TEST_F(MemoryUtilsTest, SetupLatencyChainAcceptsMinimumTwoNodeChainsAtSupportedStrides) {
-  using namespace Constants;
-
-  for (const size_t stride : {sizeof(uintptr_t), LATENCY_STRIDE_BYTES}) {
-    SCOPED_TRACE(stride);
-    const size_t buffer_size = stride * 2;
-    AlignedBuffer buffer(buffer_size);
-    ASSERT_EQ(setup_latency_chain(buffer.data(), buffer_size, stride), EXIT_SUCCESS);
-
-    const uintptr_t first = reinterpret_cast<uintptr_t>(buffer.data());
-    const uintptr_t second = first + stride;
-    EXPECT_EQ(*reinterpret_cast<const uintptr_t*>(buffer.data()), second);
-    EXPECT_EQ(*reinterpret_cast<const uintptr_t*>(static_cast<const char*>(buffer.data()) + stride), first);
-  }
-}
-
 // Test that setup_latency_chain creates a valid linked list
 TEST_F(MemoryUtilsTest, SetupLatencyChainCreatesValidChain) {
   using namespace Constants;
 
-  size_t buffer_size = LATENCY_STRIDE_BYTES * 4;  // 4 pointers
-  AlignedBuffer buffer(buffer_size);
+  for (const size_t stride : {sizeof(uintptr_t), LATENCY_STRIDE_BYTES}) {
+    for (const size_t pointer_count : {size_t{2}, size_t{4}}) {
+      SCOPED_TRACE(::testing::Message() << stride << "/" << pointer_count);
+      const size_t buffer_size = stride * pointer_count;
+      AlignedBuffer buffer(buffer_size);
 
-  int result = setup_latency_chain(buffer.data(), buffer_size, LATENCY_STRIDE_BYTES);
-  EXPECT_EQ(result, EXIT_SUCCESS);
+      int result = setup_latency_chain(buffer.data(), buffer_size, stride);
+      EXPECT_EQ(result, EXIT_SUCCESS);
 
-  const size_t pointer_count = buffer_size / LATENCY_STRIDE_BYTES;
-  const uintptr_t buffer_start = reinterpret_cast<uintptr_t>(buffer.data());
-  const uintptr_t buffer_end = buffer_start + buffer_size;
-  std::vector<bool> visited(pointer_count, false);
+      const uintptr_t buffer_start = reinterpret_cast<uintptr_t>(buffer.data());
+      const uintptr_t buffer_end = buffer_start + buffer_size;
+      std::vector<bool> visited(pointer_count, false);
 
-  uintptr_t current = buffer_start;
-  for (size_t step = 0; step < pointer_count; ++step) {
-    ASSERT_GE(current, buffer_start);
-    ASSERT_LT(current, buffer_end);
-    const size_t offset = static_cast<size_t>(current - buffer_start);
-    ASSERT_EQ(offset % LATENCY_STRIDE_BYTES, 0u);
-    const size_t index = offset / LATENCY_STRIDE_BYTES;
-    ASSERT_LT(index, pointer_count);
-    EXPECT_FALSE(visited[index]) << "chain repeated node at step " << step;
-    visited[index] = true;
-    current = *reinterpret_cast<const uintptr_t*>(current);
+      uintptr_t current = buffer_start;
+      for (size_t step = 0; step < pointer_count; ++step) {
+        ASSERT_GE(current, buffer_start);
+        ASSERT_LT(current, buffer_end);
+        const size_t offset = static_cast<size_t>(current - buffer_start);
+        ASSERT_EQ(offset % stride, 0u);
+        const size_t index = offset / stride;
+        ASSERT_LT(index, pointer_count);
+        EXPECT_FALSE(visited[index]) << "chain repeated node at step " << step;
+        visited[index] = true;
+        current = *reinterpret_cast<const uintptr_t*>(current);
+      }
+
+      EXPECT_EQ(current, buffer_start);
+      for (size_t index = 0; index < pointer_count; ++index) {
+        EXPECT_TRUE(visited[index]) << "chain omitted node " << index;
+      }
+    }
   }
-
-  EXPECT_EQ(current, buffer_start);
-  for (size_t index = 0; index < pointer_count; ++index) {
-    EXPECT_TRUE(visited[index]) << "chain omitted node " << index;
-  }
-}
-
-TEST_F(MemoryUtilsTest, SetupLatencyChainCollectsDiagnostics) {
-  using namespace Constants;
-
-  const size_t page_size = page_size_bytes;
-  const size_t buffer_size = page_size * 4;
-  const size_t stride = sizeof(uintptr_t) * 8;
-  AlignedBuffer buffer(buffer_size);
-
-  LatencyChainDiagnostics diagnostics;
-  int result = setup_latency_chain(buffer.data(), buffer_size, stride, 0, &diagnostics);
-  EXPECT_EQ(result, EXIT_SUCCESS);
-  EXPECT_EQ(diagnostics.pointer_count, buffer_size / stride);
-  const uintptr_t first_node = reinterpret_cast<uintptr_t>(buffer.data());
-  const uintptr_t last_node = first_node + (diagnostics.pointer_count - 1) * stride;
-  const size_t expected_pages = last_node / page_size - first_node / page_size + 1;
-  EXPECT_EQ(diagnostics.unique_pages_touched, expected_pages);
-  EXPECT_EQ(diagnostics.page_size_bytes, page_size);
-  EXPECT_EQ(diagnostics.stride_bytes, stride);
-}
-
-TEST_F(MemoryUtilsTest, SetupLatencyChainWithTooSmallTlbLocalityFails) {
-  using namespace Constants;
-
-  size_t buffer_size = LATENCY_STRIDE_BYTES * 16;
-  AlignedBuffer buffer(buffer_size);
-
-  testing::internal::CaptureStderr();
-  int result = setup_latency_chain(buffer.data(), buffer_size, LATENCY_STRIDE_BYTES, LATENCY_STRIDE_BYTES);
-  std::string error_output = testing::internal::GetCapturedStderr();
-
-  EXPECT_EQ(result, EXIT_FAILURE);
-  EXPECT_NE(error_output.find("Error: "), std::string::npos);
-}
-
-TEST_F(MemoryUtilsTest, SetupLatencyChainWithBoxModeAndZeroLocalityFails) {
-  using namespace Constants;
-
-  size_t buffer_size = LATENCY_STRIDE_BYTES * 128;
-  AlignedBuffer buffer(buffer_size);
-
-  testing::internal::CaptureStderr();
-  int result = setup_latency_chain(buffer.data(), buffer_size, LATENCY_STRIDE_BYTES, 0, nullptr,
-                                   LatencyChainMode::DiffRandomInBoxIncreasingBox);
-  std::string error_output = testing::internal::GetCapturedStderr();
-
-  EXPECT_EQ(result, EXIT_FAILURE);
-  EXPECT_NE(error_output.find("latency-chain-mode"), std::string::npos);
 }
 
 TEST_F(MemoryUtilsTest, ExplicitSeedsAreReproducibleAndSameRandomModeReusesBoxPermutation) {
@@ -247,25 +193,25 @@ TEST_F(MemoryUtilsTest, ExplicitSeedsAreReproducibleAndSameRandomModeReusesBoxPe
   const size_t buffer_size = 4 * page_size;
   AlignedBuffer buffer(buffer_size);
 
-  ASSERT_EQ(setup_latency_chain(buffer.data(), buffer_size, stride, page_size, nullptr,
-                                LatencyChainMode::RandomInBoxRandomBox, uint64_t{12345}),
+  ASSERT_EQ(setup_latency_chain(buffer.data(), buffer_size, stride, page_size, LatencyChainMode::RandomInBoxRandomBox,
+                                uint64_t{12345}),
             EXIT_SUCCESS);
   const std::vector<size_t> first = snapshot_next_indices(buffer.data(), buffer_size, stride);
 
-  ASSERT_EQ(setup_latency_chain(buffer.data(), buffer_size, stride, page_size, nullptr,
-                                LatencyChainMode::RandomInBoxRandomBox, uint64_t{12345}),
+  ASSERT_EQ(setup_latency_chain(buffer.data(), buffer_size, stride, page_size, LatencyChainMode::RandomInBoxRandomBox,
+                                uint64_t{12345}),
             EXIT_SUCCESS);
   const std::vector<size_t> second = snapshot_next_indices(buffer.data(), buffer_size, stride);
 
-  ASSERT_EQ(setup_latency_chain(buffer.data(), buffer_size, stride, page_size, nullptr,
-                                LatencyChainMode::RandomInBoxRandomBox, uint64_t{54321}),
+  ASSERT_EQ(setup_latency_chain(buffer.data(), buffer_size, stride, page_size, LatencyChainMode::RandomInBoxRandomBox,
+                                uint64_t{54321}),
             EXIT_SUCCESS);
   const std::vector<size_t> different = snapshot_next_indices(buffer.data(), buffer_size, stride);
 
   EXPECT_EQ(first, second);
   EXPECT_NE(first, different);
 
-  ASSERT_EQ(setup_latency_chain(buffer.data(), buffer_size, stride, page_size, nullptr,
+  ASSERT_EQ(setup_latency_chain(buffer.data(), buffer_size, stride, page_size,
                                 LatencyChainMode::SameRandomInBoxIncreasingBox, uint64_t{12345}),
             EXIT_SUCCESS);
   expect_same_permutation_per_box(snapshot_next_indices(buffer.data(), buffer_size, stride), page_size / stride);

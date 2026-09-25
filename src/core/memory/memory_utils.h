@@ -73,20 +73,8 @@ LatencyChainMode resolve_latency_chain_mode(LatencyChainMode mode, size_t tlb_lo
  */
 bool latency_chain_mode_uses_locality(LatencyChainMode mode);
 
-/**
- * @struct LatencyChainDiagnostics
- * @brief Diagnostics collected during latency-chain setup
- */
-struct LatencyChainDiagnostics {
-  size_t pointer_count = 0;         ///< Number of nodes in the pointer chain
-  size_t unique_pages_touched = 0;  ///< Unique virtual pages touched by chain nodes
-  size_t page_size_bytes = 0;       ///< System page size used for page accounting
-  size_t stride_bytes = 0;          ///< Stride used to build the chain
-};
-
-/** Deterministic platform/random inputs used only by memory utility unit tests. */
+/** Deterministic random input used only by memory utility unit tests. */
 struct MemoryUtilsTestHooks {
-  size_t page_size_bytes = 0;
   uint64_t generated_seed = 0;
 };
 
@@ -137,7 +125,6 @@ inline size_t alignment_offset_to_cache_line(void* ptr) {
  * @param buffer_size Size of the buffer in bytes
  * @param stride Stride size in bytes between linked pointers
  * @param tlb_locality_bytes Optional TLB-locality window in bytes (0 = global random chain)
- * @param diagnostics Optional diagnostics output for page-touch analysis
  * @param mode Pointer-chain construction policy
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
  *
@@ -146,7 +133,6 @@ inline size_t alignment_offset_to_cache_line(void* ptr) {
  */
 int setup_latency_chain(void* buffer, size_t buffer_size, size_t stride,
                         size_t tlb_locality_bytes = 0,
-                        LatencyChainDiagnostics* diagnostics = nullptr,
                         LatencyChainMode mode = LatencyChainMode::Auto);
 
 /**
@@ -154,7 +140,6 @@ int setup_latency_chain(void* buffer, size_t buffer_size, size_t stride,
  */
 int setup_latency_chain(void* buffer, size_t buffer_size, size_t stride,
                         size_t tlb_locality_bytes,
-                        LatencyChainDiagnostics* diagnostics,
                         LatencyChainMode mode,
                         uint64_t deterministic_seed);
 

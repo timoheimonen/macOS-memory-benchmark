@@ -776,7 +776,6 @@ struct LlmMetalGridRequest {
   size_t work_units = 0;
   size_t paged_semantic_lookups = 0;
   size_t serial_range_visits_per_lane = 0;
-  std::vector<size_t> owner_accounted_bytes;
   LlmMetalPipelineCapabilities pipeline;
   LlmMetalPlanningLimits limits;
 };
@@ -1197,29 +1196,6 @@ LlmMemoryWorkPlan finalize_llm_memory_work_plan(
  */
 LlmMemoryWorkPlan build_llm_memory_work_plan(
     const LlmMemoryWorkPlanRequest& request,
-    const LlmKvStopRequested& stop_requested = {});
-
-/**
- * Validate a resolved config and build its pointer-free work plan.
- *
- * @param config Resolved command configuration; the function does not retain a
- *        reference to it.
- * @param available_workers Detected CPU worker capacity, or zero for Metal.
- * @param available_memory_bytes Current logical memory-admission sample.
- * @param mapping_granularity_bytes Host mapping/page granularity used for
- *        checked resource rounding.
- * @param checksum_auxiliary_bytes Retained checksum-support storage charged to
- *        the plan's memory budget.
- * @param orchestration_auxiliary_bytes Retained runner/output storage charged
- *        to the plan's memory budget.
- * @param stop_requested Optional synchronous predicate polled while a paged
- *        block table is initialized, validated, and hashed.
- * @return A reason-bearing plan. Invalid plans contain no executable templates.
- */
-LlmMemoryWorkPlan build_llm_memory_work_plan(
-    const LlmMemoryConfig& config, size_t available_workers,
-    size_t available_memory_bytes, size_t mapping_granularity_bytes,
-    size_t checksum_auxiliary_bytes, size_t orchestration_auxiliary_bytes,
     const LlmKvStopRequested& stop_requested = {});
 
 /** Re-evaluate one already-materialized plan with finalized auxiliary bytes. */

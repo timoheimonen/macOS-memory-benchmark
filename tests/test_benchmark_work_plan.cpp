@@ -50,19 +50,25 @@ TEST(BenchmarkWorkPlanTest, StateIndexesCoverEveryTargetOperationExactlyOnce) {
   EXPECT_TRUE(std::all_of(latency_indexes.begin(), latency_indexes.end(), [](bool covered) { return covered; }));
 }
 
-TEST(BenchmarkWorkPlanTest, RejectsInvalidBandwidthParameters) {
-  EXPECT_EQ(build_benchmark_bandwidth_work_plan(0, 1, 1, BenchmarkTarget::MainMemory, BenchmarkOperation::Read).status,
-            BenchmarkMeasurementStatus::Invalid);
-  EXPECT_EQ(
-      build_benchmark_bandwidth_work_plan(4096, 0, 1, BenchmarkTarget::MainMemory, BenchmarkOperation::Read).status,
-      BenchmarkMeasurementStatus::Invalid);
-  EXPECT_EQ(
-      build_benchmark_bandwidth_work_plan(4096, 1, 0, BenchmarkTarget::MainMemory, BenchmarkOperation::Read).status,
-      BenchmarkMeasurementStatus::Invalid);
-  const BenchmarkWorkPlan latency_operation =
-      build_benchmark_bandwidth_work_plan(4096, 1, 1, BenchmarkTarget::MainMemory, BenchmarkOperation::Latency);
-  EXPECT_EQ(latency_operation.status, BenchmarkMeasurementStatus::Invalid);
-  EXPECT_EQ(latency_operation.status_reason, Messages::benchmark_reason_invalid_bandwidth_plan());
+TEST(BenchmarkWorkPlanTest, RejectsInvalidBandwidthParametersAndPayloadOverflow) {
+  struct InvalidCase {
+    size_t bytes;
+    int threads;
+    int passes;
+    BenchmarkOperation operation;
+  };
+  for (const InvalidCase& entry :
+       {InvalidCase{0, 1, 1, BenchmarkOperation::Read}, InvalidCase{4096, 0, 1, BenchmarkOperation::Read},
+        InvalidCase{4096, 1, 0, BenchmarkOperation::Read}, InvalidCase{4096, 1, 1, BenchmarkOperation::Latency},
+        InvalidCase{std::numeric_limits<size_t>::max(), 1, 1, BenchmarkOperation::Copy}}) {
+    SCOPED_TRACE(::testing::Message() << entry.bytes << "/" << entry.threads << "/" << entry.passes);
+    const BenchmarkWorkPlan plan = build_benchmark_bandwidth_work_plan(entry.bytes, entry.threads, entry.passes,
+                                                                       BenchmarkTarget::MainMemory, entry.operation);
+    EXPECT_EQ(plan.status, BenchmarkMeasurementStatus::Invalid);
+    if (entry.operation == BenchmarkOperation::Latency) {
+      EXPECT_EQ(plan.status_reason, Messages::benchmark_reason_invalid_bandwidth_plan());
+    }
+  }
 }
 
 TEST(BenchmarkWorkPlanTest, CoversUnevenBufferExactlyWithAlignedBoundaries) {
@@ -93,12 +99,6 @@ TEST(BenchmarkWorkPlanTest, ReducesWorkersForTinyBuffers) {
   EXPECT_EQ(plan.effective_threads, 1);
   ASSERT_EQ(plan.workers.size(), 1u);
   EXPECT_EQ(plan.workers[0].span_bytes, 64u);
-}
-
-TEST(BenchmarkWorkPlanTest, RejectsPayloadOverflow) {
-  BenchmarkWorkPlan plan = build_benchmark_bandwidth_work_plan(std::numeric_limits<size_t>::max(), 1, 1,
-                                                               BenchmarkTarget::MainMemory, BenchmarkOperation::Copy);
-  EXPECT_EQ(plan.status, BenchmarkMeasurementStatus::Invalid);
 }
 
 TEST(BenchmarkWorkPlanTest, PassUpdatesRejectLimitsAndOverflowWithoutMutation) {

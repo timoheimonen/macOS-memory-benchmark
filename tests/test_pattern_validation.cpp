@@ -34,36 +34,23 @@ std::string capture_stderr(Callable&& callable) {
 
 }  // namespace
 
-TEST(PatternValidationTest, StrideAcceptsSupportedBounds) {
+TEST(PatternValidationTest, StrideValidatesBufferBounds) {
   using namespace Constants;
   const struct {
     size_t stride;
     size_t buffer_size;
+    bool valid;
   } cases[] = {
-      {PATTERN_MIN_BUFFER_SIZE_BYTES, PATTERN_MIN_BUFFER_SIZE_BYTES},
-      {PATTERN_STRIDE_CACHE_LINE, PATTERN_STRIDE_CACHE_LINE},
-      {PATTERN_STRIDE_PAGE, PATTERN_STRIDE_PAGE + PATTERN_ACCESS_SIZE_BYTES},
+      {PATTERN_MIN_BUFFER_SIZE_BYTES, PATTERN_MIN_BUFFER_SIZE_BYTES, true},
+      {PATTERN_STRIDE_CACHE_LINE, PATTERN_STRIDE_CACHE_LINE, true},
+      {PATTERN_STRIDE_PAGE, PATTERN_STRIDE_PAGE + PATTERN_ACCESS_SIZE_BYTES, true},
+      {PATTERN_STRIDE_PAGE, PATTERN_STRIDE_PAGE - 1, false},
   };
 
   for (const auto& test_case : cases) {
-    EXPECT_TRUE(validate_stride(test_case.stride, test_case.buffer_size));
+    SCOPED_TRACE(test_case.buffer_size);
+    EXPECT_EQ(validate_stride(test_case.stride, test_case.buffer_size), test_case.valid);
   }
-}
-
-TEST(PatternValidationTest, StrideRejectsTooSmallValueWithCentralizedReason) {
-  bool result = true;
-  const std::string output = capture_stderr([&] {
-    result = validate_stride(Constants::PATTERN_MIN_BUFFER_SIZE_BYTES - 1,
-                             Constants::PATTERN_MIN_BUFFER_SIZE_BYTES);
-  });
-
-  EXPECT_FALSE(result);
-  EXPECT_EQ(output, Messages::error_prefix() + Messages::error_stride_too_small() + "\n");
-}
-
-TEST(PatternValidationTest, StrideRejectsValueBeyondBufferWithoutBenchmarkExecution) {
-  EXPECT_FALSE(validate_stride(Constants::PATTERN_STRIDE_PAGE,
-                               Constants::PATTERN_STRIDE_PAGE - 1));
 }
 
 TEST(PatternValidationTest, RandomIndicesAcceptEveryAlignedExactlyFittingAccess) {

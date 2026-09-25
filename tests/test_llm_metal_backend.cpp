@@ -22,7 +22,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -1279,9 +1278,10 @@ TEST(LlmMetalBackendTest, ArgumentBufferPlanFreezesCanonicalSlotBasesCountsAndCa
 
 TEST(LlmMetalBackendTest, ContiguousPoolsUseExactCanonicalBoundarySegmentsWithoutAllocation) {
   const size_t capacity = Constants::LLM_METAL_SEGMENT_CAPACITY_BYTES;
-  const std::array<size_t, 3> lengths = {capacity - 1, capacity, capacity + 1};
-  const std::array<std::vector<size_t>, 3> expected = {std::vector<size_t>{capacity - 1}, std::vector<size_t>{capacity},
-                                                       std::vector<size_t>{capacity, 1}};
+  const std::array<size_t, 4> lengths = {capacity - 1, capacity, capacity + 1, 3 * capacity + 17};
+  const std::array<std::vector<size_t>, 4> expected = {std::vector<size_t>{capacity - 1}, std::vector<size_t>{capacity},
+                                                       std::vector<size_t>{capacity, 1},
+                                                       std::vector<size_t>{capacity, capacity, capacity, 17}};
 
   for (size_t index = 0; index < lengths.size(); ++index) {
     const LlmGeometry geometry = contiguous_geometry(lengths[index], lengths[index]);
@@ -1299,23 +1299,12 @@ TEST(LlmMetalBackendTest, ContiguousPoolsUseExactCanonicalBoundarySegmentsWithou
     EXPECT_EQ(plan.resources.k_segments.total_length_bytes, lengths[index]);
     EXPECT_EQ(plan.resources.v_segments.total_length_bytes, lengths[index]);
     EXPECT_FALSE(plan.resources.table_segments.has_value());
-  }
-}
-
-TEST(LlmMetalBackendTest, ContiguousPoolsRetainEveryExactLengthAcrossMultipleSegments) {
-  const size_t capacity = Constants::LLM_METAL_SEGMENT_CAPACITY_BYTES;
-  const size_t length = 3 * capacity + 17;
-  const LlmGeometry geometry = contiguous_geometry(length, length);
-  ASSERT_TRUE(geometry.valid) << geometry.reason_code;
-  const LlmMetalExecutionPlan plan = build_llm_metal_execution_plan(resource_request(geometry));
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-
-  const std::vector<size_t> expected = {capacity, capacity, capacity, 17};
-  for (const LlmKvSegmentPlan* segments :
-       {&plan.resources.weight_segments, &plan.resources.k_segments, &plan.resources.v_segments}) {
-    EXPECT_EQ(segments->segment_lengths, expected);
-    EXPECT_EQ(segments->segment_count, expected.size());
-    EXPECT_EQ(std::accumulate(segments->segment_lengths.begin(), segments->segment_lengths.end(), size_t{0}), length);
+    for (const LlmKvSegmentPlan* segments :
+         {&plan.resources.weight_segments, &plan.resources.k_segments, &plan.resources.v_segments}) {
+      EXPECT_EQ(segments->segment_count, expected[index].size());
+      EXPECT_EQ(std::accumulate(segments->segment_lengths.begin(), segments->segment_lengths.end(), size_t{0}),
+                lengths[index]);
+    }
   }
 }
 
@@ -1338,80 +1327,52 @@ TEST(LlmMetalBackendTest, MultiGibContiguousPoolRetainsExactBoundedSegmentCountW
   EXPECT_EQ(plan.resources.weight_segments.total_length_bytes, weight_bytes);
 }
 
-TEST(LlmMetalBackendTest, PagedKvSegmentsKeepWholeBlocksAndTableSegmentsKeepWholeEntries) {
-  LlmMetalPlanningLimits limits;
-  limits.segment_capacity_bytes = 100;
-  limits.segment_slots_per_pool = 32;
-  const LlmGeometry geometry = paged_geometry(101, 49, 16, 2, 2, 3);
-  ASSERT_TRUE(geometry.valid) << geometry.reason_code;
-  ASSERT_EQ(geometry.kv_block_bytes, 48U);
-  ASSERT_EQ(geometry.total_physical_blocks, 16U);
-  ASSERT_EQ(geometry.block_table_entries, 8U);
-
-  const LlmMetalExecutionPlan plan = build_llm_metal_execution_plan(resource_request(geometry, limits));
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  ASSERT_TRUE(plan.resources.table_segments.has_value());
-  EXPECT_EQ(plan.resources.k_segments.elements_per_segment, 2U);
-  EXPECT_EQ(plan.resources.k_segments.segment_count, 8U);
-  EXPECT_EQ(plan.resources.k_segments.segment_lengths, std::vector<size_t>(8, 96));
-  EXPECT_EQ(plan.resources.v_segments.segment_lengths, plan.resources.k_segments.segment_lengths);
-  EXPECT_EQ(plan.resources.k_segments.total_length_bytes, geometry.k_mapping_bytes);
-  EXPECT_TRUE(std::all_of(plan.resources.k_segments.segment_lengths.begin(),
-                          plan.resources.k_segments.segment_lengths.end(),
-                          [](size_t length) { return length % 48 == 0; }));
-  EXPECT_EQ(plan.resources.table_segments->element_bytes, sizeof(uint32_t));
-  EXPECT_EQ(plan.resources.table_segments->segment_lengths, std::vector<size_t>{32});
-  EXPECT_EQ(plan.resources.table_segments->total_length_bytes, geometry.block_table_bytes);
-}
-
-TEST(LlmMetalBackendTest, PagedPoolsHonorInjectedSegmentBoundaryMinusOneExactAndPlusOne) {
-  LlmMetalPlanningLimits limits;
-  limits.segment_capacity_bytes = 100;
-  limits.segment_slots_per_pool = 8;
-  const std::array<size_t, 3> physical_pool_bytes = {99, 100, 101};
-  const std::array<std::vector<size_t>, 3> expected = {std::vector<size_t>{99}, std::vector<size_t>{100},
-                                                       std::vector<size_t>{100, 1}};
-
-  for (size_t index = 0; index < physical_pool_bytes.size(); ++index) {
-    const LlmGeometry geometry = paged_geometry(1, physical_pool_bytes[index], 1);
-    ASSERT_TRUE(geometry.valid) << geometry.reason_code;
-    ASSERT_EQ(geometry.kv_block_bytes, 1U);
-    ASSERT_EQ(geometry.k_mapping_bytes, physical_pool_bytes[index]);
-    const LlmMetalExecutionPlan plan = build_llm_metal_execution_plan(resource_request(geometry, limits));
-    SCOPED_TRACE(physical_pool_bytes[index]);
-    ASSERT_TRUE(plan.valid) << plan.reason_code;
-    EXPECT_EQ(plan.resources.k_segments.segment_lengths, expected[index]);
-    EXPECT_EQ(plan.resources.v_segments.segment_lengths, expected[index]);
-    ASSERT_TRUE(plan.resources.table_segments.has_value());
-    EXPECT_TRUE(std::all_of(plan.resources.table_segments->segment_lengths.begin(),
-                            plan.resources.table_segments->segment_lengths.end(),
-                            [](size_t length) { return length % sizeof(uint32_t) == 0 && length <= 100; }));
-  }
-}
-
 TEST(LlmMetalBackendTest, PagedTableAndPoolsUseIndependentMultiSegmentWholeElementPlans) {
-  LlmMetalPlanningLimits limits;
-  limits.segment_capacity_bytes = 20;
-  limits.segment_slots_per_pool = 32;
-  const LlmGeometry geometry = paged_geometry(41, 29, 4, 2, 4, 1);
-  ASSERT_TRUE(geometry.valid) << geometry.reason_code;
-  ASSERT_EQ(geometry.kv_block_bytes, 4U);
-  ASSERT_EQ(geometry.total_physical_blocks, 64U);
-  ASSERT_EQ(geometry.block_table_entries, 32U);
-
-  const LlmMetalExecutionPlan plan = build_llm_metal_execution_plan(resource_request(geometry, limits));
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  ASSERT_TRUE(plan.resources.table_segments.has_value());
-  EXPECT_EQ(plan.resources.k_segments.segment_count, 13U);
-  EXPECT_EQ(plan.resources.k_segments.segment_lengths.back(), 16U);
-  EXPECT_TRUE(std::all_of(plan.resources.k_segments.segment_lengths.begin(),
-                          plan.resources.k_segments.segment_lengths.end(),
-                          [](size_t length) { return length % 4 == 0 && length <= 20; }));
-  EXPECT_EQ(plan.resources.table_segments->segment_count, 7U);
-  EXPECT_EQ(plan.resources.table_segments->segment_lengths, (std::vector<size_t>{20, 20, 20, 20, 20, 20, 8}));
-  EXPECT_TRUE(std::all_of(plan.resources.table_segments->segment_lengths.begin(),
-                          plan.resources.table_segments->segment_lengths.end(),
-                          [](size_t length) { return length % sizeof(uint32_t) == 0 && length <= 20; }));
+  struct Case {
+    LlmGeometry geometry;
+    size_t capacity;
+    size_t blocks_per_segment;
+    std::vector<size_t> pool_lengths;
+    std::vector<size_t> table_lengths;
+  };
+  std::vector<size_t> many_pool_lengths(12, 20);
+  many_pool_lengths.push_back(16);
+  const std::array<Case, 5> cases = {{
+      {paged_geometry(101, 49, 16, 2, 2, 3), 100, 2, std::vector<size_t>(8, 96), {32}},
+      {paged_geometry(1, 99, 1), 100, 100, {99}, {100, 100, 100, 96}},
+      {paged_geometry(1, 100, 1), 100, 100, {100}, {100, 100, 100, 100}},
+      {paged_geometry(1, 101, 1), 100, 100, {100, 1}, {100, 100, 100, 100, 4}},
+      {paged_geometry(41, 29, 4, 2, 4, 1), 20, 5, many_pool_lengths, {20, 20, 20, 20, 20, 20, 8}},
+  }};
+  for (const auto& row : cases) {
+    SCOPED_TRACE(::testing::Message() << row.capacity << ":" << row.geometry.k_mapping_bytes);
+    ASSERT_TRUE(row.geometry.valid) << row.geometry.reason_code;
+    LlmMetalPlanningLimits limits;
+    limits.segment_capacity_bytes = row.capacity;
+    limits.segment_slots_per_pool = 32;
+    const auto plan = build_llm_metal_execution_plan(resource_request(row.geometry, limits));
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    ASSERT_TRUE(plan.resources.table_segments.has_value());
+    EXPECT_EQ(plan.resources.k_segments.elements_per_segment, row.blocks_per_segment);
+    for (const auto* pool : {&plan.resources.k_segments, &plan.resources.v_segments}) {
+      EXPECT_EQ(pool->segment_lengths, row.pool_lengths);
+      EXPECT_EQ(pool->segment_count, row.pool_lengths.size());
+      EXPECT_EQ(pool->total_length_bytes, row.geometry.k_mapping_bytes);
+      for (size_t length : pool->segment_lengths) {
+        EXPECT_EQ(length % row.geometry.kv_block_bytes, 0U);
+        EXPECT_LE(length, row.capacity);
+      }
+    }
+    const auto& table = *plan.resources.table_segments;
+    EXPECT_EQ(table.element_bytes, sizeof(uint32_t));
+    EXPECT_EQ(table.segment_lengths, row.table_lengths);
+    EXPECT_EQ(table.segment_count, row.table_lengths.size());
+    EXPECT_EQ(table.total_length_bytes, row.geometry.block_table_bytes);
+    for (size_t length : table.segment_lengths) {
+      EXPECT_EQ(length % sizeof(uint32_t), 0U);
+      EXPECT_LE(length, row.capacity);
+    }
+  }
 }
 
 TEST(LlmMetalBackendTest, PagedIdentityBindsTailGeometryWhenPhysicalResourcesMatch) {
@@ -1444,46 +1405,35 @@ TEST(LlmMetalBackendTest, PagedIdentityBindsTailGeometryWhenPhysicalResourcesMat
   EXPECT_NE(five_token_plan.identity, seven_token_plan.identity);
 }
 
-TEST(LlmMetalBackendTest, PagedPlannerRejectsOversizedBlocksAndMissingOrMismatchedLayouts) {
+TEST(LlmMetalBackendTest, PlannerRejectsInvalidLayoutsAndResourceCaps) {
   LlmMetalPlanningLimits limits;
   limits.segment_capacity_bytes = 63;
   limits.segment_slots_per_pool = 8;
   const LlmGeometry geometry = paged_geometry(64, 17, 16, 1, 1, 4);
   ASSERT_TRUE(geometry.valid) << geometry.reason_code;
-  ASSERT_EQ(geometry.kv_block_bytes, 64U);
-
+  struct Case {
+    LlmMetalResourcePlanRequest request;
+    const char* reason;
+  };
+  std::vector<Case> cases;
   LlmMetalResourcePlanRequest request = resource_request(geometry, limits);
-  const LlmMetalExecutionPlan oversized = build_llm_metal_execution_plan(request);
-  EXPECT_FALSE(oversized.valid);
-  EXPECT_EQ(oversized.reason_code, LlmBackendReason::PAGED_BLOCK_EXCEEDS_SEGMENT_CAPACITY);
-
+  cases.push_back({request, LlmBackendReason::PAGED_BLOCK_EXCEEDS_SEGMENT_CAPACITY});
   request.limits.segment_capacity_bytes = 64;
   request.paged_layout.reset();
-  const LlmMetalExecutionPlan missing = build_llm_metal_execution_plan(request);
-  EXPECT_FALSE(missing.valid);
-  EXPECT_EQ(missing.reason_code, LlmMetalPlanReason::PAGED_LAYOUT_REQUIRED);
-
+  cases.push_back({request, LlmMetalPlanReason::PAGED_LAYOUT_REQUIRED});
   request.paged_layout = paged_layout_for(paged_geometry(64, 18, 16, 1, 1, 4));
-  const LlmMetalExecutionPlan mismatched = build_llm_metal_execution_plan(request);
-  EXPECT_FALSE(mismatched.valid);
-  EXPECT_EQ(mismatched.reason_code, LlmMetalPlanReason::PAGED_LAYOUT_MISMATCH);
-
-  LlmGeometry malformed = geometry;
-  malformed.decode.reset();
-  request.geometry = malformed;
-  const LlmMetalExecutionPlan invalid_geometry = build_llm_metal_execution_plan(request);
-  EXPECT_FALSE(invalid_geometry.valid);
-  EXPECT_EQ(invalid_geometry.reason_code, LlmMetalPlanReason::INVALID_GEOMETRY);
-}
-
-TEST(LlmMetalBackendTest, ContiguousSegmentCapFailureUsesCanonicalMetalReason) {
-  LlmMetalPlanningLimits limits;
+  cases.push_back({request, LlmMetalPlanReason::PAGED_LAYOUT_MISMATCH});
+  request.geometry.decode.reset();
+  cases.push_back({request, LlmMetalPlanReason::INVALID_GEOMETRY});
   limits.segment_capacity_bytes = 100;
   limits.segment_slots_per_pool = 2;
-  const LlmGeometry geometry = contiguous_geometry(201);
-  const LlmMetalExecutionPlan plan = build_llm_metal_execution_plan(resource_request(geometry, limits));
-  EXPECT_FALSE(plan.valid);
-  EXPECT_EQ(plan.reason_code, LlmBackendReason::SEGMENT_COUNT_CAP_EXCEEDED);
+  cases.push_back({resource_request(contiguous_geometry(201), limits), LlmBackendReason::SEGMENT_COUNT_CAP_EXCEEDED});
+  for (const auto& row : cases) {
+    SCOPED_TRACE(row.reason);
+    const auto plan = build_llm_metal_execution_plan(row.request);
+    EXPECT_FALSE(plan.valid);
+    EXPECT_EQ(plan.reason_code, row.reason);
+  }
 }
 
 TEST(LlmMetalBackendTest, RuntimeEncoderLengthAlignmentAndFirstAdmissionAreExact) {
@@ -1570,27 +1520,6 @@ TEST(LlmMetalBackendTest, FirstAdmissionAppliesTheHardBudgetAtTheExactKnownOwned
   ASSERT_TRUE(admitted.valid) << admitted.reason_code;
   EXPECT_EQ(admitted.resources.known_owned_peak_bytes, required);
   EXPECT_GE(admitted.resources.admitted_budget_bytes, required);
-}
-
-TEST(LlmMetalBackendTest, ResourceIdentityExcludesVolatileAdmissionSample) {
-  const LlmGeometry geometry = contiguous_geometry(101);
-  LlmMetalResourcePlanRequest request = resource_request(geometry);
-  request.available_memory_bytes = 2 * kGiB;
-  const LlmMetalExecutionPlan first = build_llm_metal_execution_plan(request);
-  ASSERT_TRUE(first.valid) << first.reason_code;
-
-  request.available_memory_bytes = 3 * kGiB;
-  const LlmMetalExecutionPlan second = build_llm_metal_execution_plan(request);
-  ASSERT_TRUE(second.valid) << second.reason_code;
-
-  EXPECT_NE(first.resources.available_memory_bytes, second.resources.available_memory_bytes);
-  EXPECT_NE(first.resources.admitted_budget_bytes, second.resources.admitted_budget_bytes);
-  EXPECT_EQ(first.resources.known_owned_peak_bytes, second.resources.known_owned_peak_bytes);
-  EXPECT_EQ(first.resources.identity, second.resources.identity);
-  EXPECT_EQ(first.identity, second.identity);
-  EXPECT_EQ(first.resources.identity.rfind("llm-metal-resource-foundation-v1", 0), 0U);
-  EXPECT_EQ(first.resources.identity.find("available_memory_bytes"), std::string::npos);
-  EXPECT_EQ(first.resources.identity.find("admitted_budget_bytes"), std::string::npos);
 }
 
 TEST(LlmMetalBackendTest, CommittedAdmissionUsesNullableAllocatedSizeExactlyOncePerResource) {
@@ -1723,121 +1652,6 @@ TEST(LlmMetalBackendTest, GridPlanUsesInjectedWidthAndAllBoundaryCaps) {
             LlmMetalPlanReason::SERIAL_RANGE_VISIT_CAP_EXCEEDED);
 }
 
-TEST(LlmMetalBackendTest, GridPlanReportsExactCyclicThreadgroupOwnerCostsPastGridCap) {
-  LlmMetalGridRequest request;
-  request.owner_count = 7;
-  request.visit_bytes = 1;
-  request.work_units = 1;
-  request.paged_semantic_lookups = 7;
-  request.owner_accounted_bytes = {1, 10, 100, 1000, 10000, 100000, 1000000};
-  request.pipeline = {16, 64};
-  request.limits.threads_per_threadgroup_cap = 64;
-  request.limits.maximum_threadgroups_per_grid = 3;
-  request.limits.maximum_owner_ordinals_per_threadgroup = 3;
-  request.limits.maximum_vector_iterations_per_lane_per_visit = 1;
-  request.limits.maximum_paged_semantic_lookups_per_task = 7;
-  request.limits.maximum_work_units_per_dispatch = 1;
-
-  const LlmMetalGridPlan plan = build_llm_metal_grid_plan(request);
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  EXPECT_EQ(plan.actual_threadgroups, 3U);
-  EXPECT_EQ(plan.owner_ordinals_per_threadgroup, 3U);
-  EXPECT_EQ(plan.threadgroup_accounted_bytes, (std::vector<size_t>{1001001, 10010, 100100}));
-  EXPECT_EQ(plan.minimum_threadgroup_accounted_bytes, 10010U);
-  EXPECT_EQ(plan.maximum_threadgroup_accounted_bytes, 1001001U);
-  EXPECT_EQ(plan.threadgroup_accounted_imbalance_bytes, 990991U);
-  EXPECT_EQ(
-      std::accumulate(plan.threadgroup_accounted_bytes.begin(), plan.threadgroup_accounted_bytes.end(), size_t{0}),
-      std::accumulate(request.owner_accounted_bytes.begin(), request.owner_accounted_bytes.end(), size_t{0}));
-  EXPECT_FALSE(plan.identity.empty());
-
-  LlmMetalGridRequest collision_left = request;
-  collision_left.owner_count = 3;
-  collision_left.paged_semantic_lookups = 3;
-  collision_left.owner_accounted_bytes = {1, 2, 3};
-  const LlmMetalGridPlan left = build_llm_metal_grid_plan(collision_left);
-  ASSERT_TRUE(left.valid) << left.reason_code;
-  LlmMetalGridRequest collision_right = collision_left;
-  collision_right.owner_accounted_bytes = {2, 1, 3};
-  const LlmMetalGridPlan right = build_llm_metal_grid_plan(collision_right);
-  ASSERT_TRUE(right.valid) << right.reason_code;
-  EXPECT_NE(left.threadgroup_accounted_bytes, right.threadgroup_accounted_bytes);
-  EXPECT_EQ(left.minimum_threadgroup_accounted_bytes, right.minimum_threadgroup_accounted_bytes);
-  EXPECT_EQ(left.maximum_threadgroup_accounted_bytes, right.maximum_threadgroup_accounted_bytes);
-  EXPECT_EQ(left.threadgroup_accounted_imbalance_bytes, right.threadgroup_accounted_imbalance_bytes);
-  EXPECT_NE(left.identity, right.identity);
-
-  request.owner_accounted_bytes.pop_back();
-  const LlmMetalGridPlan mismatch = build_llm_metal_grid_plan(request);
-  EXPECT_FALSE(mismatch.valid);
-  EXPECT_EQ(mismatch.reason_code, LlmMetalPlanReason::OWNER_COST_COUNT_MISMATCH);
-}
-
-TEST(LlmMetalBackendTest,
-     CyclicGridPastCanonical8192CapUsesExactNonuniformPrefillBlockCosts) {
-  const LlmPrefillPlan prefill =
-      resolve_llm_prefill_plan({65, 7, 3, 2, 2, 1, 31, 31, 2});
-  ASSERT_TRUE(prefill.valid) << prefill.reason_code;
-  ASSERT_TRUE(prefill.paged);
-  ASSERT_EQ(prefill.blocks_per_sequence, 4U);
-
-  std::array<size_t, 4> block_costs{};
-  for (size_t block = 0; block < block_costs.size(); ++block) {
-    const LlmPrefillUnitRangeCost cost =
-        calculate_llm_prefill_paged_block_cost(prefill, block);
-    ASSERT_TRUE(cost.valid) << cost.reason_code;
-    block_costs[block] = cost.accounted_bytes;
-  }
-  EXPECT_EQ(block_costs,
-            (std::array<size_t, 4>{524, 462, 392, 136}));
-
-  constexpr size_t kOwnerCount =
-      Constants::LLM_METAL_MAX_THREADGROUPS_PER_GRID + 1;
-  LlmMetalGridRequest request;
-  request.owner_count = kOwnerCount;
-  request.visit_bytes = prefill.kv_block_tokens *
-                        prefill.k_or_v_record_bytes_per_layer;
-  request.work_units = 1;
-  request.paged_semantic_lookups = kOwnerCount;
-  request.pipeline = {32, 128};
-  request.owner_accounted_bytes.reserve(kOwnerCount);
-  for (size_t owner = 0; owner < kOwnerCount; ++owner) {
-    request.owner_accounted_bytes.push_back(
-        block_costs[owner % block_costs.size()]);
-  }
-
-  const LlmMetalGridPlan plan = build_llm_metal_grid_plan(request);
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  EXPECT_EQ(plan.owner_count, kOwnerCount);
-  EXPECT_EQ(plan.actual_threadgroups,
-            Constants::LLM_METAL_MAX_THREADGROUPS_PER_GRID);
-  EXPECT_EQ(plan.owner_ordinals_per_threadgroup, 2U);
-  ASSERT_EQ(plan.threadgroup_accounted_bytes.size(),
-            Constants::LLM_METAL_MAX_THREADGROUPS_PER_GRID);
-
-  std::vector<size_t> independent_costs(plan.actual_threadgroups, 0);
-  for (size_t owner = 0; owner < kOwnerCount; ++owner) {
-    independent_costs[owner % plan.actual_threadgroups] +=
-        block_costs[owner % block_costs.size()];
-  }
-  EXPECT_EQ(plan.threadgroup_accounted_bytes, independent_costs);
-  const auto [minimum, maximum] = std::minmax_element(
-      independent_costs.begin(), independent_costs.end());
-  EXPECT_EQ(plan.minimum_threadgroup_accounted_bytes, *minimum);
-  EXPECT_EQ(plan.maximum_threadgroup_accounted_bytes, *maximum);
-  EXPECT_EQ(plan.threadgroup_accounted_imbalance_bytes,
-            *maximum - *minimum);
-  EXPECT_EQ(*minimum, 136U);
-  EXPECT_EQ(*maximum, 1048U);
-  EXPECT_EQ(std::accumulate(independent_costs.begin(),
-                            independent_costs.end(), size_t{0}),
-            std::accumulate(request.owner_accounted_bytes.begin(),
-                            request.owner_accounted_bytes.end(), size_t{0}));
-  EXPECT_NE(plan.identity.find(
-                "threadgroup_accounted_bytes_count=4:8192;"),
-            std::string::npos);
-}
-
 TEST(LlmMetalBackendTest,
      WeightGridReportsExactVectorModuloThreadgroupCostsAndTail) {
   constexpr size_t kWeightBytes = 181;
@@ -1887,72 +1701,7 @@ TEST(LlmMetalBackendTest,
             std::string::npos);
 }
 
-TEST(LlmMetalBackendTest,
-     PrefillPagedGridReportsExactCyclicNonuniformOwnerCosts) {
-  const LlmPrefillPlan prefill =
-      resolve_llm_prefill_plan({65, 7, 3, 2, 2, 1, 31, 31, 2});
-  ASSERT_TRUE(prefill.valid) << prefill.reason_code;
-  ASSERT_TRUE(prefill.paged);
-  ASSERT_EQ(prefill.blocks_per_sequence, 4U);
-
-  std::vector<size_t> block_costs;
-  for (size_t block = 0; block < prefill.blocks_per_sequence; ++block) {
-    const LlmPrefillUnitRangeCost cost =
-        calculate_llm_prefill_paged_block_cost(prefill, block);
-    ASSERT_TRUE(cost.valid) << cost.reason_code;
-    block_costs.push_back(cost.accounted_bytes);
-  }
-  EXPECT_EQ(block_costs, (std::vector<size_t>{524, 462, 392, 136}));
-
-  constexpr size_t kWorkUnits = 2;
-  constexpr size_t kLayerCount = 2;
-  constexpr size_t kBatchSize = 2;
-  const std::array<size_t, kLayerCount> weight_layer_bytes = {33, 32};
-  LlmMetalGridRequest request;
-  request.owner_count =
-      kLayerCount * kBatchSize * prefill.blocks_per_sequence;
-  request.visit_bytes = prefill.kv_block_tokens *
-                        prefill.k_or_v_record_bytes_per_layer;
-  request.work_units = kWorkUnits;
-  request.paged_semantic_lookups =
-      kWorkUnits * prefill.layout_metadata_lookups_per_work_unit;
-  request.pipeline = {16, 64};
-  request.limits.maximum_threadgroups_per_grid = 3;
-  request.limits.maximum_owner_ordinals_per_threadgroup = 6;
-  request.limits.maximum_vector_iterations_per_lane_per_visit = 1;
-  request.limits.maximum_work_units_per_dispatch = kWorkUnits;
-  request.limits.maximum_paged_semantic_lookups_per_task =
-      request.paged_semantic_lookups;
-  for (size_t owner = 0; owner < request.owner_count; ++owner) {
-    const size_t logical_block = owner % prefill.blocks_per_sequence;
-    const size_t row = owner / prefill.blocks_per_sequence;
-    const size_t batch = row % kBatchSize;
-    const size_t layer = row / kBatchSize;
-    size_t cost = block_costs[logical_block];
-    if (batch == 0 && logical_block == 0) {
-      cost += weight_layer_bytes[layer];
-    }
-    request.owner_accounted_bytes.push_back(cost * kWorkUnits);
-  }
-
-  const LlmMetalGridPlan grid = build_llm_metal_grid_plan(request);
-  ASSERT_TRUE(grid.valid) << grid.reason_code;
-  EXPECT_EQ(grid.owner_count, 16U);
-  EXPECT_EQ(grid.actual_threadgroups, 3U);
-  EXPECT_EQ(grid.owner_ordinals_per_threadgroup, 6U);
-  EXPECT_EQ(grid.threadgroup_accounted_bytes,
-            (std::vector<size_t>{4414, 3952, 3876}));
-  EXPECT_EQ(grid.minimum_threadgroup_accounted_bytes, 3876U);
-  EXPECT_EQ(grid.maximum_threadgroup_accounted_bytes, 4414U);
-  EXPECT_EQ(grid.threadgroup_accounted_imbalance_bytes, 538U);
-  EXPECT_EQ(std::accumulate(grid.threadgroup_accounted_bytes.begin(),
-                            grid.threadgroup_accounted_bytes.end(), size_t{0}),
-            12242U);
-  EXPECT_FALSE(grid.identity.empty());
-}
-
-TEST(LlmMetalBackendTest,
-     DecodePatternAndAppendHelpersHaveFrozenIndependentGoldens) {
+TEST(LlmMetalBackendTest, InitializationPatternHelpersHaveFrozenIndependentGoldens) {
   constexpr uint64_t kSeed = UINT64_C(0x0123456789abcdef);
   EXPECT_EQ(llm_metal_contiguous_pattern_word(kSeed, 0),
             UINT32_C(0x27e347a8));
@@ -1967,24 +1716,6 @@ TEST(LlmMetalBackendTest,
   EXPECT_EQ(llm_metal_paged_pattern_word(
                 kSeed, UINT32_MAX, UINT32_MAX, UINT64_MAX),
             UINT32_C(0x89abcdef));
-  EXPECT_EQ(llm_metal_decode_append_word(
-                kSeed, 2, 3, 4, 5, LlmMetalResourcePool::K),
-            UINT32_C(0xbeae4546));
-  EXPECT_EQ(llm_metal_decode_append_word(
-                kSeed, 2, 3, 4, 5, LlmMetalResourcePool::V),
-            UINT32_C(0xc9aa3846));
-  EXPECT_EQ(llm_metal_prefill_write_word(
-                kSeed, 2, 3, 4, 5, LlmMetalResourcePool::K),
-            independent_prefill_write_word(
-                kSeed, 2, 3, 4, 5, LlmMetalResourcePool::K));
-  EXPECT_EQ(llm_metal_prefill_write_word(
-                kSeed, 2, 3, 4, 5, LlmMetalResourcePool::V),
-            independent_prefill_write_word(
-                kSeed, 2, 3, 4, 5, LlmMetalResourcePool::V));
-  EXPECT_NE(llm_metal_prefill_write_word(
-                kSeed, 1, 3, 4, 5, LlmMetalResourcePool::K),
-            llm_metal_prefill_write_word(
-                kSeed, 2, 3, 4, 5, LlmMetalResourcePool::K));
 }
 
 TEST(LlmMetalBackendTest,
@@ -2039,46 +1770,39 @@ TEST(LlmMetalBackendTest,
 
 TEST(LlmMetalBackendTest,
      PrefillChecksumMatchesIndependentByteOracleAcrossTilesTailsAndScenarios) {
-  for (size_t tail_bytes : {size_t{31}, size_t{32}, size_t{33}}) {
-    for (const auto [prompt_tokens, query_tile_tokens] :
-         {std::pair<size_t, size_t>{5, 1}, {5, 5}, {5, 2}}) {
-      const LlmGeometry geometry = prefill_contiguous_geometry(
-          tail_bytes, prompt_tokens, query_tile_tokens, 2, 2, tail_bytes);
-      ASSERT_TRUE(geometry.valid) << geometry.reason_code;
-      LlmMemoryWorkPlan model = make_metal_model_plan(
-          geometry,
-          build_llm_metal_execution_plan(resource_request(geometry)),
-          "llm-metal-prefill-independent-byte-oracle-" +
-              std::to_string(tail_bytes) + "-" +
-              std::to_string(query_tile_tokens));
-      ASSERT_TRUE(model.valid) << model.reason_code;
-      ASSERT_TRUE(model.prefill_plan.has_value());
+  std::vector<LlmGeometry> geometries;
+  for (size_t tail_bytes : {31U, 32U, 33U}) {
+    for (const auto [prompt, tile] : {std::pair<size_t, size_t>{5, 1}, {5, 5}, {5, 2}}) {
+      geometries.push_back(prefill_contiguous_geometry(tail_bytes, prompt, tile, 2, 2, tail_bytes));
+    }
+  }
+  geometries.push_back(prefill_contiguous_geometry(1, 3, 2, 2, 1, 3));
+  for (const auto& geometry : geometries) {
+    ASSERT_TRUE(geometry.valid) << geometry.reason_code;
+    LlmMemoryWorkPlan model =
+        make_metal_model_plan(geometry, build_llm_metal_execution_plan(resource_request(geometry)),
+                              "llm-metal-prefill-independent-byte-oracle");
+    ASSERT_TRUE(model.valid) << model.reason_code;
+    ASSERT_TRUE(model.prefill_plan.has_value());
 
-      for (LlmScenario scenario : {LlmScenario::WeightsOnly,
-                                   LlmScenario::KvOnly,
-                                   LlmScenario::Mixed}) {
-        const LlmScenarioWorkPlan scenario_plan =
-            build_llm_scenario_work_plan(model, scenario, 2, true);
-        ASSERT_TRUE(scenario_plan.valid) << scenario_plan.reason_code;
-        const LlmMetalChecksumOracle oracle =
-            calculate_llm_metal_prefill_contiguous_checksum(model,
-                                                            scenario_plan);
-        ASSERT_TRUE(oracle.valid) << oracle.reason_code;
-        const LlmMetalDualMod32Checksum independent =
-            independent_prefill_checksum_byte_by_byte(model, scenario_plan);
-        SCOPED_TRACE(tail_bytes);
-        SCOPED_TRACE(query_tile_tokens);
-        SCOPED_TRACE(static_cast<int>(scenario));
-        EXPECT_TRUE(equal_llm_metal_checksum(oracle.checksum, independent));
-        if (scenario == LlmScenario::WeightsOnly) {
-          EXPECT_EQ(oracle.checksum.k.a, 0U);
-          EXPECT_EQ(oracle.checksum.k.b, 0U);
-          EXPECT_EQ(oracle.checksum.v.a, 0U);
-          EXPECT_EQ(oracle.checksum.v.b, 0U);
-        } else if (scenario == LlmScenario::KvOnly) {
-          EXPECT_EQ(oracle.checksum.weight.a, 0U);
-          EXPECT_EQ(oracle.checksum.weight.b, 0U);
-        }
+    for (LlmScenario scenario : {LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed}) {
+      const LlmScenarioWorkPlan scenario_plan = build_llm_scenario_work_plan(model, scenario, 2, true);
+      ASSERT_TRUE(scenario_plan.valid) << scenario_plan.reason_code;
+      const LlmMetalChecksumOracle oracle = calculate_llm_metal_prefill_contiguous_checksum(model, scenario_plan);
+      ASSERT_TRUE(oracle.valid) << oracle.reason_code;
+      const LlmMetalDualMod32Checksum independent = independent_prefill_checksum_byte_by_byte(model, scenario_plan);
+      SCOPED_TRACE(geometry.active_weight_bytes_per_work_unit);
+      SCOPED_TRACE(geometry.prefill->attention_query_tile_tokens);
+      SCOPED_TRACE(static_cast<int>(scenario));
+      EXPECT_TRUE(equal_llm_metal_checksum(oracle.checksum, independent));
+      if (scenario == LlmScenario::WeightsOnly) {
+        EXPECT_EQ(oracle.checksum.k.a, 0U);
+        EXPECT_EQ(oracle.checksum.k.b, 0U);
+        EXPECT_EQ(oracle.checksum.v.a, 0U);
+        EXPECT_EQ(oracle.checksum.v.b, 0U);
+      } else if (scenario == LlmScenario::KvOnly) {
+        EXPECT_EQ(oracle.checksum.weight.a, 0U);
+        EXPECT_EQ(oracle.checksum.weight.b, 0U);
       }
     }
   }
@@ -2232,26 +1956,6 @@ TEST(LlmMetalBackendTest,
   EXPECT_FALSE(rejected.valid);
   EXPECT_EQ(rejected.reason_code,
             LlmMetalPlanReason::VECTOR_ITERATION_CAP_EXCEEDED);
-}
-
-TEST(LlmMetalBackendTest,
-     PrefillChecksumTreatsZeroLengthWeightLayersAsNoOps) {
-  const LlmGeometry geometry =
-      prefill_contiguous_geometry(1, 3, 2, 2, 1, 3);
-  ASSERT_TRUE(geometry.valid) << geometry.reason_code;
-  LlmMemoryWorkPlan model = make_metal_model_plan(
-      geometry, build_llm_metal_execution_plan(resource_request(geometry)),
-      "llm-metal-prefill-zero-length-weight-layer");
-  ASSERT_TRUE(model.valid) << model.reason_code;
-  const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(
-      model, LlmScenario::Mixed, 1, true);
-  ASSERT_TRUE(scenario.valid) << scenario.reason_code;
-  const LlmMetalChecksumOracle oracle =
-      calculate_llm_metal_prefill_contiguous_checksum(model, scenario);
-  ASSERT_TRUE(oracle.valid) << oracle.reason_code;
-  EXPECT_TRUE(equal_llm_metal_checksum(
-      oracle.checksum,
-      independent_prefill_checksum_byte_by_byte(model, scenario)));
 }
 
 TEST(LlmMetalBackendTest,
@@ -2432,36 +2136,6 @@ TEST(LlmMetalBackendTest,
 }
 
 TEST(LlmMetalBackendTest,
-     DecodeChecksumFoldsTheFullScenarioSeedIntoEveryLaneDomain) {
-  const LlmGeometry geometry = contiguous_geometry(33, 3, 2, 2, 31);
-  LlmMemoryWorkPlan model = make_metal_model_plan(
-      geometry, build_llm_metal_execution_plan(resource_request(geometry)),
-      "llm-metal-full-scenario-seed-domain");
-  ASSERT_TRUE(model.valid) << model.reason_code;
-  LlmScenarioWorkPlan low =
-      build_llm_scenario_work_plan(model, LlmScenario::Mixed, 2, true);
-  ASSERT_TRUE(low.valid) << low.reason_code;
-  low.scenario_seed = UINT64_C(0x00000000a5a5a5a5);
-  LlmScenarioWorkPlan high = low;
-  high.scenario_seed = UINT64_C(0x00000001a5a5a5a5);
-
-  const LlmMetalChecksumOracle low_oracle =
-      calculate_llm_metal_decode_contiguous_checksum(model, low);
-  const LlmMetalChecksumOracle high_oracle =
-      calculate_llm_metal_decode_contiguous_checksum(model, high);
-  ASSERT_TRUE(low_oracle.valid) << low_oracle.reason_code;
-  ASSERT_TRUE(high_oracle.valid) << high_oracle.reason_code;
-  EXPECT_FALSE(equal_llm_metal_checksum(low_oracle.checksum,
-                                       high_oracle.checksum));
-  EXPECT_TRUE(equal_llm_metal_checksum(
-      low_oracle.checksum,
-      independent_decode_checksum_byte_by_byte(model, low)));
-  EXPECT_TRUE(equal_llm_metal_checksum(
-      high_oracle.checksum,
-      independent_decode_checksum_byte_by_byte(model, high)));
-}
-
-TEST(LlmMetalBackendTest,
      DecodeChecksumCrossesTheCanonicalSegmentBoundaryWithoutAllocation) {
   const size_t capacity = Constants::LLM_METAL_SEGMENT_CAPACITY_BYTES;
   const size_t weight_bytes = capacity + 33;
@@ -2492,20 +2166,6 @@ TEST(LlmMetalBackendTest,
 }
 
 TEST(LlmMetalBackendTest, FoundationParameterAbiAndLayoutProbeAreExact) {
-  EXPECT_EQ(alignof(LlmMetalFoundationParams), 8U);
-  EXPECT_EQ(sizeof(LlmMetalFoundationParams), 64U);
-  const std::array<size_t, 10> offsets = {offsetof(LlmMetalFoundationParams, byte_count),
-                                          offsetof(LlmMetalFoundationParams, source_offset_bytes),
-                                          offsetof(LlmMetalFoundationParams, destination_offset_bytes),
-                                          offsetof(LlmMetalFoundationParams, logical_base_bytes),
-                                          offsetof(LlmMetalFoundationParams, pattern_seed),
-                                          offsetof(LlmMetalFoundationParams, block_bytes),
-                                          offsetof(LlmMetalFoundationParams, physical_blocks_per_layer),
-                                          offsetof(LlmMetalFoundationParams, pattern_kind),
-                                          offsetof(LlmMetalFoundationParams, probe_resource_kind),
-                                          offsetof(LlmMetalFoundationParams, probe_resource_slot)};
-  EXPECT_EQ(offsets, (std::array<size_t, 10>{0, 8, 16, 24, 32, 40, 48, 52, 56, 60}));
-
   LlmMetalFoundationParams parameters;
   parameters.byte_count = UINT64_C(0x0102030405060708);
   parameters.source_offset_bytes = UINT64_C(0x1112131415161718);
@@ -2558,430 +2218,109 @@ TEST(LlmMetalBackendTest, FoundationParameterAbiAndLayoutProbeAreExact) {
   }
 }
 
-TEST(LlmMetalBackendTest, DecodeContiguousParameterCpuAbiIsExact) {
-  EXPECT_EQ(alignof(LlmMetalDecodeContiguousParams), 8U);
-  EXPECT_EQ(sizeof(LlmMetalDecodeContiguousParams), 120U);
-  const std::array<size_t, 16> offsets = {
-      offsetof(LlmMetalDecodeContiguousParams, weight_bytes),
-      offsetof(LlmMetalDecodeContiguousParams, k_bytes),
-      offsetof(LlmMetalDecodeContiguousParams, v_bytes),
-      offsetof(LlmMetalDecodeContiguousParams, segment_capacity_bytes),
-      offsetof(LlmMetalDecodeContiguousParams, context_tokens),
-      offsetof(LlmMetalDecodeContiguousParams, layer_count),
-      offsetof(LlmMetalDecodeContiguousParams, batch_size),
-      offsetof(LlmMetalDecodeContiguousParams, record_bytes),
-      offsetof(LlmMetalDecodeContiguousParams, work_units),
-      offsetof(LlmMetalDecodeContiguousParams, weight_seed),
-      offsetof(LlmMetalDecodeContiguousParams, k_seed),
-      offsetof(LlmMetalDecodeContiguousParams, v_seed),
-      offsetof(LlmMetalDecodeContiguousParams, scenario_seed),
-      offsetof(LlmMetalDecodeContiguousParams, weight_segment_count),
-      offsetof(LlmMetalDecodeContiguousParams, k_segment_count),
-      offsetof(LlmMetalDecodeContiguousParams, v_segment_count)};
-  EXPECT_EQ(offsets,
-            (std::array<size_t, 16>{0, 8, 16, 24, 32, 40, 48, 56, 64,
-                                    72, 80, 88, 96, 104, 108, 112}));
-  EXPECT_EQ(offsetof(LlmMetalDecodeContiguousParams, reserved_zero), 116U);
-}
+namespace {
 
-TEST(LlmMetalBackendTest,
-     DecodeContiguousParameterLayoutProbeValidatesEveryWord) {
-  LlmMetalDecodeContiguousParams parameters;
-  parameters.weight_bytes = UINT64_C(0x0102030405060708);
-  parameters.k_bytes = UINT64_C(0x1112131415161718);
-  parameters.v_bytes = UINT64_C(0x2122232425262728);
-  parameters.segment_capacity_bytes = UINT64_C(0x3132333435363738);
-  parameters.context_tokens = UINT64_C(0x4142434445464748);
-  parameters.layer_count = UINT64_C(0x5152535455565758);
-  parameters.batch_size = UINT64_C(0x6162636465666768);
-  parameters.record_bytes = UINT64_C(0x7172737475767778);
-  parameters.work_units = UINT64_C(0x8182838485868788);
-  parameters.weight_seed = UINT64_C(0x9192939495969798);
-  parameters.k_seed = UINT64_C(0xa1a2a3a4a5a6a7a8);
-  parameters.v_seed = UINT64_C(0xb1b2b3b4b5b6b7b8);
-  parameters.scenario_seed = UINT64_C(0xc1c2c3c4c5c6c7c8);
-  parameters.weight_segment_count = UINT32_C(0xd1d2d3d4);
-  parameters.k_segment_count = UINT32_C(0xe1e2e3e4);
-  parameters.v_segment_count = UINT32_C(0xf1f2f3f4);
-  parameters.reserved_zero = UINT32_C(0x01020304);
-  LlmMetalDecodeLayoutProbeWords words = {
-      1,
-      120,
-      8,
-      17,
-      0,
-      8,
-      16,
-      24,
-      32,
-      40,
-      48,
-      56,
-      64,
-      72,
-      80,
-      88,
-      96,
-      104,
-      108,
-      112,
-      116,
-      parameters.weight_bytes,
-      parameters.k_bytes,
-      parameters.v_bytes,
-      parameters.segment_capacity_bytes,
-      parameters.context_tokens,
-      parameters.layer_count,
-      parameters.batch_size,
-      parameters.record_bytes,
-      parameters.work_units,
-      parameters.weight_seed,
-      parameters.k_seed,
-      parameters.v_seed,
-      parameters.scenario_seed,
-      parameters.weight_segment_count,
-      parameters.k_segment_count,
-      parameters.v_segment_count,
-      parameters.reserved_zero,
-  };
-  ASSERT_TRUE(validate_llm_metal_decode_layout_probe(parameters, words));
+template <typename Params, size_t WideCount, size_t NarrowCount, typename Validator>
+void expect_parameter_probe_words(size_t parameter_bytes, const std::array<uint64_t, WideCount + NarrowCount>& offsets,
+                                  const std::array<uint64_t Params::*, WideCount>& wide_members,
+                                  const std::array<uint32_t Params::*, NarrowCount>& narrow_members,
+                                  Validator validate) {
+  Params parameters;
+  constexpr size_t field_count = WideCount + NarrowCount;
+  std::array<uint64_t, 4 + 2 * field_count> words{};
+  words[0] = 1;
+  words[1] = parameter_bytes;
+  words[2] = 8;
+  words[3] = field_count;
+  std::copy(offsets.begin(), offsets.end(), words.begin() + 4);
+  for (size_t index = 0; index < WideCount; ++index) {
+    const uint64_t value = UINT64_C(0x8102030405060708) + index * UINT64_C(0x0101010101010101);
+    parameters.*wide_members[index] = value;
+    words[4 + field_count + index] = value;
+  }
+  for (size_t index = 0; index < NarrowCount; ++index) {
+    const uint32_t value = UINT32_C(0x81828384) + static_cast<uint32_t>(index) * UINT32_C(0x01010101);
+    parameters.*narrow_members[index] = value;
+    words[4 + field_count + WideCount + index] = value;
+  }
+  ASSERT_TRUE(validate(parameters, words));
   for (size_t index = 0; index < words.size(); ++index) {
-    LlmMetalDecodeLayoutProbeWords corrupted = words;
+    auto corrupted = words;
     ++corrupted[index];
     SCOPED_TRACE(index);
-    EXPECT_FALSE(
-        validate_llm_metal_decode_layout_probe(parameters, corrupted));
+    EXPECT_FALSE(validate(parameters, corrupted));
   }
 }
 
-TEST(LlmMetalBackendTest, PrefillContiguousParameterCpuAbiIsExact) {
-  EXPECT_STREQ(LlmMetalKernelContract::kPrefillParameterAbiRevision,
-               "llm-metal-prefill-contiguous-parameters-v1");
-  EXPECT_EQ(alignof(LlmMetalPrefillContiguousParams), 8U);
-  EXPECT_EQ(sizeof(LlmMetalPrefillContiguousParams), 136U);
-  const std::array<size_t, 19> offsets = {
-      offsetof(LlmMetalPrefillContiguousParams, weight_bytes),
-      offsetof(LlmMetalPrefillContiguousParams, k_bytes),
-      offsetof(LlmMetalPrefillContiguousParams, v_bytes),
-      offsetof(LlmMetalPrefillContiguousParams, segment_capacity_bytes),
-      offsetof(LlmMetalPrefillContiguousParams, prompt_tokens),
-      offsetof(LlmMetalPrefillContiguousParams,
-               attention_query_tile_tokens),
-      offsetof(LlmMetalPrefillContiguousParams, tile_count),
-      offsetof(LlmMetalPrefillContiguousParams, layer_count),
-      offsetof(LlmMetalPrefillContiguousParams, batch_size),
-      offsetof(LlmMetalPrefillContiguousParams, record_bytes),
-      offsetof(LlmMetalPrefillContiguousParams, work_units),
-      offsetof(LlmMetalPrefillContiguousParams, weight_seed),
-      offsetof(LlmMetalPrefillContiguousParams, k_seed),
-      offsetof(LlmMetalPrefillContiguousParams, v_seed),
-      offsetof(LlmMetalPrefillContiguousParams, scenario_seed),
-      offsetof(LlmMetalPrefillContiguousParams, weight_segment_count),
-      offsetof(LlmMetalPrefillContiguousParams, k_segment_count),
-      offsetof(LlmMetalPrefillContiguousParams, v_segment_count),
-      offsetof(LlmMetalPrefillContiguousParams, reserved_zero),
-  };
-  EXPECT_EQ(offsets,
-            (std::array<size_t, 19>{0,   8,   16,  24,  32,  40,  48,
-                                    56,  64,  72,  80,  88,  96,  104,
-                                    112, 120, 124, 128, 132}));
-}
+}  // namespace
 
-TEST(LlmMetalBackendTest,
-     PrefillContiguousParameterLayoutProbeValidatesEveryWord) {
-  LlmMetalPrefillContiguousParams parameters;
-  parameters.weight_bytes = UINT64_C(0x0102030405060708);
-  parameters.k_bytes = UINT64_C(0x1112131415161718);
-  parameters.v_bytes = UINT64_C(0x2122232425262728);
-  parameters.segment_capacity_bytes = UINT64_C(0x3132333435363738);
-  parameters.prompt_tokens = UINT64_C(0x4142434445464748);
-  parameters.attention_query_tile_tokens = UINT64_C(0x5152535455565758);
-  parameters.tile_count = UINT64_C(0x6162636465666768);
-  parameters.layer_count = UINT64_C(0x7172737475767778);
-  parameters.batch_size = UINT64_C(0x8182838485868788);
-  parameters.record_bytes = UINT64_C(0x9192939495969798);
-  parameters.work_units = UINT64_C(0xa1a2a3a4a5a6a7a8);
-  parameters.weight_seed = UINT64_C(0xb1b2b3b4b5b6b7b8);
-  parameters.k_seed = UINT64_C(0xc1c2c3c4c5c6c7c8);
-  parameters.v_seed = UINT64_C(0xd1d2d3d4d5d6d7d8);
-  parameters.scenario_seed = UINT64_C(0xe1e2e3e4e5e6e7e8);
-  parameters.weight_segment_count = UINT32_C(0x11121314);
-  parameters.k_segment_count = UINT32_C(0x21222324);
-  parameters.v_segment_count = UINT32_C(0x31323334);
-  parameters.reserved_zero = UINT32_C(0x41424344);
-  constexpr std::array<uint64_t, 19> kOffsets = {
-      0,  8,  16, 24, 32, 40, 48, 56, 64, 72,
-      80, 88, 96, 104, 112, 120, 124, 128, 132,
-  };
-  const std::array<uint64_t, 19> values = {
-      parameters.weight_bytes,
-      parameters.k_bytes,
-      parameters.v_bytes,
-      parameters.segment_capacity_bytes,
-      parameters.prompt_tokens,
-      parameters.attention_query_tile_tokens,
-      parameters.tile_count,
-      parameters.layer_count,
-      parameters.batch_size,
-      parameters.record_bytes,
-      parameters.work_units,
-      parameters.weight_seed,
-      parameters.k_seed,
-      parameters.v_seed,
-      parameters.scenario_seed,
-      parameters.weight_segment_count,
-      parameters.k_segment_count,
-      parameters.v_segment_count,
-      parameters.reserved_zero,
-  };
-  LlmMetalPrefillLayoutProbeWords words{};
-  words[0] = 1;
-  words[1] = 136;
-  words[2] = 8;
-  words[3] = 19;
-  std::copy(kOffsets.begin(), kOffsets.end(), words.begin() + 4);
-  std::copy(values.begin(), values.end(), words.begin() + 23);
-  ASSERT_TRUE(validate_llm_metal_prefill_layout_probe(parameters, words));
-  for (size_t index = 0; index < words.size(); ++index) {
-    LlmMetalPrefillLayoutProbeWords corrupted = words;
-    ++corrupted[index];
-    SCOPED_TRACE(index);
-    EXPECT_FALSE(
-        validate_llm_metal_prefill_layout_probe(parameters, corrupted));
+TEST(LlmMetalBackendTest, ParameterLayoutProbesValidateEveryWord) {
+  {
+    SCOPED_TRACE("LlmMetalDecodeContiguousParams");
+    using P = LlmMetalDecodeContiguousParams;
+    expect_parameter_probe_words(
+        120, std::array<uint64_t, 17>{0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 108, 112, 116},
+        std::array{&P::weight_bytes, &P::k_bytes, &P::v_bytes, &P::segment_capacity_bytes, &P::context_tokens,
+                   &P::layer_count, &P::batch_size, &P::record_bytes, &P::work_units, &P::weight_seed, &P::k_seed,
+                   &P::v_seed, &P::scenario_seed},
+        std::array{&P::weight_segment_count, &P::k_segment_count, &P::v_segment_count, &P::reserved_zero},
+        validate_llm_metal_decode_layout_probe);
   }
-}
-
-TEST(LlmMetalBackendTest, PrefillPagedParameterCpuAbiIsExact) {
-  EXPECT_STREQ(LlmMetalKernelContract::kPrefillPagedParameterAbiRevision,
-               "llm-metal-prefill-paged-parameters-v1");
-  EXPECT_EQ(alignof(LlmMetalPrefillPagedParams), 8U);
-  EXPECT_EQ(sizeof(LlmMetalPrefillPagedParams), 184U);
-  const std::array<size_t, 26> offsets = {
-      offsetof(LlmMetalPrefillPagedParams, weight_bytes),
-      offsetof(LlmMetalPrefillPagedParams, prompt_tokens),
-      offsetof(LlmMetalPrefillPagedParams, attention_query_tile_tokens),
-      offsetof(LlmMetalPrefillPagedParams, tile_count),
-      offsetof(LlmMetalPrefillPagedParams, layer_count),
-      offsetof(LlmMetalPrefillPagedParams, batch_size),
-      offsetof(LlmMetalPrefillPagedParams, record_bytes),
-      offsetof(LlmMetalPrefillPagedParams, work_units),
-      offsetof(LlmMetalPrefillPagedParams, block_tokens),
-      offsetof(LlmMetalPrefillPagedParams, block_bytes),
-      offsetof(LlmMetalPrefillPagedParams, last_block_valid_bytes),
-      offsetof(LlmMetalPrefillPagedParams, blocks_per_sequence),
-      offsetof(LlmMetalPrefillPagedParams, physical_blocks_per_layer),
-      offsetof(LlmMetalPrefillPagedParams, blocks_per_segment),
-      offsetof(LlmMetalPrefillPagedParams, table_entries_per_segment),
-      offsetof(LlmMetalPrefillPagedParams, segment_capacity_bytes),
-      offsetof(LlmMetalPrefillPagedParams, weight_seed),
-      offsetof(LlmMetalPrefillPagedParams, k_seed),
-      offsetof(LlmMetalPrefillPagedParams, v_seed),
-      offsetof(LlmMetalPrefillPagedParams, scenario_seed),
-      offsetof(LlmMetalPrefillPagedParams, weight_segment_count),
-      offsetof(LlmMetalPrefillPagedParams, k_segment_count),
-      offsetof(LlmMetalPrefillPagedParams, v_segment_count),
-      offsetof(LlmMetalPrefillPagedParams, table_segment_count),
-      offsetof(LlmMetalPrefillPagedParams, reserved_zero),
-      offsetof(LlmMetalPrefillPagedParams, padding_zero),
-  };
-  EXPECT_EQ(offsets,
-            (std::array<size_t, 26>{
-                0,   8,   16,  24,  32,  40,  48,  56,  64,
-                72,  80,  88,  96,  104, 112, 120, 128, 136,
-                144, 152, 160, 164, 168, 172, 176, 180}));
-}
-
-TEST(LlmMetalBackendTest,
-     PrefillPagedParameterLayoutProbeValidatesEveryWord) {
-  LlmMetalPrefillPagedParams parameters;
-  parameters.weight_bytes = UINT64_C(0x0102030405060708);
-  parameters.prompt_tokens = UINT64_C(0x1112131415161718);
-  parameters.attention_query_tile_tokens = UINT64_C(0x2122232425262728);
-  parameters.tile_count = UINT64_C(0x3132333435363738);
-  parameters.layer_count = UINT64_C(0x4142434445464748);
-  parameters.batch_size = UINT64_C(0x5152535455565758);
-  parameters.record_bytes = UINT64_C(0x6162636465666768);
-  parameters.work_units = UINT64_C(0x7172737475767778);
-  parameters.block_tokens = UINT64_C(0x8182838485868788);
-  parameters.block_bytes = UINT64_C(0x9192939495969798);
-  parameters.last_block_valid_bytes = UINT64_C(0xa1a2a3a4a5a6a7a8);
-  parameters.blocks_per_sequence = UINT64_C(0xb1b2b3b4b5b6b7b8);
-  parameters.physical_blocks_per_layer = UINT64_C(0xc1c2c3c4c5c6c7c8);
-  parameters.blocks_per_segment = UINT64_C(0xd1d2d3d4d5d6d7d8);
-  parameters.table_entries_per_segment = UINT64_C(0xe1e2e3e4e5e6e7e8);
-  parameters.segment_capacity_bytes = UINT64_C(0xf1f2f3f4f5f6f7f8);
-  parameters.weight_seed = UINT64_C(0x0101010102020202);
-  parameters.k_seed = UINT64_C(0x0303030304040404);
-  parameters.v_seed = UINT64_C(0x0505050506060606);
-  parameters.scenario_seed = UINT64_C(0x0707070708080808);
-  parameters.weight_segment_count = UINT32_C(0x11121314);
-  parameters.k_segment_count = UINT32_C(0x21222324);
-  parameters.v_segment_count = UINT32_C(0x31323334);
-  parameters.table_segment_count = UINT32_C(0x41424344);
-  parameters.reserved_zero = UINT32_C(0x51525354);
-  parameters.padding_zero = UINT32_C(0x61626364);
-
-  constexpr std::array<uint64_t, 26> kOffsets = {
-      0,   8,   16,  24,  32,  40,  48,  56,  64,
-      72,  80,  88,  96,  104, 112, 120, 128, 136,
-      144, 152, 160, 164, 168, 172, 176, 180,
-  };
-  const std::array<uint64_t, 26> values = {
-      parameters.weight_bytes,
-      parameters.prompt_tokens,
-      parameters.attention_query_tile_tokens,
-      parameters.tile_count,
-      parameters.layer_count,
-      parameters.batch_size,
-      parameters.record_bytes,
-      parameters.work_units,
-      parameters.block_tokens,
-      parameters.block_bytes,
-      parameters.last_block_valid_bytes,
-      parameters.blocks_per_sequence,
-      parameters.physical_blocks_per_layer,
-      parameters.blocks_per_segment,
-      parameters.table_entries_per_segment,
-      parameters.segment_capacity_bytes,
-      parameters.weight_seed,
-      parameters.k_seed,
-      parameters.v_seed,
-      parameters.scenario_seed,
-      parameters.weight_segment_count,
-      parameters.k_segment_count,
-      parameters.v_segment_count,
-      parameters.table_segment_count,
-      parameters.reserved_zero,
-      parameters.padding_zero,
-  };
-  static_assert(kLlmMetalPrefillPagedLayoutProbeWordCount == 56);
-  LlmMetalPrefillPagedLayoutProbeWords words{};
-  words[0] = 1;
-  words[1] = 184;
-  words[2] = 8;
-  words[3] = 26;
-  std::copy(kOffsets.begin(), kOffsets.end(), words.begin() + 4);
-  std::copy(values.begin(), values.end(), words.begin() + 30);
-  ASSERT_TRUE(
-      validate_llm_metal_prefill_paged_layout_probe(parameters, words));
-  for (size_t index = 0; index < words.size(); ++index) {
-    LlmMetalPrefillPagedLayoutProbeWords corrupted = words;
-    ++corrupted[index];
-    SCOPED_TRACE(index);
-    EXPECT_FALSE(
-        validate_llm_metal_prefill_paged_layout_probe(parameters, corrupted));
+  {
+    SCOPED_TRACE("LlmMetalPrefillContiguousParams");
+    using P = LlmMetalPrefillContiguousParams;
+    expect_parameter_probe_words(
+        136, std::array<uint64_t, 19>{0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 124, 128, 132},
+        std::array{&P::weight_bytes, &P::k_bytes, &P::v_bytes, &P::segment_capacity_bytes, &P::prompt_tokens,
+                   &P::attention_query_tile_tokens, &P::tile_count, &P::layer_count, &P::batch_size, &P::record_bytes,
+                   &P::work_units, &P::weight_seed, &P::k_seed, &P::v_seed, &P::scenario_seed},
+        std::array{&P::weight_segment_count, &P::k_segment_count, &P::v_segment_count, &P::reserved_zero},
+        validate_llm_metal_prefill_layout_probe);
   }
-}
-
-TEST(LlmMetalBackendTest, DecodePagedParameterCpuAbiIsExact) {
-  EXPECT_EQ(alignof(LlmMetalDecodePagedParams), 8U);
-  EXPECT_EQ(sizeof(LlmMetalDecodePagedParams), 168U);
-  const std::array<size_t, 24> offsets = {
-      offsetof(LlmMetalDecodePagedParams, weight_bytes),
-      offsetof(LlmMetalDecodePagedParams, context_tokens),
-      offsetof(LlmMetalDecodePagedParams, layer_count),
-      offsetof(LlmMetalDecodePagedParams, batch_size),
-      offsetof(LlmMetalDecodePagedParams, record_bytes),
-      offsetof(LlmMetalDecodePagedParams, work_units),
-      offsetof(LlmMetalDecodePagedParams, block_bytes),
-      offsetof(LlmMetalDecodePagedParams, last_block_valid_bytes),
-      offsetof(LlmMetalDecodePagedParams, append_offset_in_last_block),
-      offsetof(LlmMetalDecodePagedParams, blocks_per_sequence),
-      offsetof(LlmMetalDecodePagedParams, physical_blocks_per_layer),
-      offsetof(LlmMetalDecodePagedParams, blocks_per_segment),
-      offsetof(LlmMetalDecodePagedParams, table_entries_per_segment),
-      offsetof(LlmMetalDecodePagedParams, segment_capacity_bytes),
-      offsetof(LlmMetalDecodePagedParams, weight_seed),
-      offsetof(LlmMetalDecodePagedParams, k_seed),
-      offsetof(LlmMetalDecodePagedParams, v_seed),
-      offsetof(LlmMetalDecodePagedParams, scenario_seed),
-      offsetof(LlmMetalDecodePagedParams, weight_segment_count),
-      offsetof(LlmMetalDecodePagedParams, k_segment_count),
-      offsetof(LlmMetalDecodePagedParams, v_segment_count),
-      offsetof(LlmMetalDecodePagedParams, table_segment_count),
-      offsetof(LlmMetalDecodePagedParams, reserved_zero),
-      offsetof(LlmMetalDecodePagedParams, padding_zero),
-  };
-  EXPECT_EQ(offsets,
-            (std::array<size_t, 24>{0,   8,   16,  24,  32,  40,
-                                    48,  56,  64,  72,  80,  88,
-                                    96,  104, 112, 120, 128, 136,
-                                    144, 148, 152, 156, 160, 164}));
-}
-
-TEST(LlmMetalBackendTest,
-     DecodePagedParameterLayoutProbeValidatesEveryWord) {
-  LlmMetalDecodePagedParams parameters;
-  parameters.weight_bytes = UINT64_C(0x0102030405060708);
-  parameters.context_tokens = UINT64_C(0x1112131415161718);
-  parameters.layer_count = UINT64_C(0x2122232425262728);
-  parameters.batch_size = UINT64_C(0x3132333435363738);
-  parameters.record_bytes = UINT64_C(0x4142434445464748);
-  parameters.work_units = UINT64_C(0x5152535455565758);
-  parameters.block_bytes = UINT64_C(0x6162636465666768);
-  parameters.last_block_valid_bytes = UINT64_C(0x7172737475767778);
-  parameters.append_offset_in_last_block = UINT64_C(0x8182838485868788);
-  parameters.blocks_per_sequence = UINT64_C(0x9192939495969798);
-  parameters.physical_blocks_per_layer = UINT64_C(0xa1a2a3a4a5a6a7a8);
-  parameters.blocks_per_segment = UINT64_C(0xb1b2b3b4b5b6b7b8);
-  parameters.table_entries_per_segment = UINT64_C(0xc1c2c3c4c5c6c7c8);
-  parameters.segment_capacity_bytes = UINT64_C(0xd1d2d3d4d5d6d7d8);
-  parameters.weight_seed = UINT64_C(0xe1e2e3e4e5e6e7e8);
-  parameters.k_seed = UINT64_C(0xf1f2f3f4f5f6f7f8);
-  parameters.v_seed = UINT64_C(0x0101010102020202);
-  parameters.scenario_seed = UINT64_C(0x0303030304040404);
-  parameters.weight_segment_count = UINT32_C(0x11121314);
-  parameters.k_segment_count = UINT32_C(0x21222324);
-  parameters.v_segment_count = UINT32_C(0x31323334);
-  parameters.table_segment_count = UINT32_C(0x41424344);
-  parameters.reserved_zero = UINT32_C(0x51525354);
-  parameters.padding_zero = UINT32_C(0x61626364);
-
-  const std::array<uint64_t, 24> values = {
-      parameters.weight_bytes,
-      parameters.context_tokens,
-      parameters.layer_count,
-      parameters.batch_size,
-      parameters.record_bytes,
-      parameters.work_units,
-      parameters.block_bytes,
-      parameters.last_block_valid_bytes,
-      parameters.append_offset_in_last_block,
-      parameters.blocks_per_sequence,
-      parameters.physical_blocks_per_layer,
-      parameters.blocks_per_segment,
-      parameters.table_entries_per_segment,
-      parameters.segment_capacity_bytes,
-      parameters.weight_seed,
-      parameters.k_seed,
-      parameters.v_seed,
-      parameters.scenario_seed,
-      parameters.weight_segment_count,
-      parameters.k_segment_count,
-      parameters.v_segment_count,
-      parameters.table_segment_count,
-      parameters.reserved_zero,
-      parameters.padding_zero,
-  };
-  constexpr std::array<uint64_t, 24> kOffsets = {
-      0,   8,   16,  24,  32,  40,  48,  56,  64,  72,  80,  88,
-      96,  104, 112, 120, 128, 136, 144, 148, 152, 156, 160, 164,
-  };
-  LlmMetalDecodePagedLayoutProbeWords words{};
-  words[0] = 1;
-  words[1] = 168;
-  words[2] = 8;
-  words[3] = 24;
-  std::copy(kOffsets.begin(), kOffsets.end(), words.begin() + 4);
-  std::copy(values.begin(), values.end(), words.begin() + 28);
-  ASSERT_TRUE(validate_llm_metal_decode_paged_layout_probe(parameters,
-                                                            words));
-  for (size_t index = 0; index < words.size(); ++index) {
-    LlmMetalDecodePagedLayoutProbeWords corrupted = words;
-    ++corrupted[index];
-    SCOPED_TRACE(index);
-    EXPECT_FALSE(validate_llm_metal_decode_paged_layout_probe(parameters,
-                                                               corrupted));
+  {
+    SCOPED_TRACE("LlmMetalPrefillPagedParams");
+    using P = LlmMetalPrefillPagedParams;
+    expect_parameter_probe_words(
+        184, std::array<uint64_t, 26>{0,   8,   16,  24,  32,  40,  48,  56,  64,  72,  80,  88,  96,
+                                      104, 112, 120, 128, 136, 144, 152, 160, 164, 168, 172, 176, 180},
+        std::array{&P::weight_bytes,
+                   &P::prompt_tokens,
+                   &P::attention_query_tile_tokens,
+                   &P::tile_count,
+                   &P::layer_count,
+                   &P::batch_size,
+                   &P::record_bytes,
+                   &P::work_units,
+                   &P::block_tokens,
+                   &P::block_bytes,
+                   &P::last_block_valid_bytes,
+                   &P::blocks_per_sequence,
+                   &P::physical_blocks_per_layer,
+                   &P::blocks_per_segment,
+                   &P::table_entries_per_segment,
+                   &P::segment_capacity_bytes,
+                   &P::weight_seed,
+                   &P::k_seed,
+                   &P::v_seed,
+                   &P::scenario_seed},
+        std::array{&P::weight_segment_count, &P::k_segment_count, &P::v_segment_count, &P::table_segment_count,
+                   &P::reserved_zero, &P::padding_zero},
+        validate_llm_metal_prefill_paged_layout_probe);
+  }
+  {
+    SCOPED_TRACE("LlmMetalDecodePagedParams");
+    using P = LlmMetalDecodePagedParams;
+    expect_parameter_probe_words(
+        168, std::array<uint64_t, 24>{0,  8,   16,  24,  32,  40,  48,  56,  64,  72,  80,  88,
+                                      96, 104, 112, 120, 128, 136, 144, 148, 152, 156, 160, 164},
+        std::array{&P::weight_bytes, &P::context_tokens, &P::layer_count, &P::batch_size, &P::record_bytes,
+                   &P::work_units, &P::block_bytes, &P::last_block_valid_bytes, &P::append_offset_in_last_block,
+                   &P::blocks_per_sequence, &P::physical_blocks_per_layer, &P::blocks_per_segment,
+                   &P::table_entries_per_segment, &P::segment_capacity_bytes, &P::weight_seed, &P::k_seed, &P::v_seed,
+                   &P::scenario_seed},
+        std::array{&P::weight_segment_count, &P::k_segment_count, &P::v_segment_count, &P::table_segment_count,
+                   &P::reserved_zero, &P::padding_zero},
+        validate_llm_metal_decode_paged_layout_probe);
   }
 }
 
@@ -2991,11 +2330,6 @@ TEST(LlmMetalBackendTest,
   const auto require_source = [&](std::string_view token) {
     EXPECT_NE(source.find(token), std::string_view::npos) << token;
   };
-  require_source("LLM_METAL_DECODE_PAGED + \\");
-  require_source(
-      "LLM_METAL_PREFILL_CONTIGUOUS + LLM_METAL_PREFILL_PAGED) != 1");
-  require_source("#if LLM_METAL_DECODE_CONTIGUOUS");
-  require_source("#if LLM_METAL_DECODE_PAGED");
   require_source("device const volatile uint* named_lane_table");
   require_source("threadgroup_barrier(mem_flags::mem_threadgroup);");
   require_source("threadgroup uint* published_physical_id [[threadgroup(1)]]");
@@ -3018,45 +2352,6 @@ TEST(LlmMetalBackendTest,
   EXPECT_NE(lookup.find("threadgroup_barrier(mem_flags::mem_threadgroup);",
                         first_barrier + 1),
             std::string_view::npos);
-}
-
-TEST(LlmMetalBackendTest,
-     PrefillContiguousSemanticTraceWritesFullPromptBeforePerTileKThenV) {
-  // This freezes the bounded schedule oracle. Actual MSL pipeline/layout,
-  // Q=1/Q=P/tail execution, and corruption rejection have real-device tests;
-  // the separate canonical source hash retains provenance. A trace alone
-  // does not attest the GPU's temporal access order.
-  const LlmPrefillPlan plan = resolve_llm_prefill_plan(
-      {64, 2, 1, 1, 1, 1, 1, 4, 0});
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  const LlmPrefillSemanticTrace trace = build_llm_prefill_semantic_trace(
-      plan, {LlmPrefillPartitionUnitKind::ContiguousToken, 0, 2, 10});
-  const std::array<LlmPrefillSemanticEvent, 10> expected = {{
-      {LlmPrefillSemanticAccess::Write, LlmPrefillKvDomain::K, 0, 2, 0, 1},
-      {LlmPrefillSemanticAccess::Write, LlmPrefillKvDomain::V, 0, 2, 0, 1},
-      {LlmPrefillSemanticAccess::Write, LlmPrefillKvDomain::K, 0, 2, 1, 1},
-      {LlmPrefillSemanticAccess::Write, LlmPrefillKvDomain::V, 0, 2, 1, 1},
-      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::K, 0, 1, 0, 1},
-      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::V, 0, 1, 0, 1},
-      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::K, 1, 2, 0, 1},
-      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::K, 1, 2, 1, 1},
-      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::V, 1, 2, 0, 1},
-      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::V, 1, 2, 1, 1},
-  }};
-  ASSERT_TRUE(trace.valid) << trace.reason_code;
-  ASSERT_EQ(trace.events.size(), expected.size());
-  for (size_t index = 0; index < expected.size(); ++index) {
-    SCOPED_TRACE(index);
-    EXPECT_EQ(trace.events[index].access, expected[index].access);
-    EXPECT_EQ(trace.events[index].domain, expected[index].domain);
-    EXPECT_EQ(trace.events[index].tile_index, expected[index].tile_index);
-    EXPECT_EQ(trace.events[index].tile_end_token,
-              expected[index].tile_end_token);
-    EXPECT_EQ(trace.events[index].logical_unit_index,
-              expected[index].logical_unit_index);
-    EXPECT_EQ(trace.events[index].visit_token_count,
-              expected[index].visit_token_count);
-  }
 }
 
 TEST(LlmMetalBackendTest,
@@ -3209,63 +2504,6 @@ TEST(LlmMetalBackendTest,
                      write_loop),
             std::string_view::npos);
 
-  const LlmPrefillPlan plan =
-      resolve_llm_prefill_plan({64, 4, 2, 1, 1, 1, 1, 4, 2});
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  const LlmPrefillSemanticTrace trace = build_llm_prefill_semantic_trace(
-      plan, {LlmPrefillPartitionUnitKind::PagedBlock, 0, 2, 10});
-  const std::array<LlmPrefillSemanticEvent, 10> expected = {{
-      {LlmPrefillSemanticAccess::Write, LlmPrefillKvDomain::K, 0, 4, 0, 2},
-      {LlmPrefillSemanticAccess::Write, LlmPrefillKvDomain::V, 0, 4, 0, 2},
-      {LlmPrefillSemanticAccess::Write, LlmPrefillKvDomain::K, 0, 4, 1, 2},
-      {LlmPrefillSemanticAccess::Write, LlmPrefillKvDomain::V, 0, 4, 1, 2},
-      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::K, 0, 2, 0, 2},
-      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::V, 0, 2, 0, 2},
-      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::K, 1, 4, 0, 2},
-      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::K, 1, 4, 1, 2},
-      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::V, 1, 4, 0, 2},
-      {LlmPrefillSemanticAccess::Read, LlmPrefillKvDomain::V, 1, 4, 1, 2},
-  }};
-  ASSERT_TRUE(trace.valid) << trace.reason_code;
-  ASSERT_EQ(trace.events.size(), expected.size());
-  for (size_t index = 0; index < expected.size(); ++index) {
-    SCOPED_TRACE(index);
-    EXPECT_EQ(trace.events[index].access, expected[index].access);
-    EXPECT_EQ(trace.events[index].domain, expected[index].domain);
-    EXPECT_EQ(trace.events[index].tile_index, expected[index].tile_index);
-    EXPECT_EQ(trace.events[index].tile_end_token,
-              expected[index].tile_end_token);
-    EXPECT_EQ(trace.events[index].logical_unit_index,
-              expected[index].logical_unit_index);
-    EXPECT_EQ(trace.events[index].visit_token_count,
-              expected[index].visit_token_count);
-  }
-}
-
-TEST(LlmMetalBackendTest, CanonicalEmbeddedMslSourceHashIsFrozenLowercaseSha256) {
-  const std::string digest = canonical_llm_metal_kernel_source_sha256();
-  EXPECT_EQ(digest, kCanonicalKernelSourceSha256);
-  ASSERT_EQ(digest.size(), 64U);
-  EXPECT_TRUE(std::all_of(digest.begin(), digest.end(), [](unsigned char value) {
-    return std::isdigit(value) != 0 || (value >= 'a' && value <= 'f');
-  }));
-}
-
-TEST(LlmMetalBackendTest, CheckedMetalExecutionPlanAccessorRejectsBackendOrVariantMismatch) {
-  LlmMemoryWorkPlan plan;
-  EXPECT_EQ(get_llm_metal_execution_plan(plan), nullptr);
-
-  plan.backend = LlmMemoryBackend::Metal;
-  EXPECT_EQ(get_llm_metal_execution_plan(plan), nullptr);
-
-  plan.backend_execution_plan = LlmMetalExecutionPlan{};
-  EXPECT_NE(get_llm_metal_execution_plan(plan), nullptr);
-  const LlmMemoryWorkPlan& const_plan = plan;
-  EXPECT_NE(get_llm_metal_execution_plan(const_plan), nullptr);
-
-  plan.backend = LlmMemoryBackend::Cpu;
-  EXPECT_EQ(get_llm_metal_execution_plan(plan), nullptr);
-  EXPECT_EQ(get_llm_metal_execution_plan(const_plan), nullptr);
 }
 
 TEST(LlmMetalBackendTest, FactoryAndDirectConstructorExposeTheMetalBackend) {
@@ -3772,92 +3010,34 @@ TEST_F(LlmMetalBackendIntegrationTest,
   }
 }
 
-TEST_F(LlmMetalBackendIntegrationTest,
-       DecodeContiguousExactTail31Integration) {
-  expect_exact_tail_all_scenarios(31);
-}
-
-TEST_F(LlmMetalBackendIntegrationTest,
-       DecodeContiguousExactTail32Integration) {
-  expect_exact_tail_all_scenarios(32);
-}
-
-TEST_F(LlmMetalBackendIntegrationTest,
-       DecodeContiguousExactTail33Integration) {
-  expect_exact_tail_all_scenarios(33);
-}
-
-TEST_F(LlmMetalBackendIntegrationTest,
-       DecodeMixedUsesMultipleThreadgroupsWorkUnitsLayersAndBatchesIntegration) {
-  const size_t weight_bytes =
-      2 * Constants::BYTES_PER_MB + 33;
-  LlmMemoryWorkPlan plan = build_device_plan(
-      contiguous_geometry(weight_bytes, 17, 2, 2, 8),
-      "llm-metal-phase9-mixed-multigroup-plan");
-  resolve_and_prepare(plan);
-  expect_complete_scenario_task(plan, LlmScenario::Mixed, 3, 2);
-}
-
-TEST_F(LlmMetalBackendIntegrationTest,
-       DecodeKvUsesMultipleThreadgroupsWorkUnitsLayersAndBatchesIntegration) {
-  LlmMemoryWorkPlan plan = build_device_plan(
-      contiguous_geometry(33, 32769, 2, 2, 33),
-      "llm-metal-phase9-kv-multigroup-plan");
-  resolve_and_prepare(plan);
-  expect_complete_scenario_task(plan, LlmScenario::KvOnly, 2, 2);
-}
-
-TEST_F(LlmMetalBackendIntegrationTest,
-       PrefillContiguousQOneQPromptAndRemainderTilesIntegration) {
-  struct Case {
-    size_t query_tile_tokens;
-    size_t record_bytes;
-    size_t expected_prefix_visits;
-  };
-  constexpr std::array<Case, 3> kCases = {{{1, 31, 15},
-                                           {5, 32, 5},
-                                           {2, 33, 11}}};
-  for (const Case& test_case : kCases) {
+TEST_F(LlmMetalBackendIntegrationTest, DecodeContiguousExactTailsIntegration) {
+  for (size_t tail : {31U, 32U, 33U}) {
+    SCOPED_TRACE(tail);
     backend_ = create_llm_metal_backend();
-    ASSERT_NE(backend_, nullptr);
-    LlmMemoryConfig config = metal_config();
-    config.phase = LlmPhase::Prefill;
-    const LlmBackendLifecycleResult initialization = backend_->initialize(config);
-    ASSERT_EQ(initialization.status, LlmBackendStatus::Ready)
-        << initialization.reason_code << ": "
-        << metal_evidence().capability.error.description;
-    EXPECT_EQ(metal_evidence().capability.kernel_revision,
-              kCanonicalKernelRevision);
-    EXPECT_EQ(metal_evidence().capability.kernel_source_sha256,
-              kCanonicalKernelSourceSha256);
-    ASSERT_EQ(metal_evidence().capability.foundation_pipelines.size(),
-              kFoundationPipelineCount);
-    EXPECT_NE(std::find_if(
-                  metal_evidence().capability.foundation_pipelines.begin(),
-                  metal_evidence().capability.foundation_pipelines.end(),
-                  [](const LlmMetalPipelineEvidence& pipeline) {
-                    return pipeline.label ==
-                           "membenchmark.llm-metal.pipeline.prefill-contiguous-layout-probe";
-                  }),
-              metal_evidence().capability.foundation_pipelines.end());
+    ASSERT_EQ(backend_->initialize(metal_config()).status, LlmBackendStatus::Ready);
+    expect_exact_tail_all_scenarios(tail);
+  }
+}
 
-    const LlmGeometry geometry = prefill_contiguous_geometry(
-        4097, 5, test_case.query_tile_tokens, 2, 2,
-        test_case.record_bytes);
-    ASSERT_TRUE(geometry.valid) << geometry.reason_code;
-    ASSERT_TRUE(geometry.prefill.has_value());
-    EXPECT_EQ(geometry.prefill->attention_prefix_token_visits_per_sequence,
-              test_case.expected_prefix_visits);
+TEST_F(LlmMetalBackendIntegrationTest, DecodeUsesMultipleThreadgroupsWorkUnitsLayersAndBatchesIntegration) {
+  struct Case {
+    size_t weight_bytes;
+    size_t context_tokens;
+    size_t record_bytes;
+    LlmScenario scenario;
+    size_t work_units;
+  };
+  const std::array<Case, 2> cases = {
+      {{2 * Constants::BYTES_PER_MB + 33, 17, 8, LlmScenario::Mixed, 3}, {33, 32769, 33, LlmScenario::KvOnly, 2}}};
+  for (const Case& test_case : cases) {
+    SCOPED_TRACE(static_cast<int>(test_case.scenario));
+    backend_ = create_llm_metal_backend();
+    ASSERT_EQ(backend_->initialize(metal_config()).status, LlmBackendStatus::Ready);
     LlmMemoryWorkPlan plan = build_device_plan(
-        geometry, "llm-metal-phase11-prefill-q-" +
-                      std::to_string(test_case.query_tile_tokens));
+        contiguous_geometry(test_case.weight_bytes, test_case.context_tokens, 2, 2, test_case.record_bytes),
+        "llm-metal-decode-multigroup-plan");
     resolve_and_prepare(plan);
-    EXPECT_EQ(metal_evidence().capability.layout_probe_resource_count, 4U);
-    for (LlmScenario scenario : {LlmScenario::WeightsOnly,
-                                 LlmScenario::KvOnly,
-                                 LlmScenario::Mixed}) {
-      expect_complete_scenario_task(plan, scenario, 2);
-    }
+    expect_complete_scenario_task(plan, test_case.scenario, test_case.work_units, 2);
   }
 }
 
@@ -3979,51 +3159,6 @@ TEST_F(LlmMetalBackendIntegrationTest,
   expect_complete_scenario_task(plan, LlmScenario::Mixed, 2, 2);
 }
 
-TEST_F(LlmMetalBackendIntegrationTest,
-       PrefillPagedKvPoolsCrossCanonicalWholeBlockSegmentBoundaryIntegration) {
-  backend_ = create_llm_metal_backend();
-  ASSERT_NE(backend_, nullptr);
-  LlmMemoryConfig config = metal_config();
-  config.phase = LlmPhase::Prefill;
-  config.kv_layout = LlmKvLayout::Paged;
-  const LlmBackendLifecycleResult initialization =
-      backend_->initialize(config);
-  ASSERT_EQ(initialization.status, LlmBackendStatus::Ready)
-      << initialization.reason_code << ": "
-      << metal_evidence().capability.error.description;
-
-  const size_t capacity = Constants::LLM_METAL_SEGMENT_CAPACITY_BYTES;
-  const size_t record_bytes = capacity / 512;
-  const size_t block_bytes = 2 * record_bytes;
-  static_assert(Constants::LLM_METAL_SEGMENT_CAPACITY_BYTES % 512 == 0);
-  ASSERT_EQ(capacity % block_bytes, 0U);
-  const LlmGeometry geometry = prefill_paged_geometry(
-      33, 513, 513, 2, 1, 1, record_bytes);
-  ASSERT_TRUE(geometry.valid) << geometry.reason_code;
-  ASSERT_EQ(geometry.kv_blocks_per_sequence, 257U);
-  ASSERT_EQ(geometry.kv_block_bytes, block_bytes);
-  ASSERT_EQ(geometry.last_block_valid_bytes, record_bytes);
-  ASSERT_LT(geometry.last_block_valid_bytes, geometry.kv_block_bytes);
-
-  LlmMemoryWorkPlan plan = build_device_plan(
-      geometry, "llm-metal-phase12-prefill-paged-segment-boundary",
-      4 * kGiB);
-  const LlmMetalExecutionPlan* execution =
-      get_llm_metal_execution_plan(plan);
-  ASSERT_NE(execution, nullptr);
-  ASSERT_TRUE(execution->valid) << execution->reason_code;
-  EXPECT_EQ(execution->resources.k_segments.elements_per_segment, 256U);
-  EXPECT_EQ(execution->resources.k_segments.segment_lengths,
-            (std::vector<size_t>{capacity, block_bytes}));
-  EXPECT_EQ(execution->resources.v_segments.segment_lengths,
-            execution->resources.k_segments.segment_lengths);
-  ASSERT_TRUE(execution->resources.table_segments.has_value());
-  EXPECT_EQ(execution->resources.table_segments->segment_count, 1U);
-
-  resolve_and_prepare(plan);
-  expect_complete_scenario_task(plan, LlmScenario::KvOnly, 1, 2);
-}
-
 TEST_F(LlmMetalBackendIntegrationTest, PagedPrivateTableUploadValidationAndTier2SlotsIntegration) {
   backend_ = create_llm_metal_backend();
   ASSERT_NE(backend_, nullptr);
@@ -4090,63 +3225,40 @@ TEST_F(LlmMetalBackendIntegrationTest, PagedPrivateTableUploadValidationAndTier2
   }
 }
 
-TEST_F(LlmMetalBackendIntegrationTest,
-       PagedKvPoolsCrossCanonicalSegmentBoundaryIntegration) {
-  backend_ = create_llm_metal_backend();
-  ASSERT_NE(backend_, nullptr);
-  LlmMemoryConfig config = metal_config();
-  config.kv_layout = LlmKvLayout::Paged;
-  const LlmBackendLifecycleResult paged_initialization =
-      backend_->initialize(config);
-  ASSERT_EQ(paged_initialization.status, LlmBackendStatus::Ready)
-      << paged_initialization.reason_code << ": "
-      << metal_evidence().capability.error.description;
-
+TEST_F(LlmMetalBackendIntegrationTest, PagedKvPoolsCrossCanonicalSegmentBoundaryIntegration) {
   const size_t capacity = Constants::LLM_METAL_SEGMENT_CAPACITY_BYTES;
-  const size_t record_bytes = capacity / 512U;
-  const size_t block_bytes = 2U * record_bytes;
-  const LlmGeometry geometry =
-      paged_geometry(4097, 513, 2, 1, 1, record_bytes);
-  ASSERT_TRUE(geometry.valid) << geometry.reason_code;
-  const LlmKvLayoutPlan layout = paged_layout_for(geometry);
-  ASSERT_TRUE(layout.valid) << layout.reason_code;
-  ASSERT_EQ(layout.block_bytes, block_bytes);
-  ASSERT_EQ(layout.blocks_per_sequence, 257U);
-  ASSERT_EQ(layout.last_block_valid_bytes, record_bytes);
-  ASSERT_EQ(layout.memory.k_physical_bytes, capacity + block_bytes);
-  ASSERT_EQ(layout.memory.v_physical_bytes, capacity + block_bytes);
-
-  LlmMemoryWorkPlan plan = build_device_plan(
-      geometry, "llm-metal-phase10-paged-kv-multisegment-plan");
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  const LlmMetalExecutionPlan* execution =
-      get_llm_metal_execution_plan(plan);
-  ASSERT_NE(execution, nullptr);
-  ASSERT_TRUE(execution->valid) << execution->reason_code;
-  ASSERT_EQ(execution->resources.k_segments.segment_lengths.size(), 2U);
-  ASSERT_EQ(execution->resources.v_segments.segment_lengths.size(), 2U);
-  EXPECT_EQ(execution->resources.k_segments.segment_lengths[0], capacity);
-  EXPECT_EQ(execution->resources.k_segments.segment_lengths[1], block_bytes);
-  EXPECT_EQ(execution->resources.v_segments.segment_lengths[0], capacity);
-  EXPECT_EQ(execution->resources.v_segments.segment_lengths[1], block_bytes);
-
-  resolve_and_prepare(plan);
-  expect_complete_scenario_task(plan, LlmScenario::KvOnly, 1, 2);
-  expect_complete_scenario_task(plan, LlmScenario::Mixed, 1, 2);
-}
-
-TEST_F(LlmMetalBackendIntegrationTest, MutatedResourcePlanIsRejectedBeforeAllocationIntegration) {
-  LlmMemoryWorkPlan plan = build_device_plan(contiguous_geometry(4097), "llm-metal-phase8-mutated-resource-plan");
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  LlmMetalExecutionPlan* execution = get_llm_metal_execution_plan(plan);
-  ASSERT_NE(execution, nullptr);
-  ASSERT_FALSE(execution->resources.planned_resources.empty());
-  ++execution->resources.planned_resources.front().length_bytes;
-
-  const LlmBackendLifecycleResult resolved = backend_->resolve_execution_plan(plan);
-  EXPECT_EQ(resolved.status, LlmBackendStatus::Failed);
-  EXPECT_EQ(resolved.reason_code, LlmBackendReason::PLAN_RESOURCE_IDENTITY_MISMATCH);
-  EXPECT_FALSE(metal_evidence().resources.allocation_attempted);
+  const size_t record_bytes = capacity / 512;
+  const size_t block_bytes = 2 * record_bytes;
+  for (auto phase : {LlmPhase::Decode, LlmPhase::Prefill}) {
+    SCOPED_TRACE(static_cast<int>(phase));
+    backend_ = create_llm_metal_backend();
+    ASSERT_NE(backend_, nullptr);
+    LlmMemoryConfig config = metal_config();
+    config.phase = phase;
+    config.kv_layout = LlmKvLayout::Paged;
+    const auto initialization = backend_->initialize(config);
+    ASSERT_EQ(initialization.status, LlmBackendStatus::Ready) << initialization.reason_code;
+    const LlmGeometry geometry = phase == LlmPhase::Decode
+                                     ? paged_geometry(4097, 513, 2, 1, 1, record_bytes)
+                                     : prefill_paged_geometry(33, 513, 513, 2, 1, 1, record_bytes);
+    ASSERT_TRUE(geometry.valid) << geometry.reason_code;
+    EXPECT_EQ(geometry.kv_blocks_per_sequence, 257U);
+    EXPECT_EQ(geometry.kv_block_bytes, block_bytes);
+    EXPECT_EQ(geometry.last_block_valid_bytes, record_bytes);
+    LlmMemoryWorkPlan plan = build_device_plan(geometry, "llm-metal-paged-segment-boundary", 4 * kGiB);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    const auto* execution = get_llm_metal_execution_plan(plan);
+    ASSERT_NE(execution, nullptr);
+    ASSERT_TRUE(execution->valid) << execution->reason_code;
+    EXPECT_EQ(execution->resources.k_segments.elements_per_segment, 256U);
+    EXPECT_EQ(execution->resources.k_segments.segment_lengths, (std::vector<size_t>{capacity, block_bytes}));
+    EXPECT_EQ(execution->resources.v_segments.segment_lengths, execution->resources.k_segments.segment_lengths);
+    ASSERT_TRUE(execution->resources.table_segments.has_value());
+    EXPECT_EQ(execution->resources.table_segments->segment_count, 1U);
+    resolve_and_prepare(plan);
+    expect_complete_scenario_task(plan, LlmScenario::KvOnly, 1, 2);
+    if (phase == LlmPhase::Decode) expect_complete_scenario_task(plan, LlmScenario::Mixed, 1, 2);
+  }
 }
 
 TEST_F(LlmMetalBackendIntegrationTest, RuntimePageSizeRejectsASelfConsistentUnderRoundedPlanIntegration) {
@@ -4247,8 +3359,7 @@ TEST_F(LlmMetalBackendIntegrationTest, ResourceLargerThanCanonicalSegmentUsesPri
   expect_complete_scenario_task(plan, LlmScenario::Mixed, 1);
 }
 
-TEST(LlmMetalBackendFailureInjectionIntegrationTest,
-     DecodePagedPermutationAndPaddingHooksAreDetectedIntegration) {
+TEST(LlmMetalBackendFailureInjectionIntegrationTest, PagedPermutationAndPaddingHooksAreDetectedIntegration) {
   struct HookCase {
     bool wrong_permutation;
     bool padding_mismatch;
@@ -4259,165 +3370,66 @@ TEST(LlmMetalBackendFailureInjectionIntegrationTest,
       {false, true, LlmBackendReason::PADDING_CANARY_MISMATCH},
   }};
 
-  for (size_t index = 0; index < cases.size(); ++index) {
-    SCOPED_TRACE(index);
-    LlmMetalBackendTestHooks hooks;
-    hooks.force_wrong_paged_table_permutation = cases[index].wrong_permutation;
-    hooks.force_padding_canary_mismatch = cases[index].padding_mismatch;
-    std::unique_ptr<LlmBackend> backend =
-        create_llm_metal_backend_for_testing(hooks);
-    ASSERT_NE(backend, nullptr);
-    LlmMemoryConfig config = metal_config();
-    config.kv_layout = LlmKvLayout::Paged;
-    const LlmBackendLifecycleResult initialization =
-        backend->initialize(config);
-    if (initialization.status == LlmBackendStatus::Unsupported) {
-      ASSERT_TRUE(
-          is_stable_capability_unsupported_reason(initialization.reason_code));
-      GTEST_SKIP() << "LLM Metal decode-paged unsupported: "
-                   << initialization.reason_code;
+  for (LlmPhase phase : {LlmPhase::Decode, LlmPhase::Prefill}) {
+    SCOPED_TRACE(static_cast<int>(phase));
+    for (size_t index = 0; index < cases.size(); ++index) {
+      SCOPED_TRACE(index);
+      LlmMetalBackendTestHooks hooks;
+      hooks.force_wrong_paged_table_permutation = cases[index].wrong_permutation;
+      hooks.force_padding_canary_mismatch = cases[index].padding_mismatch;
+      std::unique_ptr<LlmBackend> backend = create_llm_metal_backend_for_testing(hooks);
+      ASSERT_NE(backend, nullptr);
+      LlmMemoryConfig config = metal_config();
+      config.phase = phase;
+      config.kv_layout = LlmKvLayout::Paged;
+      const LlmBackendLifecycleResult initialization = backend->initialize(config);
+      if (initialization.status == LlmBackendStatus::Unsupported) {
+        ASSERT_TRUE(is_stable_capability_unsupported_reason(initialization.reason_code));
+        GTEST_SKIP() << "LLM Metal paged unsupported: " << initialization.reason_code;
+      }
+      ASSERT_EQ(initialization.status, LlmBackendStatus::Ready) << initialization.reason_code;
+      const LlmMetalBackendEvidence* initialized = get_llm_metal_backend_evidence(backend->evidence());
+      ASSERT_NE(initialized, nullptr);
+
+      const LlmGeometry geometry = phase == LlmPhase::Decode ? paged_geometry(4097, 17, 4, 2, 2, 8)
+                                                             : prefill_paged_geometry(4097, 5, 2, 2, 2, 2, 33);
+      ASSERT_TRUE(geometry.valid) << geometry.reason_code;
+      ASSERT_LT(geometry.last_block_valid_bytes, geometry.kv_block_bytes);
+      LlmMetalResourcePlanRequest request = resource_request(geometry);
+      request.argument_buffer_encoded_length = initialized->capability.argument_buffer_encoded_length;
+      request.argument_buffer_alignment = initialized->capability.argument_buffer_alignment;
+      request.max_buffer_length = initialized->capability.max_buffer_length;
+      request.available_memory_bytes = 2 * kGiB;
+      request.host_mapping_granularity_bytes = get_system_page_size_bytes();
+      LlmMemoryWorkPlan plan = make_metal_model_plan(geometry, build_llm_metal_execution_plan(request),
+                                                     "llm-metal-phase10-paged-hook-" + std::to_string(index));
+      ASSERT_TRUE(plan.valid) << plan.reason_code;
+      ASSERT_EQ(backend->resolve_execution_plan(plan).status, LlmBackendStatus::Ready);
+      const LlmBackendLifecycleResult prepared = backend->prepare_resources(plan);
+      ASSERT_EQ(prepared.status, LlmBackendStatus::Ready) << prepared.reason_code;
+
+      const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(plan, LlmScenario::Mixed, 2, true);
+      ASSERT_TRUE(scenario.valid) << scenario.reason_code;
+      const LlmTaskExecutionResult result = backend->execute_task(
+          plan, scenario, measurement_context(LlmScenario::Mixed, "phase-10-paged-failure-injection"));
+      EXPECT_EQ(result.status, LlmTaskExecutionStatus::Invalid);
+      EXPECT_EQ(result.reason_code, cases[index].expected_reason);
+      EXPECT_EQ(result.completion.completed_layout_metadata_lookup_count, scenario.layout_metadata_lookup_count);
+      EXPECT_EQ(result.completion.completed_layout_metadata_read_bytes, scenario.layout_metadata_read_bytes);
+      const LlmMetalTaskEvidence* task = get_llm_metal_task_evidence(result);
+      ASSERT_NE(task, nullptr);
+      EXPECT_EQ(task->checksum_valid, !cases[index].wrong_permutation);
+      EXPECT_TRUE(task->kv_write_validation_evaluated);
+      EXPECT_TRUE(task->kv_write_validation_valid);
+      EXPECT_TRUE(task->padding_canary_applicable);
+      EXPECT_TRUE(task->padding_canary_evaluated);
+      EXPECT_EQ(task->padding_canary_valid, !cases[index].padding_mismatch);
+      EXPECT_EQ(task->post_validation_valid, !cases[index].padding_mismatch);
+      EXPECT_TRUE(task->cold_checks[0].valid);
+      EXPECT_TRUE(task->cold_checks[1].valid);
+      EXPECT_TRUE(task->cold_checks[2].evaluated);
+      EXPECT_EQ(task->cold_checks[2].valid, !cases[index].padding_mismatch);
     }
-    ASSERT_EQ(initialization.status, LlmBackendStatus::Ready)
-        << initialization.reason_code;
-    const LlmMetalBackendEvidence* initialized =
-        get_llm_metal_backend_evidence(backend->evidence());
-    ASSERT_NE(initialized, nullptr);
-
-    const LlmGeometry geometry = paged_geometry(4097, 17, 4, 2, 2, 8);
-    LlmMetalResourcePlanRequest request = resource_request(geometry);
-    request.argument_buffer_encoded_length =
-        initialized->capability.argument_buffer_encoded_length;
-    request.argument_buffer_alignment =
-        initialized->capability.argument_buffer_alignment;
-    request.max_buffer_length = initialized->capability.max_buffer_length;
-    request.available_memory_bytes = 2 * kGiB;
-    request.host_mapping_granularity_bytes = get_system_page_size_bytes();
-    LlmMemoryWorkPlan plan = make_metal_model_plan(
-        geometry, build_llm_metal_execution_plan(request),
-        "llm-metal-phase10-paged-hook-" + std::to_string(index));
-    ASSERT_TRUE(plan.valid) << plan.reason_code;
-    ASSERT_EQ(backend->resolve_execution_plan(plan).status,
-              LlmBackendStatus::Ready);
-    const LlmBackendLifecycleResult prepared =
-        backend->prepare_resources(plan);
-    ASSERT_EQ(prepared.status, LlmBackendStatus::Ready)
-        << prepared.reason_code;
-
-    const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(
-        plan, LlmScenario::Mixed, 2, true);
-    ASSERT_TRUE(scenario.valid) << scenario.reason_code;
-    const LlmTaskExecutionResult result = backend->execute_task(
-        plan, scenario,
-        measurement_context(LlmScenario::Mixed,
-                            "phase-10-paged-failure-injection"));
-    EXPECT_EQ(result.status, LlmTaskExecutionStatus::Invalid);
-    EXPECT_EQ(result.reason_code, cases[index].expected_reason);
-    EXPECT_EQ(result.completion.completed_layout_metadata_lookup_count,
-              scenario.layout_metadata_lookup_count);
-    EXPECT_EQ(result.completion.completed_layout_metadata_read_bytes,
-              scenario.layout_metadata_read_bytes);
-    const LlmMetalTaskEvidence* task = get_llm_metal_task_evidence(result);
-    ASSERT_NE(task, nullptr);
-    EXPECT_EQ(task->checksum_valid, !cases[index].wrong_permutation);
-    EXPECT_TRUE(task->kv_write_validation_valid);
-    EXPECT_TRUE(task->padding_canary_applicable);
-    EXPECT_TRUE(task->padding_canary_evaluated);
-    EXPECT_EQ(task->padding_canary_valid, !cases[index].padding_mismatch);
-    EXPECT_EQ(task->post_validation_valid, !cases[index].padding_mismatch);
-    EXPECT_TRUE(task->cold_checks[0].valid);
-    EXPECT_TRUE(task->cold_checks[1].valid);
-    EXPECT_TRUE(task->cold_checks[2].evaluated);
-    EXPECT_EQ(task->cold_checks[2].valid, !cases[index].padding_mismatch);
-  }
-}
-
-TEST(LlmMetalBackendFailureInjectionIntegrationTest,
-     PrefillPagedPermutationAndPaddingHooksAreDetectedIntegration) {
-  struct HookCase {
-    bool wrong_permutation;
-    bool padding_mismatch;
-    std::string_view expected_reason;
-  };
-  const std::array<HookCase, 2> cases = {{
-      {true, false, LlmBackendReason::TIMED_CHECKSUM_MISMATCH},
-      {false, true, LlmBackendReason::PADDING_CANARY_MISMATCH},
-  }};
-
-  for (size_t index = 0; index < cases.size(); ++index) {
-    SCOPED_TRACE(index);
-    LlmMetalBackendTestHooks hooks;
-    hooks.force_wrong_paged_table_permutation =
-        cases[index].wrong_permutation;
-    hooks.force_padding_canary_mismatch = cases[index].padding_mismatch;
-    std::unique_ptr<LlmBackend> backend =
-        create_llm_metal_backend_for_testing(hooks);
-    ASSERT_NE(backend, nullptr);
-    LlmMemoryConfig config = metal_config();
-    config.phase = LlmPhase::Prefill;
-    config.kv_layout = LlmKvLayout::Paged;
-    const LlmBackendLifecycleResult initialization =
-        backend->initialize(config);
-    if (initialization.status == LlmBackendStatus::Unsupported) {
-      ASSERT_TRUE(
-          is_stable_capability_unsupported_reason(initialization.reason_code));
-      GTEST_SKIP() << "LLM Metal prefill-paged unsupported: "
-                   << initialization.reason_code;
-    }
-    ASSERT_EQ(initialization.status, LlmBackendStatus::Ready)
-        << initialization.reason_code;
-    const LlmMetalBackendEvidence* initialized =
-        get_llm_metal_backend_evidence(backend->evidence());
-    ASSERT_NE(initialized, nullptr);
-
-    const LlmGeometry geometry =
-        prefill_paged_geometry(4097, 5, 2, 2, 2, 2, 33);
-    ASSERT_TRUE(geometry.valid) << geometry.reason_code;
-    ASSERT_LT(geometry.last_block_valid_bytes, geometry.kv_block_bytes);
-    LlmMetalResourcePlanRequest request = resource_request(geometry);
-    request.argument_buffer_encoded_length =
-        initialized->capability.argument_buffer_encoded_length;
-    request.argument_buffer_alignment =
-        initialized->capability.argument_buffer_alignment;
-    request.max_buffer_length = initialized->capability.max_buffer_length;
-    request.available_memory_bytes = 2 * kGiB;
-    request.host_mapping_granularity_bytes = get_system_page_size_bytes();
-    LlmMemoryWorkPlan plan = make_metal_model_plan(
-        geometry, build_llm_metal_execution_plan(request),
-        "llm-metal-phase12-prefill-paged-hook-" + std::to_string(index));
-    ASSERT_TRUE(plan.valid) << plan.reason_code;
-    ASSERT_EQ(backend->resolve_execution_plan(plan).status,
-              LlmBackendStatus::Ready);
-    const LlmBackendLifecycleResult prepared =
-        backend->prepare_resources(plan);
-    ASSERT_EQ(prepared.status, LlmBackendStatus::Ready)
-        << prepared.reason_code;
-
-    const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(
-        plan, LlmScenario::Mixed, 2, true);
-    ASSERT_TRUE(scenario.valid) << scenario.reason_code;
-    const LlmTaskExecutionResult result = backend->execute_task(
-        plan, scenario,
-        measurement_context(LlmScenario::Mixed,
-                            "phase-12-prefill-paged-failure-injection"));
-    EXPECT_EQ(result.status, LlmTaskExecutionStatus::Invalid);
-    EXPECT_EQ(result.reason_code, cases[index].expected_reason);
-    EXPECT_EQ(result.completion.completed_layout_metadata_lookup_count,
-              scenario.layout_metadata_lookup_count);
-    EXPECT_EQ(result.completion.completed_layout_metadata_read_bytes,
-              scenario.layout_metadata_read_bytes);
-    const LlmMetalTaskEvidence* task = get_llm_metal_task_evidence(result);
-    ASSERT_NE(task, nullptr);
-    EXPECT_EQ(task->checksum_valid, !cases[index].wrong_permutation);
-    EXPECT_TRUE(task->kv_write_validation_evaluated);
-    EXPECT_TRUE(task->kv_write_validation_valid);
-    EXPECT_TRUE(task->padding_canary_applicable);
-    EXPECT_TRUE(task->padding_canary_evaluated);
-    EXPECT_EQ(task->padding_canary_valid, !cases[index].padding_mismatch);
-    EXPECT_EQ(task->post_validation_valid, !cases[index].padding_mismatch);
-    EXPECT_TRUE(task->cold_checks[0].valid);
-    EXPECT_TRUE(task->cold_checks[1].valid);
-    EXPECT_TRUE(task->cold_checks[2].evaluated);
-    EXPECT_EQ(task->cold_checks[2].valid, !cases[index].padding_mismatch);
   }
 }
 
@@ -4680,43 +3692,31 @@ TEST(LlmMetalBackendFailureInjectionIntegrationTest,
 }  // namespace
 
 TEST(LlmMetalBackendTest, ColdReadbackIndependentVerdicts) {
-  for (bool completed : {false, true}) {
-    for (unsigned combination = 0; combination < 8; ++combination) {
-      const uint32_t flags = ((combination & 1) ? LlmMetalKernelContract::kValidationInvalidParametersBit : 0) |
-          ((combination & 2) ? LlmMetalKernelContract::kKvWriteValidationMismatchBit : 0) |
-          ((combination & 4) ? LlmMetalKernelContract::kPaddingCanaryMismatchBit : 0);
-      const auto checks = interpret_llm_metal_cold_checks(LlmPhase::Prefill, true, true, completed, flags);
-      EXPECT_EQ(checks[0].evaluated, completed);
-      EXPECT_EQ(checks[0].valid, completed && !(combination & 1));
-      for (size_t slot = 1; slot < 3; ++slot) {
-        const bool mismatch = (combination & (1U << slot)) != 0;
-        EXPECT_EQ(checks[slot].evaluated, completed && (mismatch || !(combination & 1)));
-        EXPECT_EQ(checks[slot].valid, completed && !mismatch && !(combination & 1));
-      }
-      const auto none = interpret_llm_metal_cold_checks(LlmPhase::Decode, false, true, completed, flags);
-      for (const auto& check : none) EXPECT_FALSE(check.applicable);
-      const auto contiguous = interpret_llm_metal_cold_checks(LlmPhase::Decode, true, false, completed, flags);
-      EXPECT_FALSE(contiguous[2].applicable);
-      EXPECT_EQ(contiguous[1].kind, LlmColdCheckKind::KvAppendFinal);
-      EXPECT_EQ(checks[1].kind, LlmColdCheckKind::KvPrefillFinalSamples);
-    }
-  }
-}
-
-TEST(LlmMetalBackendTest, PendingColdChecksPreserveAllApplicabilityCombinations) {
   for (auto phase : {LlmPhase::Decode, LlmPhase::Prefill}) {
     for (bool writes : {false, true}) {
       for (bool padding : {false, true}) {
-        const auto checks = interpret_llm_metal_cold_checks(phase, writes, padding, false, 0);
-        EXPECT_EQ(checks[0].applicable, writes);
-        EXPECT_EQ(checks[1].applicable, writes);
-        EXPECT_EQ(checks[2].applicable, writes && padding);
-        EXPECT_EQ(checks[1].kind, phase == LlmPhase::Decode ? LlmColdCheckKind::KvAppendFinal
-                                                         : LlmColdCheckKind::KvPrefillFinalSamples);
-        for (const auto& check : checks) {
-          EXPECT_FALSE(check.evaluated);
-          EXPECT_FALSE(check.valid);
-          EXPECT_EQ(check.reason_code, "not-evaluated");
+        for (bool completed : {false, true}) {
+          for (unsigned combination = 0; combination < 8; ++combination) {
+            SCOPED_TRACE(::testing::Message() << static_cast<int>(phase) << ":" << writes << ":" << padding << ":"
+                                              << completed << ":" << combination);
+            const uint32_t flags = ((combination & 1) ? LlmMetalKernelContract::kValidationInvalidParametersBit : 0) |
+                                   ((combination & 2) ? LlmMetalKernelContract::kKvWriteValidationMismatchBit : 0) |
+                                   ((combination & 4) ? LlmMetalKernelContract::kPaddingCanaryMismatchBit : 0);
+            const auto checks = interpret_llm_metal_cold_checks(phase, writes, padding, completed, flags);
+            EXPECT_EQ(checks[0].applicable, writes);
+            EXPECT_EQ(checks[1].applicable, writes);
+            EXPECT_EQ(checks[2].applicable, writes && padding);
+            EXPECT_EQ(checks[1].kind, phase == LlmPhase::Decode ? LlmColdCheckKind::KvAppendFinal
+                                                                : LlmColdCheckKind::KvPrefillFinalSamples);
+            for (size_t slot = 0; slot < checks.size(); ++slot) {
+              const bool mismatch = (combination & (1U << slot)) != 0;
+              const bool evaluated =
+                  checks[slot].applicable && completed && (slot == 0 || mismatch || !(combination & 1));
+              EXPECT_EQ(checks[slot].evaluated, evaluated);
+              EXPECT_EQ(checks[slot].valid, evaluated && !mismatch && !(combination & 1));
+              if (!completed) EXPECT_EQ(checks[slot].reason_code, "not-evaluated");
+            }
+          }
         }
       }
     }

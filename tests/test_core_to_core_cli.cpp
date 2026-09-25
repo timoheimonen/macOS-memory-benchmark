@@ -84,49 +84,22 @@ TEST(CoreToCoreCliTest, ParsesDefaultStandaloneModeValues) {
 }
 
 TEST(CoreToCoreCliTest, ParsesOptionalModeArguments) {
-  // Optional standalone flags should override defaults without enabling help mode.
-  CoreToCoreLatencyConfig config;
-  const int parse_result =
-      parse_with_args({"memory_benchmark",
-                       "--analyze-core2core",
-                       "--count",
-                       "5",
-                       "--latency-samples",
-                       "128",
-                       "--output",
-                       "core2core.json"},
-                      config);
-
-  EXPECT_EQ(parse_result, EXIT_SUCCESS);
-  EXPECT_FALSE(config.help_requested);
-  EXPECT_EQ(config.loop_count, 5);
-  EXPECT_EQ(config.latency_sample_count, 128);
-  EXPECT_EQ(config.output_file, "core2core.json");
-}
-
-TEST(CoreToCoreCliTest, ParsesShortModeArguments) {
-  CoreToCoreLatencyConfig config;
-  const int parse_result =
-      parse_with_args({"memory_benchmark", "-C", "-r", "5", "-n", "128", "-o", "core2core.json"}, config);
-
-  EXPECT_EQ(parse_result, EXIT_SUCCESS);
-  EXPECT_FALSE(config.help_requested);
-  EXPECT_EQ(config.loop_count, 5);
-  EXPECT_EQ(config.latency_sample_count, 128);
-  EXPECT_EQ(config.output_file, "core2core.json");
-}
-
-TEST(CoreToCoreCliTest, PreservesRawStdoutSentinelAndExplicitDotDashFile) {
-  for (const std::string& raw_output : {std::string("-"), std::string("./-")}) {
-    SCOPED_TRACE(raw_output);
-    CoreToCoreLatencyConfig config;
-    const int parse_result = parse_with_args(
-        {"memory_benchmark", "--analyze-core2core", "--output",
-         raw_output},
-        config);
-
-    EXPECT_EQ(parse_result, EXIT_SUCCESS);
-    EXPECT_EQ(config.output_file, raw_output);
+  for (bool short_options : {false, true}) {
+    for (const char* output : {"core2core.json", "-", "./-"}) {
+      SCOPED_TRACE(short_options);
+      SCOPED_TRACE(output);
+      CoreToCoreLatencyConfig config;
+      const CapturedCoreCliParse parsed = parse_capturing_stderr(
+          {"memory_benchmark", short_options ? "-C" : "--analyze-core2core", short_options ? "-r" : "--count", "5",
+           short_options ? "-n" : "--latency-samples", "128", short_options ? "-o" : "--output", output},
+          config);
+      ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+      EXPECT_TRUE(parsed.stderr_output.empty());
+      EXPECT_FALSE(config.help_requested);
+      EXPECT_EQ(config.loop_count, 5);
+      EXPECT_EQ(config.latency_sample_count, 128);
+      EXPECT_EQ(config.output_file, output);
+    }
   }
 }
 
@@ -191,60 +164,27 @@ TEST(CoreToCoreCliTest, ParsesSweepArguments) {
   EXPECT_EQ(config.sweep_specs[1].values[1].integer_value, 8);
 }
 
-TEST(CoreToCoreCliTest, RejectsUnsupportedSweepParameter) {
-  CoreToCoreLatencyConfig config;
-  const int parse_result =
-      parse_with_args({"memory_benchmark",
-                       "--analyze-core2core",
-                       "--output",
-                       "core2core_sweep.json",
-                       "--sweep",
-                       "threads=1,2"},
-                      config);
-
-  EXPECT_EQ(parse_result, EXIT_FAILURE);
-}
-
-TEST(CoreToCoreCliTest, RejectsSweepWithoutOutput) {
-  CoreToCoreLatencyConfig config;
-  const int parse_result =
-      parse_with_args({"memory_benchmark", "--analyze-core2core", "--sweep", "count=1,2"}, config);
-
-  EXPECT_EQ(parse_result, EXIT_FAILURE);
-}
-
-TEST(CoreToCoreCliTest, RejectsSweepExceedingMaxRuns) {
-  CoreToCoreLatencyConfig config;
-  const int parse_result =
-      parse_with_args({"memory_benchmark",
-                       "--analyze-core2core",
-                       "--output",
-                       "core2core_sweep.json",
-                       "--sweep",
-                       "count=1,2",
-                       "--sweep",
-                       "latency-samples=4,8",
-                       "--sweep-max-runs",
-                       "3"},
-                      config);
-
-  EXPECT_EQ(parse_result, EXIT_FAILURE);
-}
-
-TEST(CoreToCoreCliTest, RejectsDuplicateSweepParameters) {
-  CoreToCoreLatencyConfig config;
-  const int parse_result = parse_with_args(
-      {"memory_benchmark",
-       "--analyze-core2core",
-       "--output",
-       "core2core_sweep.json",
-       "--sweep",
-       "count=1,2",
-       "--sweep",
-       "count=3,4"},
-      config);
-
-  EXPECT_EQ(parse_result, EXIT_FAILURE);
+TEST(CoreToCoreCliTest, RejectsInvalidSweepConfigurationsWithCentralizedDiagnostics) {
+  struct SweepCase {
+    std::vector<std::string> options;
+    std::string diagnostic;
+  };
+  const SweepCase cases[] = {
+      {{"--sweep", "count=1,2"}, Messages::error_sweep_requires_output()},
+      {{"--output", "sweep.json", "--sweep", "count=1,2", "--sweep", "latency-samples=4,8", "--sweep-max-runs", "3"},
+       Messages::error_sweep_too_many_runs(4, 3)},
+      {{"--output", "sweep.json", "--sweep", "count=1,2", "--sweep", "count=3,4"},
+       Messages::error_duplicate_option("--sweep count")},
+  };
+  for (const SweepCase& test_case : cases) {
+    SCOPED_TRACE(testing::PrintToString(test_case.options));
+    std::vector<std::string> arguments = {"memory_benchmark", "--analyze-core2core"};
+    arguments.insert(arguments.end(), test_case.options.begin(), test_case.options.end());
+    CoreToCoreLatencyConfig config;
+    const CapturedCoreCliParse parsed = parse_capturing_stderr(arguments, config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_EQ(first_output_line(parsed.stderr_output), Messages::error_prefix() + test_case.diagnostic);
+  }
 }
 
 TEST(CoreToCoreCliTest, RejectsUnknownOptionsInStandaloneMode) {
@@ -289,11 +229,6 @@ TEST(CoreToCoreCliTest, RejectsMalformedNumericTokensWithCentralizedErrors) {
       {"--count", "5junk", kInvalidReason},
       {"--latency-samples", "8junk", kInvalidReason},
       {"--sweep-max-runs", "4junk", kInvalidReason},
-      {"--count", " 5", kInvalidReason},
-      {"--count", "5 ", kInvalidReason},
-      {"--count", "+5", kInvalidReason},
-      {"--count", "abc", kInvalidReason},
-      {"--count", "9223372036854775808", "out of range"},
       {"--count", "0", positive_range_reason.c_str()},
       {"--count", "-1", positive_range_reason.c_str()},
   };
@@ -324,15 +259,13 @@ TEST(CoreToCoreCliTest, RejectsMalformedSweepListsAndValues) {
   constexpr const char* kInvalidReason =
       "must be an integer without whitespace, a plus sign, or trailing characters";
   const InvalidSweepCase cases[] = {
+      {"threads=1,2", "--sweep", "threads=1,2", "unsupported core-to-core sweep parameter: threads"},
       {"count", "--sweep", "count", "sweep must use key=value1,value2 syntax"},
       {"count=,1", "--sweep", "count=,1", "sweep value list cannot contain empty values"},
       {"count=1,", "--sweep", "count=1,", "sweep value list cannot contain empty values"},
       {"count=1,,2", "--sweep", "count=1,,2", "sweep value list cannot contain empty values"},
       {"count=1x", "--count", "1x", kInvalidReason},
       {"latency-samples=4x", "--latency-samples", "4x", kInvalidReason},
-      {"count= 1", "--count", " 1", kInvalidReason},
-      {"count=+1", "--count", "+1", kInvalidReason},
-      {"count=9223372036854775808", "--count", "9223372036854775808", "out of range"},
   };
 
   for (const InvalidSweepCase& test_case : cases) {

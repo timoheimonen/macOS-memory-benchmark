@@ -495,40 +495,6 @@ uint32_t llm_metal_paged_pattern_word(uint64_t seed, uint64_t layer_index,
              static_cast<uint32_t>(block_word_index + 1U);
 }
 
-uint32_t llm_metal_decode_append_word(uint64_t scenario_seed, uint64_t work_unit, uint64_t layer_index,
-                                      uint64_t batch_index, uint64_t absolute_word_index,
-                                      LlmMetalResourcePool pool) noexcept {
-  const uint32_t pool_domain = pool == LlmMetalResourcePool::K
-                                   ? LlmMetalKernelContract::kAppendKeyDomain
-                                   : LlmMetalKernelContract::kAppendValueDomain;
-  return static_cast<uint32_t>(scenario_seed) +
-         LlmMetalKernelContract::kAppendWorkUnitMultiplier * static_cast<uint32_t>(work_unit + 1U) +
-         LlmMetalKernelContract::kAppendLayerMultiplier * static_cast<uint32_t>(layer_index + 1U) +
-         LlmMetalKernelContract::kAppendBatchMultiplier * static_cast<uint32_t>(batch_index + 1U) +
-         LlmMetalKernelContract::kAppendWordMultiplier * static_cast<uint32_t>(absolute_word_index + 1U) +
-         pool_domain;
-}
-
-uint32_t llm_metal_prefill_write_word(
-    uint64_t scenario_seed, uint64_t work_unit, uint64_t layer_index,
-    uint64_t batch_index, uint64_t absolute_word_index,
-    LlmMetalResourcePool pool) noexcept {
-  const uint32_t pool_domain =
-      pool == LlmMetalResourcePool::K
-          ? LlmMetalKernelContract::kPrefillWriteKeyDomain
-          : LlmMetalKernelContract::kPrefillWriteValueDomain;
-  return static_cast<uint32_t>(scenario_seed) +
-         LlmMetalKernelContract::kAppendWorkUnitMultiplier *
-             static_cast<uint32_t>(work_unit + 1U) +
-         LlmMetalKernelContract::kAppendLayerMultiplier *
-             static_cast<uint32_t>(layer_index + 1U) +
-         LlmMetalKernelContract::kAppendBatchMultiplier *
-             static_cast<uint32_t>(batch_index + 1U) +
-         LlmMetalKernelContract::kAppendWordMultiplier *
-             static_cast<uint32_t>(absolute_word_index + 1U) +
-         pool_domain;
-}
-
 bool equal_llm_metal_checksum(const LlmMetalDualMod32Checksum& left,
                               const LlmMetalDualMod32Checksum& right) noexcept {
   return left.weight.a == right.weight.a && left.weight.b == right.weight.b && left.k.a == right.k.a &&
@@ -2564,39 +2530,6 @@ LlmMetalGridPlan build_llm_metal_grid_plan(const LlmMetalGridRequest& request) {
   if (plan.vector_iterations_per_lane_per_visit > request.limits.maximum_vector_iterations_per_lane_per_visit) {
     plan.reason_code = LlmMetalPlanReason::VECTOR_ITERATION_CAP_EXCEEDED;
     return plan;
-  }
-  if (!request.owner_accounted_bytes.empty()) {
-    if (request.owner_accounted_bytes.size() != request.owner_count) {
-      plan.reason_code = LlmMetalPlanReason::OWNER_COST_COUNT_MISMATCH;
-      return plan;
-    }
-    try {
-      plan.threadgroup_accounted_bytes.assign(plan.actual_threadgroups, 0);
-    } catch (const std::bad_alloc&) {
-      plan.reason_code = LlmMetalPlanReason::PLANNER_ALLOCATION_FAILED;
-      return plan;
-    } catch (const std::length_error&) {
-      plan.reason_code = LlmMetalPlanReason::PLANNER_ALLOCATION_FAILED;
-      return plan;
-    }
-    for (size_t owner = 0; owner < request.owner_count; ++owner) {
-      const size_t threadgroup = owner % plan.actual_threadgroups;
-      if (!NumericUtils::checked_add(plan.threadgroup_accounted_bytes[threadgroup],
-                                     request.owner_accounted_bytes[owner],
-                                     plan.threadgroup_accounted_bytes[threadgroup])) {
-        plan.reason_code = LlmMetalPlanReason::OWNER_COUNT_OVERFLOW;
-        return plan;
-      }
-    }
-    const auto [minimum, maximum] =
-        std::minmax_element(plan.threadgroup_accounted_bytes.begin(), plan.threadgroup_accounted_bytes.end());
-    plan.minimum_threadgroup_accounted_bytes = *minimum;
-    plan.maximum_threadgroup_accounted_bytes = *maximum;
-    if (!checked_subtract(plan.maximum_threadgroup_accounted_bytes, plan.minimum_threadgroup_accounted_bytes,
-                          plan.threadgroup_accounted_imbalance_bytes)) {
-      plan.reason_code = LlmMetalPlanReason::OWNER_COUNT_OVERFLOW;
-      return plan;
-    }
   }
   if (!populate_llm_metal_grid_identity(request, plan)) {
     plan.reason_code = LlmMetalPlanReason::PLANNER_ALLOCATION_FAILED;

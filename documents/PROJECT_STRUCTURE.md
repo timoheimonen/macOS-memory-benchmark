@@ -195,7 +195,7 @@ Core infrastructure for configuration, memory management, macOS system introspec
 | `buffer_manager.h` | Defines the phase-local `BenchmarkBuffers` and command-local `PatternBuffers` RAII owners |
 | `buffer_allocator.h` / `.cpp` | Atomically allocates the pattern source/destination pair and performs overflow-safe peak-concurrent memory accounting |
 | `buffer_initializer.h` / `.cpp` | Initializes deterministic pattern source data and the zeroed pattern destination before execution |
-| `memory_utils.h` / `.cpp` | Cache-line alignment helpers, deterministic/unseeded latency-chain construction and diagnostics, and basic buffer initialization |
+| `memory_utils.h` / `.cpp` | Cache-line alignment helpers, deterministic/unseeded latency-chain construction, and basic buffer initialization |
 
 #### src/core/system/
 
@@ -375,12 +375,11 @@ installed. All test `.cpp` and `.mm` files are picked up automatically by the Ma
 |---|---|---|
 | `test_config.cpp` | `ConfigTest` | Strict whole-token CLI/sweep parsing, validation, defaults, and derived buffer/access math |
 | `test_signal_handler.cpp` | `BenchmarkSignalMaskGuardTest` | Exact thread-mask restoration, caller-preserved blocked signals, and nested scope ownership |
-| `test_messages.cpp` | `Messages*Test` | Console message string functions across all categories |
+| `test_messages.cpp` | `Messages*Test` | Exact help and formatted console message contracts |
 | `test_memory_utils.cpp` | `MemoryUtilsTest` | Memory helpers: pointer-chase chain construction and verification |
 | `test_memory_manager.cpp` | `MemoryManagerTest` | Injected mmap/madvise policy, failures, and exact RAII unmapping |
 | `test_numeric_utils.cpp` | `NumericUtilsTest` | Overflow-safe arithmetic, duration calibration, pilot counts, and quantization boundaries |
-| `test_llm_memory_contract.cpp` | `LlmMemoryContractTest` | Independent executable specification for all eight decode/prefill backend/layout methodology identities, payloads, paged geometry/lookup goldens, append and full-prompt writes, checksum/event-trace identities, descriptor ABI layouts, and schema acceptance; it does not exercise production LLM code |
-| `test_llm_memory_config.cpp` | `LlmMemoryConfigTest` | Config/status defaults, exact standalone decode/prefill parsing including paged prefill, phase/layout rules and stable reasons, strict decimal errors, raw output values, help isolation, worker/seed resolution, geometry/work-limit preflight, and incompatible options |
+| `test_llm_memory_config.cpp` | `LlmMemoryConfigTest` | Exact standalone decode/prefill parsing including paged prefill, phase/layout rules and stable reasons, strict decimal errors, raw output values, help isolation, worker/seed resolution, geometry/work-limit preflight, and incompatible options |
 | `test_llm_memory_work_plan.cpp` | `LlmMemoryWorkPlanTest` | Production checked decode/prefill geometry and payloads, physical/padding/table/lookup/accounted math including paged-prefill `N+2*M`, deterministic permutation/hash, CPU token/block ownership, Metal cyclic block-owner scheduling and component identities, memory budget, descriptor/range/layout invariants, worker reduction, scenario caps/calibration, and cyclic order |
 | `test_llm_memory_executor.cpp` | `LlmMemoryExecutorTest` | CPU phase/layout dispatch, atomic mapping/table-preparation failure seams, contiguous and paged decode/prefill descriptor materialization, independent checksums, padding canaries, synchronized timing, QoS, cancellation, and fake-kernel validation |
 | `test_llm_memory_runner.cpp` | `LlmMemoryRunnerTest` | Fake-backend lifecycle and generic decode/prefill task seams, lifecycle unsupported/failure handling, common identity/timing/completion/validation acceptance, exact calibration/single-unit/freeze/frozen-warmup order, cyclic measurements, status/counter/aggregate semantics, interruption, release/checkpoint precedence, auxiliary budgeting, and runner exception boundaries |
@@ -388,7 +387,7 @@ installed. All test `.cpp` and `.mm` files are picked up automatically by the Ma
 | `test_llm_metal_checksum.mm` | `LlmMetalChecksumHelperIntegrationTest` | Real-device checks of shared MSL affine checksum collision boundaries and six-component modulo reduction across partial SIMD/threadgroups |
 | `test_llm_memory_output.cpp` | `LlmMemoryOutputTest` | Exact decode/prefill, contiguous/paged, and Metal device/resource/table/task K/V-write/lookup/padding plus cyclic owner/per-threadgroup cost formatting, interpretation text, and deduplicated warnings |
 | `test_llm_memory_kernels.cpp` | `LlmMemoryKernelIntegrationTest` | Real contiguous/paged decode/prefill ARM64 descriptor/kernel scenarios, paged tails/lookups, full-prompt writes, exact partial tiled scans, checksum, padding, worker-count, and AAPCS64 coverage |
-| `test_llm_metal_backend.cpp` | `LlmMetalBackendTest`, `LlmMetalBackendIntegrationTest`, `LlmMetalBackendFailureInjectionIntegrationTest` | Pure capability, contiguous/paged segmentation, argument-buffer, decode/prefill ABIs, source-hash and prefill loop-order audit, phase-aware checksum/reason mapping, paged-prefill `N+2*M`, cyclic no-duplication ownership and per-threadgroup accounted-byte evidence, plus real-device selected-profile compilation, Tier-2 slots, private table/K/V initialization, exact-tail decode, full-prompt/tiled-prefix prefill, final-ordinal write/padding detection, interruption/failure cleanup, and idempotent release |
+| `test_llm_metal_backend.cpp` | `LlmMetalBackendTest`, `LlmMetalBackendIntegrationTest`, `LlmMetalBackendFailureInjectionIntegrationTest` | Pure capability, contiguous/paged segmentation, argument-buffer, decode/prefill ABIs, source provenance and prefill loop-order audit, phase-aware checksum/reason mapping, paged-prefill `N+2*M`, cyclic no-duplication ownership and per-threadgroup accounted-byte evidence, plus real-device selected-profile compilation, Tier-2 slots, private table/K/V initialization, exact-tail decode, full-prompt/tiled-prefix prefill, final-ordinal write/padding detection, interruption/failure cleanup, and idempotent release |
 | `test_buffer_manager.cpp` | `BufferManagerTest` | Pattern mapping policy, atomic allocation cleanup, initialized content, validation, and peak accounting |
 | `test_benchmark_executor.cpp` | `BenchmarkExecutorTest` | Injected phase/chain failures, continuous latency sampling, and hardware executor contracts |
 | `test_benchmark_runner.cpp` | `BenchmarkStatisticsCollectorTest`, `BenchmarkRunnerTest` | Status-bearing aggregation, schema-3 retained snapshots, checkpointing, interruption, and runner exception/failure seams |
@@ -403,7 +402,7 @@ installed. All test `.cpp` and `.mm` files are picked up automatically by the Ma
 | `test_llm_result_verifier.py` | Independent LLM verifier | Eight current profiles, arithmetic goldens, status/population and semantic mutations, bounded input and build provenance |
 | `test_script_examples.py` | Python script-example entry test | Compatible standard schema-3/methodology inputs, provenance-version handling, completion and field-shape checks, and metric extraction for the bundled standard-memory examples, including the optional jq-backed shell path when jq is installed |
 | `test_json_output_session.cpp` | `JsonOutputTargetTest`, `JsonOutputSessionTest` | Exact sentinel/path classification, lazy checkpoint dispatch, atomic-file parity, stdout routing/restoration, and stream failure containment |
-| `test_json_utils.cpp` | `JsonUtilsTest`, `JsonFileWriterTest` | JSON parse/statistics and atomic writer success/failure contracts |
+| `test_json_utils.cpp` | `JsonUtilsTest`, `JsonFileWriterTest` | UTC timestamp/statistics and atomic writer success/failure contracts |
 | `test_output_printer.cpp` | `OutputPrinterTest`, `OutputPrinterCustomCacheUnitsTest` | Status-aware partial output, mode/cache composition, and custom-cache size-unit boundaries |
 | `test_sweep_runner.cpp` | `SweepRunnerTest` | Current-only nested standard schema-3 completion classification, complete/partial/interrupted/failed attempt accounting, schema-1 envelopes, and file/lazy-stdout checkpoint behavior |
 | `test_sweep_utils.cpp` | `SweepUtilsTest` | Shared sweep parsing, empty-dimension behavior, and overflow-safe Cartesian counts |

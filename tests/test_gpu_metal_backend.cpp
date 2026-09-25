@@ -246,8 +246,7 @@ TEST_F(GpuMetalBackendIntegrationTest, InitializationAndRuntimeCompilationIntegr
   EXPECT_EQ(initialization_.compilation.floating_point_math, "not_applicable_integer_only");
   EXPECT_EQ(initialization_.compilation.preprocessor_macros, "none");
   EXPECT_EQ(initialization_.compilation.kernel_revision, "gpu-linear-word-mod32-tg-reduce-v2");
-  EXPECT_EQ(initialization_.compilation.kernel_source_sha256,
-            "21def2d75d3545dba31aa4897ea57ec2fd0e4481cd86ce21725338ab0f322ac5");
+  EXPECT_EQ(initialization_.compilation.kernel_source_sha256, canonical_gpu_kernel_source_sha256());
   if (device.device_name.find("M4") != std::string::npos) {
     EXPECT_TRUE(initialization_.compilation.compiler_diagnostics.empty());
   }

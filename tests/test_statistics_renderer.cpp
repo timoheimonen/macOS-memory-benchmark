@@ -75,17 +75,11 @@ TEST(StatisticsRendererTest, RendersCanonicalOrderPrecisionAndPrefixes) {
   std::ostringstream undefined_output;
   render_statistics_summary(undefined_output, undefined_coefficient, options);
 
-  EXPECT_EQ(undefined_output.str(),
-            ">  Average: 1.25\n"
-            ">  Median (P50): 2.50\n"
-            ">  P90: 7.00\n"
-            ">  P95: 8.00\n"
-            ">  P99: 8.80\n"
-            ">  Stddev: 3.25\n"
-            "@  CV:      0.0%\n"
-            "@  Median absolute deviation: 0.75\n"
-            ">  Min:     -1.00\n"
-            ">  Max:     9.00\n");
+  std::string expected = output.str();
+  const size_t coefficient = expected.find("@  CV:      6.5%\n");
+  ASSERT_NE(coefficient, std::string::npos);
+  expected.replace(coefficient, std::string("@  CV:      6.5%\n").size(), "@  CV:      0.0%\n");
+  EXPECT_EQ(undefined_output.str(), expected);
 }
 
 TEST(StatisticsRendererTest, SampleMedianOwnsIndentationAndReportsCount) {

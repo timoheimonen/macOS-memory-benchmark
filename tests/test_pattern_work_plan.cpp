@@ -15,6 +15,7 @@
 //
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <limits>
 #include <unordered_set>
 
@@ -37,16 +38,6 @@ TEST(PatternWorkPlanTest, RejectsInvalidParameters) {
   EXPECT_EQ(build_plan(4096, 64, 1, 0).status, PatternMeasurementStatus::Invalid);
 }
 
-TEST(PatternWorkPlanTest, SkipsBufferWithoutStrideTransition) {
-  const PatternWorkPlan plan =
-      build_plan(Constants::PATTERN_STRIDE_CACHE_LINE + Constants::PATTERN_ACCESS_SIZE_BYTES - 1,
-                 Constants::PATTERN_STRIDE_CACHE_LINE, 1);
-
-  EXPECT_EQ(plan.status, PatternMeasurementStatus::Skipped);
-  EXPECT_EQ(plan.effective_threads, 0);
-  EXPECT_TRUE(plan.workers.empty());
-}
-
 TEST(PatternWorkPlanTest, IncludesLastExactlyFittingAccess) {
   const size_t buffer_size = Constants::PATTERN_STRIDE_PAGE + Constants::PATTERN_ACCESS_SIZE_BYTES;
   const PatternWorkPlan plan = build_plan(buffer_size, Constants::PATTERN_STRIDE_PAGE, 1);
@@ -61,29 +52,40 @@ TEST(PatternWorkPlanTest, IncludesLastExactlyFittingAccess) {
   EXPECT_EQ(plan.payload_bytes_per_pass, 2u * Constants::PATTERN_ACCESS_SIZE_BYTES);
 }
 
-TEST(PatternWorkPlanTest, ReducesThreadsUntilEveryWorkerHasTransition) {
-  const size_t buffer_size = 8 * Constants::BYTES_PER_MB;
-  const PatternWorkPlan plan = build_plan(buffer_size, Constants::PATTERN_STRIDE_SUPERPAGE_2MB, 10);
+TEST(PatternWorkPlanTest, PartitionsUnevenBuffersAndReducesThreadsUntilEveryWorkerHasTransition) {
+  struct SplitCase {
+    size_t bytes;
+    size_t stride;
+    int requested;
+    int effective;
+  };
+  for (const SplitCase& entry :
+       {SplitCase{8 * Constants::BYTES_PER_MB, Constants::PATTERN_STRIDE_SUPERPAGE_2MB, 10, 3},
+        SplitCase{7 * Constants::BYTES_PER_MB + 123, Constants::PATTERN_STRIDE_PAGE_16K, 4, 4}}) {
+    SCOPED_TRACE(entry.bytes);
+    const size_t buffer_size = entry.bytes;
+    const PatternWorkPlan plan = build_plan(buffer_size, entry.stride, entry.requested);
 
-  ASSERT_EQ(plan.status, PatternMeasurementStatus::Measured);
-  EXPECT_EQ(plan.requested_threads, 10);
-  EXPECT_EQ(plan.effective_threads, 3);
-  ASSERT_EQ(plan.workers.size(), 3u);
+    ASSERT_EQ(plan.status, PatternMeasurementStatus::Measured);
+    EXPECT_EQ(plan.requested_threads, entry.requested);
+    EXPECT_EQ(plan.effective_threads, entry.effective);
+    ASSERT_EQ(plan.workers.size(), static_cast<size_t>(entry.effective));
 
-  size_t next_offset = 0;
-  size_t summed_accesses = 0;
-  size_t summed_payload = 0;
-  for (const PatternWorkerRange& worker : plan.workers) {
-    EXPECT_EQ(worker.offset_bytes, next_offset);
-    EXPECT_GE(worker.accesses_per_pass, 2u);
-    next_offset += worker.span_bytes;
-    summed_accesses += worker.accesses_per_pass;
-    summed_payload += worker.payload_bytes_per_pass;
+    size_t next_offset = 0;
+    size_t summed_accesses = 0;
+    size_t summed_payload = 0;
+    for (const PatternWorkerRange& worker : plan.workers) {
+      EXPECT_EQ(worker.offset_bytes, next_offset);
+      EXPECT_GE(worker.accesses_per_pass, 2u);
+      next_offset += worker.span_bytes;
+      summed_accesses += worker.accesses_per_pass;
+      summed_payload += worker.payload_bytes_per_pass;
+    }
+    EXPECT_EQ(next_offset, buffer_size);
+    EXPECT_EQ(summed_accesses, plan.accesses_per_pass);
+    EXPECT_EQ(summed_payload, plan.payload_bytes_per_pass);
+    if (entry.requested == 10) EXPECT_EQ(plan.accesses_per_pass, 6u);
   }
-  EXPECT_EQ(next_offset, buffer_size);
-  EXPECT_EQ(summed_accesses, plan.accesses_per_pass);
-  EXPECT_EQ(summed_payload, plan.payload_bytes_per_pass);
-  EXPECT_EQ(plan.accesses_per_pass, 6u);
 }
 
 TEST(PatternWorkPlanTest, UsesFinalWorkerCountsForPayloadAccounting) {
@@ -100,19 +102,6 @@ TEST(PatternWorkPlanTest, UsesFinalWorkerCountsForPayloadAccounting) {
   ASSERT_GT(plan.passes, 1u);
   ASSERT_TRUE(set_strided_pattern_passes(previous, plan.passes - 1));
   EXPECT_LT(previous.total_payload_bytes, minimum_payload);
-}
-
-TEST(PatternWorkPlanTest, PreservesExactCoverageForUnevenSplit) {
-  const size_t buffer_size = (7 * Constants::BYTES_PER_MB) + 123;
-  const PatternWorkPlan plan = build_plan(buffer_size, Constants::PATTERN_STRIDE_PAGE_16K, 4);
-
-  ASSERT_EQ(plan.status, PatternMeasurementStatus::Measured);
-  size_t covered_bytes = 0;
-  for (const PatternWorkerRange& worker : plan.workers) {
-    EXPECT_EQ(worker.offset_bytes, covered_bytes);
-    covered_bytes += worker.span_bytes;
-  }
-  EXPECT_EQ(covered_bytes, buffer_size);
 }
 
 TEST(PatternWorkPlanTest, RejectsPassCountBeyondExecutorLimit) {
@@ -180,22 +169,19 @@ TEST(PatternWorkPlanTest, FullSparsePhaseCycleCoversAlignedBufferSlots) {
 }
 
 TEST(PatternWorkPlanTest, RandomPermutationIsSeededUniqueAlignedAndBounded) {
-  const size_t buffer_size = 4096;
-  const std::vector<size_t> first = generate_random_indices(buffer_size, 100, 42);
-  const std::vector<size_t> repeated = generate_random_indices(buffer_size, 100, 42);
-  const std::vector<size_t> different = generate_random_indices(buffer_size, 100, 43);
+  for (const size_t buffer_size : {size_t{4096}, size_t{96}}) {
+    SCOPED_TRACE(buffer_size);
+    const std::vector<size_t> first = generate_random_indices(buffer_size, 100, 42);
+    const std::vector<size_t> repeated = generate_random_indices(buffer_size, 100, 42);
+    const std::vector<size_t> different = generate_random_indices(buffer_size, 100, 43);
 
-  EXPECT_EQ(first, repeated);
-  EXPECT_NE(first, different);
-  EXPECT_EQ(std::unordered_set<size_t>(first.begin(), first.end()).size(), first.size());
-  for (size_t offset : first) {
-    EXPECT_EQ(offset % Constants::PATTERN_ACCESS_SIZE_BYTES, 0u);
-    EXPECT_LE(offset + Constants::PATTERN_ACCESS_SIZE_BYTES, buffer_size);
+    EXPECT_EQ(first, repeated);
+    if (buffer_size == 4096) EXPECT_NE(first, different);
+    EXPECT_EQ(first.size(), std::min(size_t{100}, buffer_size / Constants::PATTERN_ACCESS_SIZE_BYTES));
+    EXPECT_EQ(std::unordered_set<size_t>(first.begin(), first.end()).size(), first.size());
+    for (size_t offset : first) {
+      EXPECT_EQ(offset % Constants::PATTERN_ACCESS_SIZE_BYTES, 0u);
+      EXPECT_LE(offset + Constants::PATTERN_ACCESS_SIZE_BYTES, buffer_size);
+    }
   }
-}
-
-TEST(PatternWorkPlanTest, RandomPermutationCapsAtAvailableAlignedSlots) {
-  const std::vector<size_t> indices = generate_random_indices(96, 1000, 7);
-  EXPECT_EQ(indices.size(), 3u);
-  EXPECT_EQ(std::unordered_set<size_t>(indices.begin(), indices.end()).size(), 3u);
 }

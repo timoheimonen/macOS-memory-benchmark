@@ -521,17 +521,6 @@ uint32_t llm_metal_paged_pattern_word(uint64_t seed, uint64_t layer_index,
                                       uint64_t physical_block,
                                       uint64_t block_word_index) noexcept;
 
-/** Return one deterministic decode append word in the pool-address domain. */
-uint32_t llm_metal_decode_append_word(uint64_t scenario_seed, uint64_t work_unit, uint64_t layer_index,
-                                      uint64_t batch_index, uint64_t absolute_word_index,
-                                      LlmMetalResourcePool pool) noexcept;
-
-/** Return one deterministic prefill full-prompt write word. */
-uint32_t llm_metal_prefill_write_word(
-    uint64_t scenario_seed, uint64_t work_unit, uint64_t layer_index,
-    uint64_t batch_index, uint64_t absolute_word_index,
-    LlmMetalResourcePool pool) noexcept;
-
 /** Calculate expected timed W/K/V accumulators without reading resource bytes. */
 LlmMetalChecksumOracle calculate_llm_metal_decode_contiguous_checksum(
     const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan& scenario_plan) noexcept;
