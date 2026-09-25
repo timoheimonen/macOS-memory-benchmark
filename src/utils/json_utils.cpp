@@ -23,16 +23,13 @@
  * @brief JSON utility function implementations
  *
  * Provides implementations for JSON-related utility functions including
- * statistical calculations, JSON parsing from strings and files with
- * comprehensive error handling and validation.
+ * statistical calculations and UTC timestamp formatting.
  */
 
 #include "json_utils.h"
 
 #include <chrono>
 #include <ctime>
-#include <filesystem>
-#include <fstream>
 #include <iomanip>
 #include <sstream>
 
@@ -76,77 +73,4 @@ nlohmann::json calculate_json_statistics(const std::vector<double>& values) {
       statistics.median_absolute_deviation;
 
   return json_statistics;
-}
-
-// Parse JSON from a string with validation
-// Returns true on success, false on error
-// On error, error_message is populated with a descriptive error message
-bool parse_json_from_string(const std::string& json_string, nlohmann::json& result, std::string& error_message) {
-  error_message.clear();
-  if (json_string.empty()) {
-    error_message = "Empty JSON string";
-    return false;
-  }
-  
-  try {
-    result = nlohmann::json::parse(json_string);
-    return true;
-  } catch (const nlohmann::json::parse_error& e) {
-    std::ostringstream oss;
-    oss << "JSON parse error at position " << e.byte << ": " << e.what();
-    error_message = oss.str();
-    return false;
-  } catch (const nlohmann::json::exception& e) {
-    std::ostringstream oss;
-    oss << "JSON exception: " << e.what();
-    error_message = oss.str();
-    return false;
-  } catch (const std::exception& e) {
-    std::ostringstream oss;
-    oss << "Unexpected error during JSON parsing: " << e.what();
-    error_message = oss.str();
-    return false;
-  }
-}
-
-// Parse JSON from a file with validation
-// Returns true on success, false on error
-// On error, error_message is populated with a descriptive error message
-bool parse_json_from_file(const std::string& file_path, nlohmann::json& result, std::string& error_message) {
-  error_message.clear();
-  std::filesystem::path path(file_path);
-  
-  // Check if file exists
-  if (!std::filesystem::exists(path)) {
-    error_message = "File does not exist: " + file_path;
-    return false;
-  }
-  
-  // Check if it's a regular file
-  if (!std::filesystem::is_regular_file(path)) {
-    error_message = "Path is not a regular file: " + file_path;
-    return false;
-  }
-  
-  // Try to open the file
-  std::ifstream file(path);
-  if (!file.is_open()) {
-    std::ostringstream oss;
-    oss << "Failed to open file: " << file_path;
-    error_message = oss.str();
-    return false;
-  }
-  
-  // Read file content
-  std::ostringstream content;
-  content << file.rdbuf();
-  file.close();
-  
-  if (content.str().empty()) {
-    error_message = "File is empty: " + file_path;
-    return false;
-  }
-  
-  // Parse JSON from file content
-  return parse_json_from_string(content.str(), result, error_message);
 }

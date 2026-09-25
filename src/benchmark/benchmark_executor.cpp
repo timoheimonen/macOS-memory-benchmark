@@ -287,7 +287,6 @@ int prepare_cache_latency_buffers(BenchmarkConfig& config, BenchmarkBuffers& buf
                                config.custom_buffer_size,
                                config.latency_stride_bytes,
                                config.latency_tlb_locality_bytes,
-                               nullptr,
                                config.latency_chain_mode,
                                derive_benchmark_seed(config.benchmark_seed,
                                                      kSeedDomainCustomLatency));
@@ -303,7 +302,6 @@ int prepare_cache_latency_buffers(BenchmarkConfig& config, BenchmarkBuffers& buf
                             config.l1_buffer_size,
                             config.latency_stride_bytes,
                             config.latency_tlb_locality_bytes,
-                            nullptr,
                             config.latency_chain_mode,
                             derive_benchmark_seed(config.benchmark_seed,
                                                   kSeedDomainL1Latency)) != EXIT_SUCCESS) {
@@ -321,7 +319,6 @@ int prepare_cache_latency_buffers(BenchmarkConfig& config, BenchmarkBuffers& buf
                             config.l2_buffer_size,
                             config.latency_stride_bytes,
                             config.latency_tlb_locality_bytes,
-                            nullptr,
                             config.latency_chain_mode,
                             derive_benchmark_seed(config.benchmark_seed,
                                                   kSeedDomainL2Latency)) != EXIT_SUCCESS) {
@@ -352,7 +349,6 @@ int prepare_main_memory_latency_buffer(BenchmarkConfig& config, BenchmarkBuffers
                              config.buffer_size,
                              config.latency_stride_bytes,
                              config.latency_tlb_locality_bytes,
-                             nullptr,
                              config.latency_chain_mode,
                              derive_benchmark_seed(config.benchmark_seed,
                                                    kSeedDomainMainLatency));
@@ -443,8 +439,7 @@ void run_paired_locality_comparison(void* buffer,
     const LatencyChainMode mode = use_locality
                                       ? LatencyChainMode::RandomInBoxRandomBox
                                       : LatencyChainMode::GlobalRandom;
-    if (setup_latency_chain(buffer, buffer_size, stride_bytes, locality_bytes,
-                            nullptr, mode, seed) != EXIT_SUCCESS) {
+    if (setup_latency_chain(buffer, buffer_size, stride_bytes, locality_bytes, mode, seed) != EXIT_SUCCESS) {
       return false;
     }
     show_progress();
@@ -1046,14 +1041,6 @@ BenchmarkResults run_single_benchmark_loop(BenchmarkConfig& config,
           test_hooks->fail_phase_preparation(enabled_phase.name)) {
         throw std::runtime_error(
             Messages::benchmark_reason_prepare_failed(enabled_phase.name));
-      }
-      if (test_hooks != nullptr && test_hooks->fail_latency_chain_setup &&
-          (enabled_phase.phase == Phase::CacheLatency ||
-           enabled_phase.phase == Phase::MainLatency) &&
-          test_hooks->fail_latency_chain_setup(enabled_phase.name)) {
-        throw std::runtime_error(
-            Messages::benchmark_reason_latency_chain_setup_failed(
-                enabled_phase.name));
       }
       switch (enabled_phase.phase) {
         case Phase::MainBandwidth: {

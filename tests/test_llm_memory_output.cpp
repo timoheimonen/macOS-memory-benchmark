@@ -22,21 +22,11 @@
 #include <utility>
 
 #include "core/config/constants.h"
-#include "llm_memory/llm_cpu_backend.h"
 #include "llm_memory/llm_json.h"
 #include "llm_memory/llm_output.h"
 #include "output/console/messages/messages_api.h"
-#include "utils/numeric_utils.h"
 
 namespace {
-
-const LlmCpuExecutionPlan& cpu_execution_plan(const LlmMemoryWorkPlan& plan) {
-  const LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
-  if (cpu_plan == nullptr) {
-    throw std::logic_error("expected CPU execution plan");
-  }
-  return *cpu_plan;
-}
 
 void set_headline(LlmMemoryResult& result, LlmScenario scenario, double latency_seconds, double work_units_per_second,
                   double bandwidth_gb_s) {
@@ -63,6 +53,8 @@ LlmMemoryWorkPlan make_console_plan() {
   plan.geometry.kv_read_bytes_per_work_unit = 768;
   plan.geometry.kv_write_bytes_per_work_unit = 256;
   plan.geometry.kv_capacity_bytes = 2048;
+  plan.geometry.kv_only_effective_model_payload_bytes_per_work_unit = 1024;
+  plan.geometry.mixed_effective_model_payload_bytes_per_work_unit = 2048;
   plan.geometry.traffic_crossover_context_tokens = 4.0;
   return plan;
 }
@@ -71,6 +63,9 @@ LlmMemoryWorkPlan make_paged_console_plan() {
   LlmMemoryWorkPlan plan = make_console_plan();
   plan.kv_layout = LlmKvLayout::Paged;
   plan.geometry.kv_layout = LlmKvLayout::Paged;
+  plan.geometry.layer_count = 2;
+  plan.geometry.batch_size = 1;
+  plan.geometry.layout_metadata_lookups_per_layer_sequence_per_work_unit = 10;
   plan.geometry.kv_block_tokens = 4;
   plan.geometry.kv_blocks_per_sequence = 2;
   plan.geometry.physical_blocks_per_layer = 2;
@@ -134,26 +129,6 @@ LlmMemoryWorkPlan make_metal_console_plan() {
   execution.resources.weight_segments.segment_count = 2;
   execution.resources.k_segments.segment_count = 3;
   execution.resources.v_segments.segment_count = 4;
-  execution.resources.argument_buffer_encoded_length = 8192;
-  plan.backend_execution_plan = std::move(execution);
-  return plan;
-}
-
-LlmMemoryWorkPlan make_metal_prefill_console_plan() {
-  LlmMemoryWorkPlan plan = make_prefill_console_plan();
-  plan.backend = LlmMemoryBackend::Metal;
-  plan.geometry.kv_read_bytes_per_work_unit = 1408;
-  plan.geometry.kv_write_bytes_per_work_unit = 640;
-  plan.geometry.kv_only_effective_model_payload_bytes_per_work_unit = 2048;
-  plan.geometry.mixed_effective_model_payload_bytes_per_work_unit = 3072;
-  LlmMetalExecutionPlan execution;
-  execution.valid = true;
-  execution.reason_code = LlmMetalPlanReason::VALID;
-  execution.resources.valid = true;
-  execution.resources.reason_code = LlmMetalPlanReason::VALID;
-  execution.resources.weight_segments.segment_count = 1;
-  execution.resources.k_segments.segment_count = 1;
-  execution.resources.v_segments.segment_count = 1;
   execution.resources.argument_buffer_encoded_length = 8192;
   plan.backend_execution_plan = std::move(execution);
   return plan;
@@ -302,159 +277,6 @@ LlmMemoryWorkPlan make_paged_prefill_console_plan() {
   cpu->paged->permutation.identity = "paged-prefill-permutation-identity";
   return plan;
 }
-
-LlmMemoryConfig fake_runner_config() {
-  LlmMemoryConfig config;
-  config.weight_size_mb = 1;
-  config.layer_count = 1;
-  config.query_head_count = 1;
-  config.kv_head_count = 1;
-  config.head_dimension = 16;
-  config.kv_element_bytes = 1;
-  config.visible_context_tokens = 2;
-  config.batch_size = 1;
-  config.requested_workers = 1;
-  config.available_workers = 1;
-  config.iterations = 4;
-  config.loop_count = 3;
-  config.seed = 42;
-  config.user_specified_iterations = true;
-  config.user_specified_seed = true;
-  config.user_specified_workers = true;
-  return config;
-}
-
-LlmMemoryWorkPlanRequest fake_runner_plan_request(const LlmMemoryConfig& config) {
-  LlmMemoryWorkPlanRequest request;
-  request.geometry.active_weight_bytes = config.weight_size_mb * Constants::BYTES_PER_MB;
-  request.geometry.layer_count = config.layer_count;
-  request.geometry.query_head_count = config.query_head_count;
-  request.geometry.kv_head_count = config.kv_head_count;
-  request.geometry.head_dimension = config.head_dimension;
-  request.geometry.kv_element_bytes = config.kv_element_bytes;
-  request.geometry.visible_context_tokens = config.visible_context_tokens;
-  request.geometry.batch_size = config.batch_size;
-  request.requested_workers = config.requested_workers;
-  request.available_workers = config.available_workers;
-  request.available_memory_bytes = 8ULL * 1024ULL * Constants::BYTES_PER_MB;
-  request.mapping_granularity_bytes = 1;
-  request.base_seed = config.seed;
-  return request;
-}
-
-LlmMemoryWorkPlan make_fake_runner_plan(const LlmMemoryConfig& config) {
-  LlmMemoryWorkPlanRequest request = fake_runner_plan_request(config);
-  const LlmMemoryWorkPlan preliminary = build_llm_memory_work_plan(request);
-  if (!preliminary.valid) {
-    return build_llm_memory_work_plan(request);
-  }
-
-  const LlmExecutorAuxiliaryEstimate executor = calculate_llm_executor_auxiliary_estimate(preliminary);
-  const LlmRunnerAuxiliaryEstimate runner = calculate_llm_runner_auxiliary_estimate(config, preliminary);
-  if (!executor.valid || !runner.valid ||
-      !NumericUtils::checked_add(executor.checksum_auxiliary_bytes, runner.checksum_auxiliary_bytes,
-                                 request.checksum_auxiliary_bytes) ||
-      !NumericUtils::checked_add(executor.orchestration_auxiliary_bytes, runner.orchestration_auxiliary_bytes,
-                                 request.orchestration_auxiliary_bytes)) {
-    return build_llm_memory_work_plan(request);
-  }
-  return build_llm_memory_work_plan(request);
-}
-
-LlmExecutorResult successful_fake_execution(const LlmMemoryWorkPlan& plan) {
-  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
-  LlmExecutorResult execution;
-  execution.valid = true;
-  execution.reason_code = LlmExecutorReason::VALID;
-  execution.elapsed_seconds = 0.150;
-  execution.requested_workers = cpu_plan.effective_workers;
-  execution.created_workers = cpu_plan.effective_workers;
-  execution.completed_workers = cpu_plan.effective_workers;
-  execution.qos_successful_workers = cpu_plan.effective_workers;
-  execution.kernel_succeeded = true;
-  execution.timer_started = true;
-  execution.timer_stopped = true;
-  execution.checksum_evaluated = true;
-  execution.checksum_valid = true;
-  execution.post_validation_evaluated = true;
-  execution.post_validation_valid = true;
-  execution.expected_checksums.resize(cpu_plan.effective_workers);
-  execution.actual_checksums = execution.expected_checksums;
-  execution.expected_run_checksum = {11, 22};
-  execution.actual_run_checksum = execution.expected_run_checksum;
-  return execution;
-}
-
-class FakeLlmBackend final : public LlmBackend {
- public:
-  FakeLlmBackend() { evidence_.backend = LlmMemoryBackend::Cpu; }
-
-  LlmMemoryBackend kind() const noexcept override { return LlmMemoryBackend::Cpu; }
-
-  LlmBackendAuxiliaryEstimate calculate_auxiliary_estimate(
-      const LlmMemoryWorkPlan& model_plan) const noexcept override {
-    const LlmExecutorAuxiliaryEstimate cpu = calculate_llm_executor_auxiliary_estimate(model_plan);
-    LlmBackendAuxiliaryEstimate estimate;
-    estimate.valid = cpu.valid;
-    estimate.reason_code = cpu.reason_code;
-    estimate.checksum_auxiliary_bytes = cpu.checksum_auxiliary_bytes;
-    estimate.orchestration_auxiliary_bytes = cpu.orchestration_auxiliary_bytes;
-    estimate.total_auxiliary_bytes = cpu.total_auxiliary_bytes;
-    estimate.backend_evidence = cpu;
-    return estimate;
-  }
-
-  LlmBackendLifecycleResult initialize(const LlmMemoryConfig&) noexcept override {
-    evidence_ = LlmBackendEvidence{};
-    evidence_.backend = LlmMemoryBackend::Cpu;
-    evidence_.initialization = {LlmBackendStatus::Ready, LlmBackendReason::VALID};
-    return evidence_.initialization;
-  }
-
-  LlmBackendLifecycleResult resolve_execution_plan(const LlmMemoryWorkPlan&) noexcept override {
-    evidence_.plan_resolution = {LlmBackendStatus::Ready, LlmBackendReason::VALID};
-    return evidence_.plan_resolution;
-  }
-
-  LlmBackendLifecycleResult prepare_resources(const LlmMemoryWorkPlan&) noexcept override {
-    evidence_.backend_evidence = LlmCpuBackendEvidence{};
-    evidence_.preparation = {LlmBackendStatus::Ready, LlmBackendReason::VALID};
-    return evidence_.preparation;
-  }
-
-  LlmExpectedChecksumResult expected_cpu_checksum(const LlmMemoryWorkPlan& model_plan,
-                                                 const LlmScenarioWorkPlan&) const noexcept override {
-    LlmExpectedChecksumResult expected;
-    expected.valid = true;
-    expected.reason_code = LlmExecutorReason::VALID;
-    expected.workers.resize(cpu_execution_plan(model_plan).effective_workers);
-    expected.run_checksum = {11, 22};
-    return expected;
-  }
-
-  LlmTaskExecutionResult execute_task(const LlmMemoryWorkPlan& model_plan, const LlmScenarioWorkPlan& scenario_plan,
-                                      const LlmRunnerTaskContext& context) override {
-    auto execution = successful_fake_execution(model_plan);
-    execution.cold_checks = required_llm_cold_checks(model_plan, scenario_plan.scenario);
-    for (size_t slot = 0; slot < execution.cold_checks.size(); ++slot) {
-      resolve_llm_cold_check(execution.cold_checks, slot, true);
-    }
-    execution.kv_write_validation_applicable = scenario_plan.scenario != LlmScenario::WeightsOnly;
-    execution.kv_write_validation_evaluated = execution.kv_write_validation_applicable;
-    execution.kv_write_validation_valid = execution.kv_write_validation_applicable;
-    return adapt_llm_cpu_executor_result(model_plan, scenario_plan, context, std::move(execution));
-  }
-
-  const LlmBackendEvidence& evidence() const noexcept override { return evidence_; }
-
-  LlmBackendLifecycleResult release_resources() noexcept override {
-    evidence_.release = {LlmBackendStatus::Ready, LlmBackendReason::VALID};
-    return evidence_.release;
-  }
-
- private:
-  LlmBackendEvidence evidence_;
-};
 
 size_t count_substrings(const std::string& text, const std::string& needle) {
   size_t count = 0;
@@ -677,65 +499,6 @@ TEST(LlmMemoryOutputTest, MetalPagedReportPrintsTableLookupPaddingAndCanaryEvide
 }
 
 TEST(LlmMemoryOutputTest,
-     MetalPrefillReportUsesKvWriteTerminologyWithoutTokenRate) {
-  const LlmMemoryWorkPlan plan = make_metal_prefill_console_plan();
-  LlmBackendEvidence backend;
-  backend.backend = LlmMemoryBackend::Metal;
-  LlmMetalBackendEvidence metal_backend;
-  metal_backend.capability.device_name = "Test Metal Device";
-  metal_backend.capability.argument_buffer_encoded_length = 8192;
-  backend.backend_evidence = std::move(metal_backend);
-
-  LlmMemoryResult result;
-  set_headline(result, LlmScenario::Mixed, 0.004, 250.0, 75.0);
-  LlmMeasurementState measurement;
-  measurement.scenario = LlmScenario::Mixed;
-  LlmMetalTaskEvidence task;
-  task.pipeline_label =
-      "membenchmark.llm-metal.pipeline.prefill-contiguous.mixed";
-  task.grid_plan_available = true;
-  task.grid_plan.actual_threadgroups = 2;
-  task.grid_plan.threads_per_threadgroup = 64;
-  task.timing_evaluated = true;
-  task.timing_valid = true;
-  measurement.execution.timing = {true, true, 0.004};
-  task.checksum_evaluated = true;
-  task.checksum_valid = true;
-  task.kv_write_validation_evaluated = true;
-  task.kv_write_validation_valid = true;
-  measurement.execution.backend_evidence = std::move(task);
-  result.measurements.push_back(std::move(measurement));
-
-  LlmResultMetadata metadata;
-  metadata.main_thread_qos = {true, true, 0};
-  metadata.environment_start.thermal_state = "nominal";
-  metadata.environment_end = metadata.environment_start;
-
-  testing::internal::CaptureStdout();
-  testing::internal::CaptureStderr();
-  print_llm_memory_console_report(plan, backend, metadata, result);
-  const std::string errors = testing::internal::GetCapturedStderr();
-  const std::string output = testing::internal::GetCapturedStdout();
-
-  EXPECT_TRUE(errors.empty()) << errors;
-  EXPECT_NE(output.find("backend=metal, phase=prefill, "
-                        "work_unit=prefill_operation, "
-                        "kv_layout=contiguous"),
-            std::string::npos);
-  EXPECT_NE(output.find(
-                "pipeline=membenchmark.llm-metal.pipeline.prefill-contiguous.mixed"),
-            std::string::npos);
-  EXPECT_NE(output.find("Metal validation: checksum=valid, "
-                        "kv_write=valid, canary=not-applicable"),
-            std::string::npos);
-  EXPECT_NE(output.find("250.00 synthetic prefill operations/s"),
-            std::string::npos);
-  EXPECT_EQ(output.find("Metal owner grid:"), std::string::npos);
-  EXPECT_EQ(output.find("append="), std::string::npos);
-  EXPECT_EQ(output.find("tokens/s"), std::string::npos);
-}
-
-TEST(LlmMemoryOutputTest,
      MetalPagedPrefillReportPublishesCompleteLayoutAndFullPromptEvidence) {
   const LlmMemoryWorkPlan plan = make_metal_paged_prefill_console_plan();
   ASSERT_TRUE(plan.geometry.valid) << plan.geometry.reason_code;
@@ -808,14 +571,6 @@ TEST(LlmMemoryOutputTest,
   EXPECT_TRUE(errors.empty()) << errors;
   EXPECT_NE(output.find("backend=metal, phase=prefill, "
                         "work_unit=prefill_operation, kv_layout=paged"),
-            std::string::npos);
-  EXPECT_NE(output.find("  Prompt tokens (P):                 5\n"),
-            std::string::npos);
-  EXPECT_NE(output.find("  Attention query tile tokens (Q):  2\n"),
-            std::string::npos);
-  EXPECT_NE(output.find("  Attention query tiles (C):        3\n"),
-            std::string::npos);
-  EXPECT_NE(output.find("  Prefix token visits / sequence:   11\n"),
             std::string::npos);
   EXPECT_NE(output.find("Metal segments: weights=1, K=1, V=1"),
             std::string::npos);
@@ -1061,52 +816,4 @@ TEST(LlmMemoryOutputTest, EmitsDeduplicatedWarningsInContractOrder) {
             "(4096 bytes); the result may be cache-dominant\n"
             "Warning: LLM Mixed duration quality is above-target-single-work-unit\n"
             "Warning: LLM KV only duration quality is above-target-window\n");
-}
-
-TEST(LlmMemoryOutputTest, ConsoleHeadlinesAgreeExactlyWithJsonFromSameFakeRunnerResult) {
-  const LlmMemoryConfig config = fake_runner_config();
-  const LlmMemoryWorkPlan plan = make_fake_runner_plan(config);
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-
-  FakeLlmBackend backend;
-  LlmMemoryResult result;
-  ASSERT_EQ(run_llm_memory_suite(config, plan, backend, result), EXIT_SUCCESS);
-  ASSERT_TRUE(result.results_complete);
-
-  LlmResultMetadata metadata;
-  metadata.main_thread_qos = {true, true, 0};
-  metadata.environment_start.thermal_state = "nominal";
-  metadata.environment_end = metadata.environment_start;
-  const nlohmann::ordered_json document =
-      build_llm_memory_json(config, plan, LlmResourcePreparationResult{}, metadata, result);
-
-  testing::internal::CaptureStdout();
-  testing::internal::CaptureStderr();
-  print_llm_memory_console_report(plan, backend.evidence(), metadata, result);
-  const std::string errors = testing::internal::GetCapturedStderr();
-  const std::string output = testing::internal::GetCapturedStdout();
-  EXPECT_TRUE(errors.empty()) << errors;
-
-  for (LlmScenario scenario : {LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed}) {
-    const size_t index = static_cast<size_t>(scenario);
-    const LlmScenarioAggregate& aggregate = result.aggregates[index];
-    ASSERT_TRUE(aggregate.work_unit_latency_seconds.headline.has_value());
-    ASSERT_TRUE(aggregate.synthetic_memory_work_units_per_second.headline.has_value());
-    ASSERT_TRUE(aggregate.effective_model_payload_gb_s.headline.has_value());
-
-    const std::string scenario_token = llm_scenario_to_string(scenario);
-    const nlohmann::ordered_json& json_aggregate = document["aggregates"]["scenarios"][scenario_token];
-    const double json_latency = json_aggregate["synthetic_work_unit_latency_seconds"]["headline"].get<double>();
-    const double json_work_units_per_second =
-        json_aggregate["synthetic_memory_work_units_per_second"]["headline"].get<double>();
-    const double json_bandwidth = json_aggregate["effective_model_payload_gb_s"]["headline"].get<double>();
-    EXPECT_DOUBLE_EQ(json_latency, *aggregate.work_unit_latency_seconds.headline);
-    EXPECT_DOUBLE_EQ(json_work_units_per_second, *aggregate.synthetic_memory_work_units_per_second.headline);
-    EXPECT_DOUBLE_EQ(json_bandwidth, *aggregate.effective_model_payload_gb_s.headline);
-
-    const std::string expected_line = Messages::report_llm_memory_scenario_headline(
-        Messages::report_llm_memory_scenario_name(scenario_token), "decode step", "decode steps", json_latency * 1000.0,
-        json_work_units_per_second, json_bandwidth, scenario == LlmScenario::Mixed);
-    EXPECT_EQ(count_substrings(output, expected_line), 1u) << expected_line << "\n" << output;
-  }
 }

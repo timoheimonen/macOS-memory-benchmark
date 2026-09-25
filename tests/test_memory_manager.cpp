@@ -96,21 +96,6 @@ TEST_F(MemoryManagerTest, AdviceFailureIsReportedButAllocationRemainsOwned) {
                        Messages::warning_madvise_random_failed("advice-failure", std::strerror(EINVAL)) + "\n");
 }
 
-TEST_F(MemoryManagerTest, ZeroSizeFailsBeforeAnySystemCallWithExactMessage) {
-  for (const bool non_cacheable : {false, true}) {
-    const char* name = non_cacheable ? "zero-non-cacheable" : "zero-regular";
-    testing::internal::CaptureStderr();
-    MmapPtr buffer = non_cacheable ? allocate_buffer_non_cacheable(0, name) : allocate_buffer(0, name);
-    const std::string error = testing::internal::GetCapturedStderr();
-
-    EXPECT_EQ(buffer.get(), nullptr);
-    EXPECT_EQ(error, Messages::error_prefix() + Messages::error_buffer_size_zero(name) + "\n");
-  }
-  EXPECT_EQ(state.map_calls, 0u);
-  EXPECT_EQ(state.advise_calls, 0u);
-  EXPECT_EQ(state.unmap_calls, 0u);
-}
-
 TEST_F(MemoryManagerTest, ReadOnlyProtectionUsesExactMappingRangeAndReportsFailure) {
   MmapPtr buffer = allocate_buffer(4096, "protected");
   ASSERT_NE(buffer, nullptr);

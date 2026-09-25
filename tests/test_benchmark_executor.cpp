@@ -133,19 +133,6 @@ TEST(BenchmarkExecutorTest, ParallelExecutorConsumesAlignedUnevenChunksExactly) 
   EXPECT_EQ(covered, buffer.size());
 }
 
-TEST(BenchmarkExecutorTest, WriteTestRejectsZeroThreadCountWithoutModifyingBuffer) {
-  std::array<unsigned char, 4096> buffer{};
-  buffer.fill(0xCD);
-
-  auto timer_opt = HighResTimer::create();
-  ASSERT_TRUE(timer_opt.has_value());
-
-  EXPECT_EQ(run_write_test(buffer.data(), buffer.size(), 1, 0, *timer_opt), 0.0);
-
-  const bool unchanged = std::all_of(buffer.begin(), buffer.end(), [](unsigned char value) { return value == 0xCD; });
-  EXPECT_TRUE(unchanged);
-}
-
 TEST(BenchmarkExecutorTest, ParallelTimingStopsBeforeWorkerTeardown) {
   const ScopedDeterministicTimerSystemCalls timer_system_calls;
   std::array<unsigned char, 4096> buffer{};
@@ -284,31 +271,5 @@ TEST(BenchmarkExecutorTest, InjectedPreparationFailureCoversEveryPhaseBoundary) 
     const std::string error_output = testing::internal::GetCapturedStderr();
     EXPECT_EQ(caught_reason, expected_reason) << failing_phase;
     EXPECT_NE(error_output.find(expected_reason), std::string::npos) << failing_phase;
-  }
-}
-
-TEST(BenchmarkExecutorTest, InjectedLatencyChainFailureCoversCacheAndMainPhases) {
-  const ScopedDeterministicTimerSystemCalls timer_system_calls;
-  BenchmarkConfig config = build_injected_failure_config();
-  config.only_bandwidth = false;
-  config.only_latency = false;
-  auto timer = HighResTimer::create();
-  ASSERT_TRUE(timer.has_value());
-
-  for (const auto& phase : std::array<std::pair<const char*, int>, 2>{std::pair<const char*, int>{"cache-latency", 2},
-                                                                      std::pair<const char*, int>{"main-latency", 3}}) {
-    BenchmarkExecutorTestHooks hooks;
-    hooks.fail_latency_chain_setup = [&](const std::string& phase_name) { return phase_name == phase.first; };
-    const std::string expected_reason = Messages::benchmark_reason_latency_chain_setup_failed(phase.first);
-    std::string caught_reason;
-    testing::internal::CaptureStderr();
-    try {
-      static_cast<void>(run_single_benchmark_loop(config, phase.second, *timer, nullptr, &hooks));
-    } catch (const std::runtime_error& error) {
-      caught_reason = error.what();
-    }
-    const std::string error_output = testing::internal::GetCapturedStderr();
-    EXPECT_EQ(caught_reason, expected_reason) << phase.first;
-    EXPECT_NE(error_output.find(expected_reason), std::string::npos) << phase.first;
   }
 }

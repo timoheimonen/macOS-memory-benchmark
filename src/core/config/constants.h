@@ -259,8 +259,6 @@ namespace Constants {
       "llm-kv-layout-geometry-v1";
   constexpr const char* LLM_KV_LAYOUT_PLAN_IDENTITY_VERSION =
       "llm-kv-layout-plan-v1";
-  constexpr const char* LLM_PAGED_DECODE_WORKLOAD_IDENTITY_VERSION =
-      "llm-paged-decode-workload-v1";
   constexpr const char* LLM_PAGED_CPU_EXECUTION_IDENTITY_VERSION =
       "llm-paged-cpu-execution-v1";
   constexpr const char* LLM_PAGED_METAL_EXECUTION_IDENTITY_VERSION =

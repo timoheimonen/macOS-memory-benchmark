@@ -1013,29 +1013,74 @@ TEST(LlmMemoryKernelIntegrationTest, AllCpuWeightSpansDetectBoundedReadAndWorkUn
 }
 
 TEST(LlmMemoryKernelIntegrationTest, SafeZeroNullAndInvalidTopLevelBoundariesReturnInitialStates) {
-  // A null output is the sole case where no initialized result can be stored.
-  llm_decode_memory_asm(nullptr, nullptr, 0, 0, 0, 0, nullptr);
-
-  alignas(16) std::array<uint8_t, 32> data{};
-  LlmLayerDescriptor layer{data.data(), data.size(), 0, 1, 0, 0};
-  LlmKvSequenceDescriptor sequence{data.data(), data.size(), data.data(), data.size(), data.data(),
-                                   0,           data.data(), 0,           0,           0};
-  const LlmWorkerChecksum initial = oracle_initial_worker();
-  const std::array<std::array<uint64_t, 5>, 6> cases = {{
-      {0, 0, 0, 0, 0},
-      {reinterpret_cast<uintptr_t>(&layer), 0, 1, 0, 1},
-      {0, reinterpret_cast<uintptr_t>(&sequence), 1, 1, 1},
-      {reinterpret_cast<uintptr_t>(&layer), 0, 1, 1, 2},
-      {reinterpret_cast<uintptr_t>(&layer), reinterpret_cast<uintptr_t>(&sequence), 1, 1, 0},
-      {reinterpret_cast<uintptr_t>(&layer), reinterpret_cast<uintptr_t>(&sequence), 1, 1, 4},
-  }};
-  for (const auto& test_case : cases) {
-    LlmWorkerChecksum actual;
-    std::memset(&actual, 0xA5, sizeof(actual));
-    llm_decode_memory_asm(reinterpret_cast<const LlmLayerDescriptor*>(test_case[0]),
-                          reinterpret_cast<const LlmKvSequenceDescriptor*>(test_case[1]), test_case[2], test_case[3],
-                          test_case[4], 123, &actual);
-    expect_worker_equal(actual, initial);
+  alignas(16) std::array<uint8_t, 33> weight{};
+  for (size_t byte = 0; byte < weight.size(); ++byte) weight[byte] = static_cast<uint8_t>((byte * 17 + 3) & 0xFF);
+  const auto weight_before = weight;
+  auto* const poison = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(1));
+  auto* const poison_table = reinterpret_cast<const uint32_t*>(static_cast<uintptr_t>(1));
+  const auto verify = [&](auto kernel, const auto& layer, const auto& owner, bool prefill) {
+    kernel(nullptr, nullptr, 0, 0, 0, 0, nullptr);
+    const LlmWorkerChecksum initial =
+        prefill ? LlmWorkerChecksum{oracle_initial(LlmChecksumComponent::Weight), {}, {}} : oracle_initial_worker();
+    struct Boundary {
+      bool layer;
+      bool owner;
+      uint64_t layers;
+      uint64_t work;
+      uint64_t flags;
+    };
+    const std::array<Boundary, 7> cases = {{{false, false, 0, 0, 0},
+                                            {false, true, 1, 1, kLlmScenarioFlagWeight},
+                                            {true, false, 0, 1, kLlmScenarioFlagWeight},
+                                            {true, false, 1, 0, kLlmScenarioFlagWeight},
+                                            {true, false, 1, 1, kLlmScenarioFlagKv},
+                                            {true, true, 1, 1, 0},
+                                            {true, true, 1, 1, 4}}};
+    for (size_t index = 0; index < cases.size(); ++index) {
+      SCOPED_TRACE(index);
+      const auto& row = cases[index];
+      LlmWorkerChecksum actual;
+      std::memset(&actual, 0xA5, sizeof(actual));
+      kernel(row.layer ? &layer : nullptr, row.owner ? &owner : nullptr, row.layers, row.work, row.flags, 123, &actual);
+      expect_worker_equal(actual, initial);
+    }
+    // Empty ownership must be checked before any nested table, pool, or span load.
+    LlmWorkerChecksum zero_owned{};
+    kernel(&layer, &owner, 1, 2, kLlmScenarioFlagKv, 99, &zero_owned);
+    expect_worker_equal(zero_owned, initial);
+    LlmWorkerChecksum expected = initial;
+    oracle_absorb(expected.weight, weight.data(), weight.size());
+    oracle_absorb(expected.weight, weight.data(), weight.size());
+    LlmWorkerChecksum actual{};
+    kernel(&layer, reinterpret_cast<decltype(&owner)>(static_cast<uintptr_t>(1)), 1, 2, kLlmScenarioFlagWeight,
+           0x0123456789ABCDEFULL, &actual);
+    expect_worker_equal(actual, expected);
+    EXPECT_EQ(weight, weight_before);
+  };
+  const LlmLayerDescriptor decode{weight.data(), weight.size(), 0, 1, 0, 0};
+  const LlmKvSequenceDescriptor decode_owner{poison, 0, poison, 0, poison, 0, poison, 0, 0, 0};
+  const LlmPagedLayerDescriptor paged{weight.data(), weight.size(), 0, 1, 0, 0};
+  const LlmPagedKvAssignmentDescriptor paged_owner{poison_table, poison, poison, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+  const LlmPrefillLayerDescriptor prefill{weight.data(), weight.size(), 0, 1, 4, 0};
+  const LlmPrefillKvSequenceDescriptor prefill_owner{poison, poison, 0, 0, 5, 2, 33, 4, 0, 0};
+  const LlmPagedPrefillLayerDescriptor paged_prefill{weight.data(), weight.size(), 0, 1, 4, 0};
+  const LlmPagedPrefillKvAssignmentDescriptor paged_prefill_owner{poison_table, poison, poison, 0, 0,  3, 2,
+                                                                  66,           33,     5,      2, 33, 4, 0};
+  {
+    SCOPED_TRACE("decode-contiguous");
+    verify(llm_decode_memory_asm, decode, decode_owner, false);
+  }
+  {
+    SCOPED_TRACE("decode-paged");
+    verify(llm_decode_memory_paged_asm, paged, paged_owner, false);
+  }
+  {
+    SCOPED_TRACE("prefill-contiguous");
+    verify(llm_prefill_memory_asm, prefill, prefill_owner, true);
+  }
+  {
+    SCOPED_TRACE("prefill-paged");
+    verify(llm_prefill_memory_paged_asm, paged_prefill, paged_prefill_owner, true);
   }
 }
 
@@ -1168,149 +1213,53 @@ TEST(LlmMemoryKernelIntegrationTest, PreservesIntegerAndFullVectorCalleeSavedReg
   expect_worker_equal(output, expected.checksum);
 }
 
-TEST(LlmMemoryKernelIntegrationTest, OneWorkerProductionExecutorRealAsmSmokeMatchesIndependentOracle) {
-  const LlmMemoryWorkPlan plan = build_real_executor_plan({257, 2, 4, 2, 7, 1, 3, 2}, 1);
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  const LlmCpuExecutionPlan* cpu_plan = get_llm_cpu_execution_plan(plan);
-  ASSERT_NE(cpu_plan, nullptr);
-  ASSERT_EQ(cpu_plan->effective_workers, 1u);
-  LlmExecutionResources resources;
-  const LlmResourcePreparationResult prepared = prepare_llm_execution_resources(plan, resources);
-  ASSERT_TRUE(prepared.valid) << prepared.reason_code;
-  const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(plan, LlmScenario::Mixed, 2, true);
-  ASSERT_TRUE(scenario.valid) << scenario.reason_code;
-  const OracleWorkerRun independent =
-      oracle_worker_run(resources.worker_layers(0),
-                        cpu_plan->layer_descriptors_per_worker,
-                        resources.worker_sequences(0), scenario.work_units,
-                        kLlmScenarioFlagMixed, scenario.scenario_seed);
-  auto timer = HighResTimer::create();
-  ASSERT_TRUE(timer.has_value());
-  const LlmExecutorResult result =
-      execute_llm_scenario(plan, scenario, resources, *timer, production_llm_kernel_adapter());
-  ASSERT_TRUE(result.valid) << result.reason_code;
-  EXPECT_EQ(result.reason_code, LlmExecutorReason::VALID);
-  EXPECT_TRUE(result.kernel_succeeded);
-  EXPECT_TRUE(result.checksum_valid);
-  EXPECT_TRUE(std::isfinite(result.elapsed_seconds));
-  EXPECT_GT(result.elapsed_seconds, 0.0);
-  EXPECT_EQ(result.created_workers, 1u);
-  EXPECT_EQ(result.completed_workers, 1u);
-  ASSERT_EQ(result.actual_checksums.size(), 1u);
-  expect_worker_equal(result.actual_checksums[0], independent.checksum);
-  EXPECT_EQ(result.actual_checksums[0].weight.exact_bytes_read, scenario.weight_read_bytes);
-  EXPECT_EQ(result.actual_checksums[0].k.exact_bytes_read + result.actual_checksums[0].v.exact_bytes_read,
-            scenario.kv_read_bytes);
-}
-
 TEST(LlmMemoryKernelIntegrationTest, MultiWorkerProductionExecutorRealAsmCoversExactPlannerRanges) {
-  const LlmMemoryWorkPlan plan = build_real_executor_plan({513, 2, 4, 2, 7, 1, 3, 2}, 3);
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  const LlmCpuExecutionPlan* cpu_plan = get_llm_cpu_execution_plan(plan);
-  ASSERT_NE(cpu_plan, nullptr);
-  ASSERT_EQ(cpu_plan->effective_workers, 3u);
-  LlmExecutionResources resources;
-  const LlmResourcePreparationResult prepared = prepare_llm_execution_resources(plan, resources);
-  ASSERT_TRUE(prepared.valid) << prepared.reason_code;
-  const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(plan, LlmScenario::Mixed, 2, true);
-  ASSERT_TRUE(scenario.valid) << scenario.reason_code;
+  for (size_t workers : {1u, 3u}) {
+    SCOPED_TRACE(workers);
+    const LlmMemoryWorkPlan plan = build_real_executor_plan({workers == 1 ? 257u : 513u, 2, 4, 2, 7, 1, 3, 2}, workers);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    const LlmCpuExecutionPlan* cpu_plan = get_llm_cpu_execution_plan(plan);
+    ASSERT_NE(cpu_plan, nullptr);
+    ASSERT_EQ(cpu_plan->effective_workers, workers);
+    LlmExecutionResources resources;
+    const LlmResourcePreparationResult prepared = prepare_llm_execution_resources(plan, resources);
+    ASSERT_TRUE(prepared.valid) << prepared.reason_code;
+    const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(plan, LlmScenario::Mixed, 2, true);
+    ASSERT_TRUE(scenario.valid) << scenario.reason_code;
 
-  std::vector<OracleWorkerRun> independent;
-  independent.reserve(cpu_plan->effective_workers);
-  for (size_t worker = 0; worker < cpu_plan->effective_workers; ++worker) {
-    independent.push_back(oracle_worker_run(
-        resources.worker_layers(worker),
-        cpu_plan->layer_descriptors_per_worker,
-        resources.worker_sequences(worker), scenario.work_units,
-        kLlmScenarioFlagMixed, scenario.scenario_seed));
+    std::vector<OracleWorkerRun> independent;
+    independent.reserve(cpu_plan->effective_workers);
+    for (size_t worker = 0; worker < cpu_plan->effective_workers; ++worker) {
+      independent.push_back(oracle_worker_run(resources.worker_layers(worker), cpu_plan->layer_descriptors_per_worker,
+                                              resources.worker_sequences(worker), scenario.work_units,
+                                              kLlmScenarioFlagMixed, scenario.scenario_seed));
+    }
+    auto timer = HighResTimer::create();
+    ASSERT_TRUE(timer.has_value());
+    const LlmExecutorResult result =
+        execute_llm_scenario(plan, scenario, resources, *timer, production_llm_kernel_adapter());
+    ASSERT_TRUE(result.valid) << result.reason_code;
+    EXPECT_TRUE(result.kernel_succeeded);
+    EXPECT_EQ(result.reason_code, LlmExecutorReason::VALID);
+    EXPECT_TRUE(std::isfinite(result.elapsed_seconds));
+    EXPECT_GT(result.elapsed_seconds, 0.0);
+    EXPECT_TRUE(result.checksum_valid);
+    EXPECT_EQ(result.created_workers, cpu_plan->effective_workers);
+    EXPECT_EQ(result.completed_workers, cpu_plan->effective_workers);
+    ASSERT_EQ(result.actual_checksums.size(), independent.size());
+
+    uint64_t weight_bytes = 0;
+    uint64_t kv_read_bytes = 0;
+    for (size_t worker = 0; worker < independent.size(); ++worker) {
+      SCOPED_TRACE(::testing::Message() << "worker=" << worker);
+      expect_worker_equal(result.actual_checksums[worker], independent[worker].checksum);
+      weight_bytes += result.actual_checksums[worker].weight.exact_bytes_read;
+      kv_read_bytes +=
+          result.actual_checksums[worker].k.exact_bytes_read + result.actual_checksums[worker].v.exact_bytes_read;
+    }
+    EXPECT_EQ(weight_bytes, scenario.weight_read_bytes);
+    EXPECT_EQ(kv_read_bytes, scenario.kv_read_bytes);
   }
-  auto timer = HighResTimer::create();
-  ASSERT_TRUE(timer.has_value());
-  const LlmExecutorResult result =
-      execute_llm_scenario(plan, scenario, resources, *timer, production_llm_kernel_adapter());
-  ASSERT_TRUE(result.valid) << result.reason_code;
-  EXPECT_TRUE(result.kernel_succeeded);
-  EXPECT_TRUE(result.checksum_valid);
-  EXPECT_EQ(result.created_workers, cpu_plan->effective_workers);
-  EXPECT_EQ(result.completed_workers, cpu_plan->effective_workers);
-  ASSERT_EQ(result.actual_checksums.size(), independent.size());
-
-  uint64_t weight_bytes = 0;
-  uint64_t kv_read_bytes = 0;
-  for (size_t worker = 0; worker < independent.size(); ++worker) {
-    SCOPED_TRACE(::testing::Message() << "worker=" << worker);
-    expect_worker_equal(result.actual_checksums[worker], independent[worker].checksum);
-    weight_bytes += result.actual_checksums[worker].weight.exact_bytes_read;
-    kv_read_bytes +=
-        result.actual_checksums[worker].k.exact_bytes_read + result.actual_checksums[worker].v.exact_bytes_read;
-  }
-  EXPECT_EQ(weight_bytes, scenario.weight_read_bytes);
-  EXPECT_EQ(kv_read_bytes, scenario.kv_read_bytes);
-}
-
-TEST(LlmMemoryKernelIntegrationTest,
-     PagedSafeZeroNullAndWeightsOnlyBoundariesDoNotTouchKvResources) {
-  // A null output must return before constructing a frame or touching inputs.
-  llm_decode_memory_paged_asm(nullptr, nullptr, 0, 0, 0, 0, nullptr);
-
-  alignas(16) std::array<uint8_t, 33> weight{};
-  for (size_t byte = 0; byte < weight.size(); ++byte) {
-    weight[byte] = static_cast<uint8_t>((byte * 17 + 3) & 0xFF);
-  }
-  LlmPagedLayerDescriptor layer{weight.data(), weight.size(), 0, 1, 0, 0};
-  LlmPagedKvAssignmentDescriptor zero_assignment{
-      reinterpret_cast<const uint32_t*>(static_cast<uintptr_t>(1)),
-      reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(1)),
-      reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(1)),
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-  };
-  const LlmWorkerChecksum initial = oracle_initial_worker();
-  const auto expect_initial = [&](const LlmPagedLayerDescriptor* layers,
-                                  const LlmPagedKvAssignmentDescriptor* assignments,
-                                  uint64_t layer_count, uint64_t work_units,
-                                  uint64_t flags) {
-    LlmWorkerChecksum actual;
-    std::memset(&actual, 0xA5, sizeof(actual));
-    llm_decode_memory_paged_asm(layers, assignments, layer_count, work_units,
-                                flags, 123, &actual);
-    expect_worker_equal(actual, initial);
-  };
-
-  expect_initial(nullptr, &zero_assignment, 1, 1, kLlmScenarioFlagWeight);
-  expect_initial(&layer, nullptr, 0, 1, kLlmScenarioFlagWeight);
-  expect_initial(&layer, nullptr, 1, 0, kLlmScenarioFlagWeight);
-  expect_initial(&layer, nullptr, 1, 1, kLlmScenarioFlagKv);
-  expect_initial(&layer, &zero_assignment, 1, 1, 0);
-  expect_initial(&layer, &zero_assignment, 1, 1, 4);
-
-  // owned_block_count==0 must be checked before any nested table or pool load.
-  LlmWorkerChecksum zero_owned{};
-  llm_decode_memory_paged_asm(&layer, &zero_assignment, 1, 1,
-                              kLlmScenarioFlagKv, 0, &zero_owned);
-  expect_worker_equal(zero_owned, initial);
-
-  // An invalid assignment base makes any accidental weights-only KV access
-  // fault, while the weight component must still absorb both work units.
-  const auto weight_before = weight;
-  LlmWorkerChecksum expected_weights_only = initial;
-  oracle_absorb(expected_weights_only.weight, weight.data(), weight.size());
-  oracle_absorb(expected_weights_only.weight, weight.data(), weight.size());
-  LlmWorkerChecksum weights_only{};
-  llm_decode_memory_paged_asm(
-      &layer,
-      reinterpret_cast<const LlmPagedKvAssignmentDescriptor*>(
-          static_cast<uintptr_t>(1)),
-      1, 2, kLlmScenarioFlagWeight, 0x0123456789ABCDEFULL, &weights_only);
-  expect_worker_equal(weights_only, expected_weights_only);
-  EXPECT_EQ(weight, weight_before);
 }
 
 TEST(LlmMemoryKernelIntegrationTest,
@@ -1500,58 +1449,6 @@ TEST(LlmMemoryKernelIntegrationTest,
 }
 
 TEST(LlmMemoryKernelIntegrationTest,
-     PrefillSafeBoundariesAndWeightsOnlyNeverTouchKvDescriptors) {
-  llm_prefill_memory_asm(nullptr, nullptr, 0, 0, 0, 0, nullptr);
-
-  alignas(16) std::array<uint8_t, 33> weight{};
-  for (size_t byte = 0; byte < weight.size(); ++byte) {
-    weight[byte] = static_cast<uint8_t>((byte * 17 + 3) & 0xFF);
-  }
-  LlmPrefillLayerDescriptor layer{weight.data(), weight.size(), 0, 1, 4, 0};
-  LlmPrefillKvSequenceDescriptor zero_owner{
-      reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(1)),
-      reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(1)),
-      0, 0, 5, 2, 33, 4, 0, 0};
-  const LlmWorkerChecksum initial{
-      oracle_initial(LlmChecksumComponent::Weight), {}, {}};
-  const auto expect_initial = [&](const LlmPrefillLayerDescriptor* layers,
-                                  const LlmPrefillKvSequenceDescriptor* owners,
-                                  uint64_t layer_count,
-                                  uint64_t operation_count,
-                                  uint64_t flags) {
-    LlmWorkerChecksum actual;
-    std::memset(&actual, 0xA5, sizeof(actual));
-    llm_prefill_memory_asm(layers, owners, layer_count, operation_count,
-                           flags, 123, &actual);
-    expect_worker_equal(actual, initial);
-  };
-
-  expect_initial(nullptr, &zero_owner, 1, 1, kLlmScenarioFlagWeight);
-  expect_initial(&layer, nullptr, 0, 1, kLlmScenarioFlagWeight);
-  expect_initial(&layer, nullptr, 1, 0, kLlmScenarioFlagWeight);
-  expect_initial(&layer, nullptr, 1, 1, kLlmScenarioFlagKv);
-  expect_initial(&layer, &zero_owner, 1, 1, 0);
-  expect_initial(&layer, &zero_owner, 1, 1, 4);
-
-  LlmWorkerChecksum zero_owned{};
-  llm_prefill_memory_asm(&layer, &zero_owner, 1, 2,
-                         kLlmScenarioFlagKv, 99, &zero_owned);
-  expect_worker_equal(zero_owned, initial);
-
-  LlmWorkerChecksum expected_weights_only = initial;
-  oracle_absorb(expected_weights_only.weight, weight.data(), weight.size());
-  oracle_absorb(expected_weights_only.weight, weight.data(), weight.size());
-  LlmWorkerChecksum weights_only{};
-  llm_prefill_memory_asm(
-      &layer,
-      reinterpret_cast<const LlmPrefillKvSequenceDescriptor*>(
-          static_cast<uintptr_t>(1)),
-      1, 2, kLlmScenarioFlagWeight, 0x0123456789ABCDEFULL,
-      &weights_only);
-  expect_worker_equal(weights_only, expected_weights_only);
-}
-
-TEST(LlmMemoryKernelIntegrationTest,
      PrefillQBoundariesAndExact31_32_33RecordsMatchByteOracle) {
   struct Case {
     size_t prompt_tokens;
@@ -1664,71 +1561,14 @@ TEST(LlmMemoryKernelIntegrationTest,
   expect_worker_equal(output, expected);
 }
 
-TEST(LlmMemoryKernelsIntegrationTest,
-     PagedPrefillSafeBoundariesAndWeightsOnlyNeverTouchKvDescriptors) {
-  llm_prefill_memory_paged_asm(nullptr, nullptr, 0, 0, 0, 0, nullptr);
-
-  alignas(16) std::array<uint8_t, 33> weight{};
-  for (size_t byte = 0; byte < weight.size(); ++byte) {
-    weight[byte] = static_cast<uint8_t>((byte * 17 + 3) & 0xFF);
-  }
-  LlmPagedPrefillLayerDescriptor layer{
-      weight.data(), weight.size(), 0, 1, 4, 0};
-  LlmPagedPrefillKvAssignmentDescriptor zero_owner{
-      reinterpret_cast<const uint32_t*>(static_cast<uintptr_t>(1)),
-      reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(1)),
-      reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(1)),
-      0, 0, 3, 2, 66, 33, 5, 2, 33, 4, 0};
-  const LlmWorkerChecksum initial{
-      oracle_initial(LlmChecksumComponent::Weight), {}, {}};
-  const auto expect_initial = [&](const LlmPagedPrefillLayerDescriptor* layers,
-                                  const LlmPagedPrefillKvAssignmentDescriptor*
-                                      assignments,
-                                  uint64_t layer_count,
-                                  uint64_t operation_count, uint64_t flags) {
-    LlmWorkerChecksum actual;
-    std::memset(&actual, 0xA5, sizeof(actual));
-    llm_prefill_memory_paged_asm(layers, assignments, layer_count,
-                                 operation_count, flags, 123, &actual);
-    expect_worker_equal(actual, initial);
-  };
-
-  expect_initial(nullptr, &zero_owner, 1, 1, kLlmScenarioFlagWeight);
-  expect_initial(&layer, nullptr, 0, 1, kLlmScenarioFlagWeight);
-  expect_initial(&layer, nullptr, 1, 0, kLlmScenarioFlagWeight);
-  expect_initial(&layer, nullptr, 1, 1, kLlmScenarioFlagKv);
-  expect_initial(&layer, &zero_owner, 1, 1, 0);
-  expect_initial(&layer, &zero_owner, 1, 1, 4);
-
-  // owned_block_count==0 must be checked before any inner pointer load.
-  LlmWorkerChecksum zero_owned{};
-  llm_prefill_memory_paged_asm(&layer, &zero_owner, 1, 2,
-                               kLlmScenarioFlagKv, 99, &zero_owned);
-  expect_worker_equal(zero_owned, initial);
-
-  LlmWorkerChecksum expected_weights_only = initial;
-  oracle_absorb(expected_weights_only.weight, weight.data(), weight.size());
-  oracle_absorb(expected_weights_only.weight, weight.data(), weight.size());
-  LlmWorkerChecksum weights_only{};
-  llm_prefill_memory_paged_asm(
-      &layer,
-      reinterpret_cast<const LlmPagedPrefillKvAssignmentDescriptor*>(
-          static_cast<uintptr_t>(1)),
-      1, 2, kLlmScenarioFlagWeight, 0x0123456789ABCDEFULL,
-      &weights_only);
-  expect_worker_equal(weights_only, expected_weights_only);
-}
-
-TEST(LlmMemoryKernelsIntegrationTest,
-     PagedPrefillGoldenGeometryAndExactRecordTailsMatchIndependentOracle) {
+TEST(LlmMemoryKernelIntegrationTest, PagedPrefillGoldenGeometryAndExactRecordTailsMatchIndependentOracle) {
   struct Case {
     size_t prompt_tokens;
     size_t query_tile_tokens;
     size_t block_tokens;
     size_t record_bytes;
   };
-  constexpr std::array<Case, 3> kCases = {
-      {{5, 2, 2, 31}, {7, 3, 2, 32}, {6, 2, 4, 33}}};
+  constexpr std::array<Case, 5> kCases = {{{5, 2, 2, 31}, {7, 3, 2, 32}, {6, 2, 4, 33}, {5, 1, 2, 31}, {5, 5, 2, 33}}};
   constexpr size_t kOperations = 2;
   constexpr size_t kLayer = 7;
   constexpr size_t kBatch = 3;
@@ -1758,28 +1598,33 @@ TEST(LlmMemoryKernelsIntegrationTest,
       table[logical_block] = static_cast<uint32_t>(
           physical_block_count - 1 - logical_block);
     }
+    const bool query_boundary =
+        test_case.query_tile_tokens == 1 || test_case.query_tile_tokens == test_case.prompt_tokens;
+    if (query_boundary) table = {3, 1, 4};
     const std::vector<uint32_t> table_before = table;
 
-    std::array<uint8_t, 41> weight{};
-    for (size_t byte = 0; byte < weight.size(); ++byte) {
-      weight[byte] = static_cast<uint8_t>((byte * 17 + 3) & 0xFF);
+    const size_t pool_bytes = physical_block_count * block_bytes + (query_boundary ? 0 : kCanaryBytes);
+    GuardedMapping weight(33);
+    GuardedMapping k_pool(pool_bytes);
+    GuardedMapping v_pool(pool_bytes);
+    ASSERT_TRUE(weight.valid());
+    ASSERT_TRUE(k_pool.valid());
+    ASSERT_TRUE(v_pool.valid());
+    for (size_t byte = 0; byte < 33; ++byte) weight.payload()[byte] = static_cast<uint8_t>((byte * 17 + 3) & 0xFF);
+    for (size_t byte = 0; byte < pool_bytes; ++byte) {
+      k_pool.payload()[byte] = static_cast<uint8_t>((byte * 19 + 5) & 0xFF);
+      v_pool.payload()[byte] = static_cast<uint8_t>((byte * 29 + 7) & 0xFF);
     }
-    const auto weight_before = weight;
-    std::vector<uint8_t> k_pool(
-        physical_block_count * block_bytes + kCanaryBytes);
-    std::vector<uint8_t> v_pool(
-        physical_block_count * block_bytes + kCanaryBytes);
-    for (size_t byte = 0; byte < k_pool.size(); ++byte) {
-      k_pool[byte] = static_cast<uint8_t>((byte * 19 + 5) & 0xFF);
-      v_pool[byte] = static_cast<uint8_t>((byte * 29 + 7) & 0xFF);
-    }
-    const std::vector<uint8_t> initial_k = k_pool;
-    const std::vector<uint8_t> initial_v = v_pool;
-    std::vector<uint8_t> expected_k = k_pool;
-    std::vector<uint8_t> expected_v = v_pool;
+    const std::vector<uint8_t> weight_before(weight.payload(), weight.payload() + 33);
+    const std::vector<uint8_t> weight_prefix(weight.accessible_begin(), weight.payload());
+    const std::vector<uint8_t> k_prefix(k_pool.accessible_begin(), k_pool.payload());
+    const std::vector<uint8_t> v_prefix(v_pool.accessible_begin(), v_pool.payload());
+    const std::vector<uint8_t> initial_k(k_pool.payload(), k_pool.payload() + pool_bytes);
+    const std::vector<uint8_t> initial_v(v_pool.payload(), v_pool.payload() + pool_bytes);
+    auto expected_k = initial_k;
+    auto expected_v = initial_v;
 
-    LlmPagedPrefillLayerDescriptor layer{
-        weight.data() + 1, 33, 0, 1, kLayer, 0};
+    LlmPagedPrefillLayerDescriptor layer{weight.payload(), 33, 0, 1, kLayer, 0};
     LlmPagedPrefillKvAssignmentDescriptor expected_assignment{
         table.data(), expected_k.data(), expected_v.data(),
         0, block_count, block_count, test_case.block_tokens, block_bytes,
@@ -1790,18 +1635,21 @@ TEST(LlmMemoryKernelsIntegrationTest,
         kLlmScenarioFlagMixed, kSeed);
     LlmPagedPrefillKvAssignmentDescriptor actual_assignment =
         expected_assignment;
-    actual_assignment.k_layer_pool = k_pool.data();
-    actual_assignment.v_layer_pool = v_pool.data();
+    actual_assignment.k_layer_pool = k_pool.payload();
+    actual_assignment.v_layer_pool = v_pool.payload();
 
     LlmWorkerChecksum actual{};
     llm_prefill_memory_paged_asm(
         &layer, &actual_assignment, 1, kOperations,
         kLlmScenarioFlagMixed, kSeed, &actual);
     expect_worker_equal(actual, expected);
-    EXPECT_EQ(weight, weight_before);
+    EXPECT_TRUE(std::equal(weight_before.begin(), weight_before.end(), weight.payload()));
+    EXPECT_TRUE(std::equal(weight_prefix.begin(), weight_prefix.end(), weight.accessible_begin()));
+    EXPECT_TRUE(std::equal(k_prefix.begin(), k_prefix.end(), k_pool.accessible_begin()));
+    EXPECT_TRUE(std::equal(v_prefix.begin(), v_prefix.end(), v_pool.accessible_begin()));
     EXPECT_EQ(table, table_before);
-    EXPECT_EQ(k_pool, expected_k);
-    EXPECT_EQ(v_pool, expected_v);
+    EXPECT_TRUE(std::equal(expected_k.begin(), expected_k.end(), k_pool.payload()));
+    EXPECT_TRUE(std::equal(expected_v.begin(), expected_v.end(), v_pool.payload()));
 
     size_t read_bytes_per_operation = 0;
     size_t spans_per_operation = 0;
@@ -1833,21 +1681,17 @@ TEST(LlmMemoryKernelsIntegrationTest,
       for (size_t byte = 0; byte < valid_bytes; ++byte) {
         const size_t logical_byte = logical_block * block_bytes + byte;
         const size_t physical_byte = physical_block * block_bytes + byte;
-        EXPECT_EQ(k_pool[physical_byte],
-                  oracle_prefill_byte(
-                      kSeed, kOperations - 1, kLayer, kBatch,
-                      LlmPrefillKvDomain::K, logical_byte));
-        EXPECT_EQ(v_pool[physical_byte],
-                  oracle_prefill_byte(
-                      kSeed, kOperations - 1, kLayer, kBatch,
-                      LlmPrefillKvDomain::V, logical_byte));
+        EXPECT_EQ(k_pool.payload()[physical_byte],
+                  oracle_prefill_byte(kSeed, kOperations - 1, kLayer, kBatch, LlmPrefillKvDomain::K, logical_byte));
+        EXPECT_EQ(v_pool.payload()[physical_byte],
+                  oracle_prefill_byte(kSeed, kOperations - 1, kLayer, kBatch, LlmPrefillKvDomain::V, logical_byte));
       }
     }
     const size_t terminal_physical = table.back();
     for (size_t byte = last_block_valid_bytes; byte < block_bytes; ++byte) {
       const size_t physical_byte = terminal_physical * block_bytes + byte;
-      EXPECT_EQ(k_pool[physical_byte], initial_k[physical_byte]);
-      EXPECT_EQ(v_pool[physical_byte], initial_v[physical_byte]);
+      EXPECT_EQ(k_pool.payload()[physical_byte], initial_k[physical_byte]);
+      EXPECT_EQ(v_pool.payload()[physical_byte], initial_v[physical_byte]);
     }
     for (size_t physical_block = 0;
          physical_block < physical_block_count; ++physical_block) {
@@ -1855,146 +1699,21 @@ TEST(LlmMemoryKernelsIntegrationTest,
         continue;
       }
       const size_t first_byte = physical_block * block_bytes;
-      EXPECT_TRUE(std::equal(
-          k_pool.begin() + first_byte,
-          k_pool.begin() + first_byte + block_bytes,
-          initial_k.begin() + first_byte));
-      EXPECT_TRUE(std::equal(
-          v_pool.begin() + first_byte,
-          v_pool.begin() + first_byte + block_bytes,
-          initial_v.begin() + first_byte));
+      EXPECT_TRUE(std::equal(k_pool.payload() + first_byte, k_pool.payload() + first_byte + block_bytes,
+                             initial_k.begin() + first_byte));
+      EXPECT_TRUE(std::equal(v_pool.payload() + first_byte, v_pool.payload() + first_byte + block_bytes,
+                             initial_v.begin() + first_byte));
     }
-    EXPECT_TRUE(std::equal(
-        k_pool.end() - kCanaryBytes, k_pool.end(),
-        initial_k.end() - kCanaryBytes));
-    EXPECT_TRUE(std::equal(
-        v_pool.end() - kCanaryBytes, v_pool.end(),
-        initial_v.end() - kCanaryBytes));
-  }
-}
-
-TEST(LlmMemoryKernelsIntegrationTest,
-     PagedPrefillQOneAndQEqualsPromptUseExactGuardedRanges) {
-  struct Case {
-    size_t query_tile_tokens;
-    size_t record_bytes;
-  };
-  constexpr size_t kPromptTokens = 5;
-  constexpr size_t kBlockTokens = 2;
-  constexpr size_t kBlockCount = 3;
-  constexpr size_t kPhysicalBlocks = 5;
-  constexpr size_t kOperations = 2;
-  constexpr size_t kLayer = 6;
-  constexpr size_t kBatch = 2;
-  constexpr uint64_t kSeed = 0xD1B54A32D192ED03ULL;
-  constexpr std::array<Case, 2> kCases = {{{1, 31}, {kPromptTokens, 33}}};
-  const std::array<uint32_t, kBlockCount> table = {3, 1, 4};
-
-  for (const Case& test_case : kCases) {
-    SCOPED_TRACE(::testing::Message()
-                 << "P=" << kPromptTokens
-                 << " Q=" << test_case.query_tile_tokens
-                 << " R=" << test_case.record_bytes);
-    const size_t block_bytes = kBlockTokens * test_case.record_bytes;
-    const size_t last_block_valid_bytes = test_case.record_bytes;
-    const size_t pool_bytes = kPhysicalBlocks * block_bytes;
-    GuardedMapping weight(33);
-    GuardedMapping k_pool(pool_bytes);
-    GuardedMapping v_pool(pool_bytes);
-    ASSERT_TRUE(weight.valid());
-    ASSERT_TRUE(k_pool.valid());
-    ASSERT_TRUE(v_pool.valid());
-    for (size_t byte = 0; byte < 33; ++byte) {
-      weight.payload()[byte] =
-          static_cast<uint8_t>((byte * 17 + 3) & 0xFF);
-    }
-    for (size_t byte = 0; byte < pool_bytes; ++byte) {
-      k_pool.payload()[byte] =
-          static_cast<uint8_t>((byte * 19 + 5) & 0xFF);
-      v_pool.payload()[byte] =
-          static_cast<uint8_t>((byte * 29 + 7) & 0xFF);
-    }
-    const std::vector<uint8_t> weight_prefix(
-        weight.accessible_begin(), weight.payload());
-    const std::vector<uint8_t> k_prefix(
-        k_pool.accessible_begin(), k_pool.payload());
-    const std::vector<uint8_t> v_prefix(
-        v_pool.accessible_begin(), v_pool.payload());
-    const std::vector<uint8_t> weight_before(
-        weight.payload(), weight.payload() + 33);
-    const std::vector<uint8_t> initial_k(
-        k_pool.payload(), k_pool.payload() + pool_bytes);
-    const std::vector<uint8_t> initial_v(
-        v_pool.payload(), v_pool.payload() + pool_bytes);
-    std::vector<uint8_t> expected_k = initial_k;
-    std::vector<uint8_t> expected_v = initial_v;
-
-    LlmPagedPrefillLayerDescriptor layer{
-        weight.payload(), 33, 0, 1, kLayer, 0};
-    LlmPagedPrefillKvAssignmentDescriptor expected_assignment{
-        table.data(), expected_k.data(), expected_v.data(),
-        0, kBlockCount, kBlockCount, kBlockTokens, block_bytes,
-        last_block_valid_bytes, kPromptTokens,
-        test_case.query_tile_tokens, test_case.record_bytes, kLayer, kBatch};
-    const LlmWorkerChecksum expected = oracle_paged_prefill_worker_run(
-        &layer, 1, &expected_assignment, kOperations,
-        kLlmScenarioFlagMixed, kSeed);
-    LlmPagedPrefillKvAssignmentDescriptor actual_assignment =
-        expected_assignment;
-    actual_assignment.k_layer_pool = k_pool.payload();
-    actual_assignment.v_layer_pool = v_pool.payload();
-
-    LlmWorkerChecksum actual{};
-    llm_prefill_memory_paged_asm(
-        &layer, &actual_assignment, 1, kOperations,
-        kLlmScenarioFlagMixed, kSeed, &actual);
-    expect_worker_equal(actual, expected);
-    EXPECT_TRUE(std::equal(
-        expected_k.begin(), expected_k.end(), k_pool.payload()));
-    EXPECT_TRUE(std::equal(
-        expected_v.begin(), expected_v.end(), v_pool.payload()));
-    EXPECT_TRUE(std::equal(
-        weight_before.begin(), weight_before.end(), weight.payload()));
-    EXPECT_TRUE(std::equal(
-        weight_prefix.begin(), weight_prefix.end(),
-        weight.accessible_begin()));
-    EXPECT_TRUE(std::equal(
-        k_prefix.begin(), k_prefix.end(), k_pool.accessible_begin()));
-    EXPECT_TRUE(std::equal(
-        v_prefix.begin(), v_prefix.end(), v_pool.accessible_begin()));
-
-    size_t read_bytes_per_operation = 0;
-    size_t spans_per_operation = 0;
-    for (size_t tile_end = 0; tile_end < kPromptTokens;) {
-      tile_end += std::min(test_case.query_tile_tokens,
-                           kPromptTokens - tile_end);
-      read_bytes_per_operation += tile_end * test_case.record_bytes;
-      spans_per_operation +=
-          tile_end / kBlockTokens +
-          (tile_end % kBlockTokens == 0 ? 0 : 1);
-    }
-    EXPECT_EQ(actual.k.exact_bytes_read,
-              read_bytes_per_operation * kOperations);
-    EXPECT_EQ(actual.v.exact_bytes_read,
-              read_bytes_per_operation * kOperations);
-    EXPECT_EQ(actual.k.span_count, spans_per_operation * kOperations);
-    EXPECT_EQ(actual.v.span_count, spans_per_operation * kOperations);
-
-    // The terminal logical block is mapped to the last physical block, whose
-    // end directly borders PROT_NONE. Its invalid suffix must remain untouched.
-    const size_t terminal_base =
-        static_cast<size_t>(table.back()) * block_bytes;
-    for (size_t byte = last_block_valid_bytes; byte < block_bytes; ++byte) {
-      EXPECT_EQ(k_pool.payload()[terminal_base + byte],
-                initial_k[terminal_base + byte]);
-      EXPECT_EQ(v_pool.payload()[terminal_base + byte],
-                initial_v[terminal_base + byte]);
+    if (!query_boundary) {
+      EXPECT_TRUE(
+          std::equal(initial_k.end() - kCanaryBytes, initial_k.end(), k_pool.payload() + pool_bytes - kCanaryBytes));
+      EXPECT_TRUE(
+          std::equal(initial_v.end() - kCanaryBytes, initial_v.end(), v_pool.payload() + pool_bytes - kCanaryBytes));
     }
   }
 }
 
-TEST(LlmMemoryKernelsIntegrationTest,
-     PagedPrefillMultiLayerBatchTileAndOperationTraversalMatchesOracle) {
+TEST(LlmMemoryKernelIntegrationTest, PagedPrefillMultiLayerBatchTileAndOperationTraversalMatchesOracle) {
   constexpr size_t kLayerCount = 2;
   constexpr size_t kBatchCount = 2;
   constexpr size_t kPromptTokens = 7;
@@ -2083,8 +1802,7 @@ TEST(LlmMemoryKernelsIntegrationTest,
   EXPECT_EQ(actual.v.span_count, actual.k.span_count);
 }
 
-TEST(LlmMemoryKernelsIntegrationTest,
-     PagedPrefillWrongSameMultiplicityBlockTableDoesNotMatchOracle) {
+TEST(LlmMemoryKernelIntegrationTest, PagedPrefillWrongSameMultiplicityBlockTableDoesNotMatchOracle) {
   constexpr size_t kPromptTokens = 5;
   constexpr size_t kQueryTileTokens = 2;
   constexpr size_t kBlockTokens = 2;
@@ -2144,8 +1862,7 @@ TEST(LlmMemoryKernelsIntegrationTest,
               actual.v.state_b != expected.v.state_b);
 }
 
-TEST(LlmMemoryKernelsIntegrationTest,
-     PagedPrefillPreservesIntegerAndFullVectorCalleeSavedRegisters) {
+TEST(LlmMemoryKernelIntegrationTest, PagedPrefillPreservesIntegerAndFullVectorCalleeSavedRegisters) {
   constexpr size_t kPromptTokens = 5;
   constexpr size_t kQueryTileTokens = 2;
   constexpr size_t kBlockTokens = 2;

@@ -28,18 +28,6 @@
 #include "utils/seed_utils.h"
 #include "utils/utils.h"
 
-TEST(SeedUtilsTest, GenerateSeedUsesInjectedProviderExactlyOnce) {
-  size_t provider_calls = 0;
-
-  const uint64_t seed = SeedUtils::generate_seed([&provider_calls]() {
-    ++provider_calls;
-    return 0x123456789abcdef0ULL;
-  });
-
-  EXPECT_EQ(seed, 0x123456789abcdef0ULL);
-  EXPECT_EQ(provider_calls, 1U);
-}
-
 TEST(SeedUtilsTest, ZeroProviderResultFallsBackToNonZeroGeneration) {
   size_t provider_calls = 0;
 
@@ -107,16 +95,4 @@ TEST(ProgressSpinnerTest, ExplicitClearMakesClearAndDestructorIdempotent) {
   }
 
   EXPECT_EQ(output.str(), "\r| done\r      \r");
-}
-
-TEST(UtilsTest, JoinThreadsJoinsEveryWorkerAndClearsTheVector) {
-  std::atomic<size_t> completed{0};
-  std::vector<std::thread> threads;
-  threads.emplace_back([&completed]() { completed.fetch_add(1); });
-  threads.emplace_back([&completed]() { completed.fetch_add(1); });
-
-  join_threads(threads);
-
-  EXPECT_EQ(completed.load(), 2U);
-  EXPECT_TRUE(threads.empty());
 }

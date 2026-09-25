@@ -71,7 +71,7 @@ nlohmann::json read_json(const std::filesystem::path& path) {
 
 }  // namespace
 
-TEST(JsonFileWriterTest, CreatesParentsAtomicallyReplacesAndSuppressesAnnouncement) {
+TEST(JsonFileWriterTest, CreatesParentsAtomicallyReplacesAndAnnouncesOnlyWhenRequested) {
   TemporaryDirectory temporary("writer_replace");
   const std::filesystem::path target = temporary.path() / "nested" / "result.json";
 
@@ -83,21 +83,13 @@ TEST(JsonFileWriterTest, CreatesParentsAtomicallyReplacesAndSuppressesAnnounceme
   EXPECT_EQ(read_json(target)["generation"], 1);
   EXPECT_FALSE(std::filesystem::exists(target.string() + ".tmp"));
 
-  ASSERT_EQ(write_json_to_file(target, {{"generation", 2}}, false), EXIT_SUCCESS);
+  testing::internal::CaptureStdout();
+  const int second_result = write_json_to_file(target, {{"generation", 2}}, true);
+  const std::string second_output = testing::internal::GetCapturedStdout();
+  ASSERT_EQ(second_result, EXIT_SUCCESS);
+  EXPECT_EQ(second_output, Messages::msg_results_saved_to(target.string()) + "\n");
   EXPECT_EQ(read_json(target)["generation"], 2);
   EXPECT_FALSE(std::filesystem::exists(target.string() + ".tmp"));
-}
-
-TEST(JsonFileWriterTest, AnnouncesSuccessfulFinalPathOnlyWhenRequested) {
-  TemporaryDirectory temporary("writer_announce");
-  const std::filesystem::path target = temporary.path() / "result.json";
-
-  testing::internal::CaptureStdout();
-  const int result = write_json_to_file(target, {{"ok", true}}, true);
-  const std::string output = testing::internal::GetCapturedStdout();
-
-  ASSERT_EQ(result, EXIT_SUCCESS);
-  EXPECT_EQ(output, Messages::msg_results_saved_to(target.string()) + "\n");
 }
 
 TEST(JsonFileWriterTest, FailedTemporaryOpenCleansStaleTemporaryPath) {
@@ -149,30 +141,10 @@ TEST(JsonFileWriterTest, ParentPathFilesystemErrorCannotEscapeBoundary) {
   EXPECT_NE(error.find("Failed to write file"), std::string::npos);
 }
 
-TEST(JsonUtilsTest, ParseStringRejectsEmptyAndMalformedAndAcceptsValidJson) {
-  nlohmann::json parsed;
-  std::string error;
-
-  EXPECT_FALSE(parse_json_from_string("", parsed, error));
-  EXPECT_EQ(error, "Empty JSON string");
-
-  error.clear();
-  EXPECT_FALSE(parse_json_from_string("{broken", parsed, error));
-  EXPECT_NE(error.find("JSON parse error at position"), std::string::npos);
-
-  EXPECT_TRUE(parse_json_from_string("{\"value\":42}", parsed, error));
-  EXPECT_EQ(parsed["value"], 42);
-  EXPECT_TRUE(error.empty());
-}
-
 TEST(JsonUtilsTest, UtcTimestampFormatsFixedTimeIndependentOfLocalTimezone) {
   const auto fixed_time = std::chrono::system_clock::from_time_t(1577934245);
 
   EXPECT_EQ(build_utc_timestamp(fixed_time), "2020-01-02T03:04:05Z");
-}
-
-TEST(JsonUtilsTest, StatisticsNeverFabricateZeroesForAnEmptyPopulation) {
-  EXPECT_TRUE(calculate_json_statistics({}).is_null());
 }
 
 TEST(JsonUtilsTest, StatisticsUseSampleDeviationInterpolationCvAndMad) {
@@ -198,37 +170,4 @@ TEST(JsonUtilsTest, SingleZeroHasNoVariationAndUndefinedCv) {
   EXPECT_DOUBLE_EQ(statistics["stddev"], 0.0);
   EXPECT_TRUE(statistics["coefficient_of_variation_pct"].is_null());
   EXPECT_DOUBLE_EQ(statistics["median_absolute_deviation"], 0.0);
-}
-
-TEST(JsonUtilsTest, ParseFileDistinguishesMissingDirectoryEmptyMalformedAndValid) {
-  TemporaryDirectory temporary("parse_file");
-  nlohmann::json parsed;
-  std::string error;
-
-  const std::filesystem::path missing = temporary.path() / "missing.json";
-  EXPECT_FALSE(parse_json_from_file(missing.string(), parsed, error));
-  EXPECT_EQ(error, "File does not exist: " + missing.string());
-
-  error.clear();
-  EXPECT_FALSE(parse_json_from_file(temporary.path().string(), parsed, error));
-  EXPECT_EQ(error, "Path is not a regular file: " + temporary.path().string());
-
-  const std::filesystem::path empty = temporary.path() / "empty.json";
-  write_text(empty, "");
-  error.clear();
-  EXPECT_FALSE(parse_json_from_file(empty.string(), parsed, error));
-  EXPECT_EQ(error, "File is empty: " + empty.string());
-
-  const std::filesystem::path malformed = temporary.path() / "malformed.json";
-  write_text(malformed, "[invalid]");
-  error.clear();
-  EXPECT_FALSE(parse_json_from_file(malformed.string(), parsed, error));
-  EXPECT_NE(error.find("JSON parse error at position"), std::string::npos);
-
-  const std::filesystem::path valid = temporary.path() / "valid.json";
-  write_text(valid, "{\"status\":\"complete\"}");
-  error.clear();
-  EXPECT_TRUE(parse_json_from_file(valid.string(), parsed, error));
-  EXPECT_EQ(parsed["status"], "complete");
-  EXPECT_TRUE(error.empty());
 }

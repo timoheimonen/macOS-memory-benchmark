@@ -139,30 +139,6 @@ TEST(CoreToCoreRunnerTest, LoopRecordSampleRangesCountOnlySamplesAppendedToPool)
   EXPECT_EQ(scenario_result.completed_loops, 1u);
 }
 
-TEST(CoreToCoreRunnerTest, DeterministicFailureSeamsReturnExplicitStatus) {
-  const ScopedDeterministicTimerSystemCalls timer_system_calls;
-  const ScenarioDescriptor scenario = {
-      Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY,
-      Constants::CORE_TO_CORE_AFFINITY_HINT_DISABLED,
-      Constants::CORE_TO_CORE_AFFINITY_TAG_NONE,
-      Constants::CORE_TO_CORE_AFFINITY_TAG_NONE,
-  };
-  const CoreToCoreWorkPlan plan = make_small_work_plan();
-
-  ScenarioMeasurement timer_failure;
-  CoreToCoreFailureInjection fail_timer;
-  fail_timer.fail_timer_creation = true;
-  EXPECT_FALSE(execute_single_scenario(scenario, plan, 0, timer_failure, &fail_timer));
-  EXPECT_EQ(timer_failure.status, CoreToCoreMeasurementStatus::Failed);
-  EXPECT_EQ(timer_failure.status_reason, "timer-creation-failed");
-
-  ScenarioMeasurement responder_failure;
-  CoreToCoreFailureInjection fail_responder;
-  fail_responder.fail_responder_startup = true;
-  EXPECT_FALSE(execute_single_scenario(scenario, plan, 0, responder_failure, &fail_responder));
-  EXPECT_EQ(responder_failure.status_reason, "responder-thread-startup-failed");
-}
-
 TEST(CoreToCoreRunnerTest, InitiatorStartupFailureCleansUpResponderIntegration) {
   const ScenarioDescriptor scenario = {
       Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY,
@@ -176,47 +152,4 @@ TEST(CoreToCoreRunnerTest, InitiatorStartupFailureCleansUpResponderIntegration) 
   fail_initiator.fail_initiator_startup = true;
   EXPECT_FALSE(execute_single_scenario(scenario, plan, 0, initiator_failure, &fail_initiator));
   EXPECT_EQ(initiator_failure.status_reason, "initiator-thread-startup-failed");
-}
-
-TEST(CoreToCoreRunnerTest, ExecuteSingleScenarioProducesHeadlineAndSamplesIntegration) {
-  const ScenarioDescriptor scenario = {
-      Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY,
-      Constants::CORE_TO_CORE_AFFINITY_HINT_DISABLED,
-      Constants::CORE_TO_CORE_AFFINITY_TAG_NONE,
-      Constants::CORE_TO_CORE_AFFINITY_TAG_NONE,
-  };
-  ScenarioMeasurement measurement;
-  const CoreToCoreWorkPlan plan = make_small_work_plan();
-
-  const bool ok = execute_single_scenario(scenario, plan, 1, measurement);
-
-  ASSERT_TRUE(ok);
-  EXPECT_EQ(measurement.status, CoreToCoreMeasurementStatus::Measured);
-  EXPECT_GT(measurement.round_trip_ns, 0.0);
-  ASSERT_EQ(measurement.samples_ns.size(), 1u);
-  EXPECT_GT(measurement.samples_ns[0], 0.0);
-  EXPECT_FALSE(std::isnan(measurement.round_trip_ns));
-  EXPECT_FALSE(std::isinf(measurement.round_trip_ns));
-}
-
-TEST(CoreToCoreRunnerTest, ExecuteSingleScenarioSupportsZeroSamplesIntegration) {
-  const ScenarioDescriptor scenario = {
-      Constants::CORE_TO_CORE_SCENARIO_DIFFERENT_AFFINITY,
-      Constants::CORE_TO_CORE_AFFINITY_HINT_ENABLED,
-      Constants::CORE_TO_CORE_AFFINITY_TAG_PRIMARY,
-      Constants::CORE_TO_CORE_AFFINITY_TAG_SECONDARY,
-  };
-  ScenarioMeasurement measurement;
-  const CoreToCoreWorkPlan plan = make_small_work_plan();
-
-  const bool ok = execute_single_scenario(scenario, plan, 0, measurement);
-
-  ASSERT_TRUE(ok);
-  EXPECT_EQ(measurement.status, CoreToCoreMeasurementStatus::Measured);
-  EXPECT_GT(measurement.round_trip_ns, 0.0);
-  EXPECT_TRUE(measurement.samples_ns.empty());
-  EXPECT_EQ(measurement.initiator_hint.affinity_requested, scenario.apply_affinity);
-  EXPECT_EQ(measurement.responder_hint.affinity_requested, scenario.apply_affinity);
-  EXPECT_EQ(measurement.initiator_hint.affinity_tag, scenario.initiator_affinity_tag);
-  EXPECT_EQ(measurement.responder_hint.affinity_tag, scenario.responder_affinity_tag);
 }

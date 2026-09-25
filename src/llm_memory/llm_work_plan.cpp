@@ -4937,44 +4937,6 @@ LlmMemoryWorkPlanDraft prepare_llm_memory_work_plan(
   return prepare_llm_memory_work_plan(request, stop_requested);
 }
 
-LlmMemoryWorkPlan build_llm_memory_work_plan(
-    const LlmMemoryConfig& config, size_t available_workers,
-    size_t available_memory_bytes, size_t mapping_granularity_bytes,
-    size_t checksum_auxiliary_bytes,
-    size_t orchestration_auxiliary_bytes,
-    const LlmKvStopRequested& stop_requested) {
-  const LlmMemoryConfigValidation validation =
-      validate_llm_memory_config(config);
-  if (!validation.valid) {
-    return invalid_config_plan(validation.reason_code);
-  }
-
-  LlmMemoryWorkPlanRequest request;
-  request.geometry = {validation.active_weight_bytes,
-                      config.layer_count,
-                      config.query_head_count,
-                      config.kv_head_count,
-                      config.head_dimension,
-                      config.kv_element_bytes,
-                      config.visible_context_tokens,
-                      config.batch_size,
-                      config.kv_block_tokens,
-                      config.phase,
-                      config.kv_layout};
-  request.geometry.prompt_tokens = config.prompt_tokens;
-  request.geometry.attention_query_tile_tokens =
-      config.attention_query_tile_tokens;
-  request.backend = config.backend;
-  request.requested_workers = config.requested_workers;
-  request.available_workers = available_workers;
-  request.available_memory_bytes = available_memory_bytes;
-  request.mapping_granularity_bytes = mapping_granularity_bytes;
-  request.checksum_auxiliary_bytes = checksum_auxiliary_bytes;
-  request.orchestration_auxiliary_bytes = orchestration_auxiliary_bytes;
-  request.base_seed = config.seed;
-  return build_llm_memory_work_plan(request, stop_requested);
-}
-
 bool readmit_llm_memory_work_plan(
     LlmMemoryWorkPlan& plan, size_t checksum_auxiliary_bytes,
     size_t orchestration_auxiliary_bytes) noexcept {

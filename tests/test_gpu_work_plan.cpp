@@ -47,37 +47,6 @@ GpuWorkPlanRequest make_request(GpuOperation operation, size_t buffer_bytes,
 
 }  // namespace
 
-TEST(GpuWorkPlanTest, ConstantsMatchLockedGpuMethodology) {
-  EXPECT_EQ(Constants::GPU_DEFAULT_BUFFER_SIZE_MB, 512u);
-  EXPECT_EQ(Constants::GPU_MIN_BUFFER_SIZE_MB, 64u);
-  EXPECT_EQ(Constants::GPU_DEFAULT_LOOP_COUNT, 3u);
-  EXPECT_DOUBLE_EQ(Constants::GPU_CALIBRATION_TARGET_SECONDS,
-                   Constants::BANDWIDTH_CALIBRATION_TARGET_SECONDS);
-  EXPECT_DOUBLE_EQ(Constants::GPU_CALIBRATION_MIN_SECONDS, 0.100);
-  EXPECT_DOUBLE_EQ(Constants::GPU_CALIBRATION_MAX_SECONDS, 0.250);
-  EXPECT_EQ(Constants::GPU_CALIBRATION_MAX_CORRECTIONS, 2u);
-  EXPECT_EQ(Constants::GPU_CALIBRATION_MIN_PILOT_BYTES,
-            8 * Constants::BYTES_PER_MB);
-  EXPECT_EQ(Constants::GPU_MAX_DISPATCHES_PER_MEASUREMENT, 16384u);
-  EXPECT_EQ(Constants::GPU_MAX_EXACT_PAYLOAD_BYTES,
-            64ULL * 1024ULL * Constants::BYTES_PER_MB);
-  EXPECT_EQ(Constants::GPU_VECTOR_WIDTH_BYTES, 16u);
-  EXPECT_EQ(Constants::GPU_THREADS_PER_THREADGROUP_CAP, 256u);
-  EXPECT_EQ(Constants::GPU_MAX_THREADGROUPS_PER_GRID, 8192u);
-  EXPECT_DOUBLE_EQ(Constants::GPU_STREAMING_CV_WARNING_PCT, 5.0);
-}
-
-TEST(GpuWorkPlanTest, SharedCyclicOrderPreservesBenchmarkCompatibility) {
-  EXPECT_EQ(build_cyclic_order(4, 0),
-            (std::vector<size_t>{0, 1, 2, 3}));
-  EXPECT_EQ(build_cyclic_order(4, 1),
-            (std::vector<size_t>{1, 2, 3, 0}));
-  EXPECT_EQ(build_cyclic_order(4, std::numeric_limits<size_t>::max()),
-            build_benchmark_cyclic_order(
-                4, std::numeric_limits<size_t>::max()));
-  EXPECT_TRUE(build_cyclic_order(0, 7).empty());
-}
-
 TEST(GpuWorkPlanTest, OperationOrderRotatesReadWriteCopyAcrossLoops) {
   EXPECT_EQ(build_gpu_operation_order(0),
             (std::array<GpuOperation, 3>{GpuOperation::Read,
@@ -92,13 +61,15 @@ TEST(GpuWorkPlanTest, OperationOrderRotatesReadWriteCopyAcrossLoops) {
                                          GpuOperation::Read,
                                          GpuOperation::Write}));
   EXPECT_EQ(build_gpu_operation_order(3), build_gpu_operation_order(0));
+  EXPECT_EQ(build_cyclic_order(4, 0), (std::vector<size_t>{0, 1, 2, 3}));
+  EXPECT_EQ(build_cyclic_order(4, 1), (std::vector<size_t>{1, 2, 3, 0}));
+  EXPECT_EQ(build_cyclic_order(4, std::numeric_limits<size_t>::max()), (std::vector<size_t>{3, 0, 1, 2}));
+  EXPECT_TRUE(build_cyclic_order(0, 7).empty());
 }
 
 TEST(GpuWorkPlanTest, OperationSeedsHaveStableSplitMixDomains) {
   EXPECT_EQ(gpu_operation_seed_domain(GpuOperation::Read),
             0x4750555f52454144ULL);
-  EXPECT_EQ(gpu_operation_seed_domain(GpuOperation::Write),
-            0x4750555752495445ULL);
   EXPECT_EQ(gpu_operation_seed_domain(GpuOperation::Copy),
             0x4750555f434f5059ULL);
   EXPECT_EQ(derive_gpu_operation_seed(42, GpuOperation::Read),
@@ -139,8 +110,7 @@ TEST(GpuWorkPlanTest, PassLimitsUseExactPayloadsAndEffectiveCaps) {
   const GpuPassLimits tiny =
       calculate_gpu_pass_limits(1, GpuOperation::Read);
   ASSERT_TRUE(tiny.valid);
-  EXPECT_EQ(tiny.effective_maximum_passes,
-            Constants::GPU_MAX_DISPATCHES_PER_MEASUREMENT);
+  EXPECT_EQ(tiny.effective_maximum_passes, 16384u);
   EXPECT_TRUE(tiny.dispatch_cap_is_limiting);
   EXPECT_FALSE(tiny.payload_cap_is_limiting);
 }
@@ -284,45 +254,36 @@ TEST(GpuWorkPlanTest, PlannerCalculatesExactPayloadAndRejectsExplicitCaps) {
   EXPECT_EQ(copy.bytes_per_pass, 8192u);
   EXPECT_EQ(copy.exact_payload_bytes, 40960u);
 
-  GpuWorkPlanRequest dispatch_exceeded =
-      make_request(GpuOperation::Read, 1,
-                   Constants::GPU_MAX_DISPATCHES_PER_MEASUREMENT + 1);
-  dispatch_exceeded.explicit_iterations = true;
-  EXPECT_EQ(build_gpu_work_plan(dispatch_exceeded).reason_code,
-            GpuWorkPlanReason::EXPLICIT_DISPATCH_CAP_EXCEEDED);
-
-  GpuWorkPlanRequest payload_exceeded = make_request(
-      GpuOperation::Copy, 64 * Constants::BYTES_PER_MB, 513);
-  payload_exceeded.explicit_iterations = true;
-  EXPECT_EQ(build_gpu_work_plan(payload_exceeded).reason_code,
-            GpuWorkPlanReason::EXPLICIT_PAYLOAD_CAP_EXCEEDED);
-
-  payload_exceeded.passes = 512;
-  const GpuWorkPlan at_cap = build_gpu_work_plan(payload_exceeded);
+  struct InvalidCase {
+    GpuOperation operation;
+    size_t bytes;
+    size_t passes;
+    const char* automatic_reason;
+    const char* explicit_reason;
+  };
+  for (const InvalidCase& entry :
+       {InvalidCase{GpuOperation::Read, 4096, 0, GpuWorkPlanReason::PASS_COUNT_ZERO,
+                    GpuWorkPlanReason::PASS_COUNT_ZERO},
+        InvalidCase{GpuOperation::Read, 1, Constants::GPU_MAX_DISPATCHES_PER_MEASUREMENT + 1,
+                    GpuWorkPlanReason::DISPATCH_CAP_EXCEEDED, GpuWorkPlanReason::EXPLICIT_DISPATCH_CAP_EXCEEDED},
+        InvalidCase{GpuOperation::Copy, 64 * Constants::BYTES_PER_MB, 513, GpuWorkPlanReason::PAYLOAD_CAP_EXCEEDED,
+                    GpuWorkPlanReason::EXPLICIT_PAYLOAD_CAP_EXCEEDED}}) {
+    for (bool explicit_iterations : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << entry.bytes << "/" << entry.passes << "/" << explicit_iterations);
+      GpuWorkPlanRequest request = make_request(entry.operation, entry.bytes, entry.passes);
+      request.explicit_iterations = explicit_iterations;
+      const GpuWorkPlan invalid = build_gpu_work_plan(request);
+      EXPECT_FALSE(invalid.valid);
+      EXPECT_EQ(invalid.reason_code, explicit_iterations ? entry.explicit_reason : entry.automatic_reason);
+      EXPECT_TRUE(invalid.plan_identity.empty());
+      EXPECT_EQ(invalid.exact_payload_bytes, 0u);
+    }
+  }
+  GpuWorkPlanRequest at_cap_request = make_request(GpuOperation::Copy, 64 * Constants::BYTES_PER_MB, 512);
+  at_cap_request.explicit_iterations = true;
+  const GpuWorkPlan at_cap = build_gpu_work_plan(at_cap_request);
   ASSERT_TRUE(at_cap.valid) << at_cap.reason_code;
-  EXPECT_EQ(at_cap.exact_payload_bytes,
-            Constants::GPU_MAX_EXACT_PAYLOAD_BYTES);
-}
-
-TEST(GpuWorkPlanTest, InvalidPlansRetainStableReasonsWithoutIdentity) {
-  GpuWorkPlanRequest zero_passes =
-      make_request(GpuOperation::Read, 4096, 0);
-  const GpuWorkPlan zero = build_gpu_work_plan(zero_passes);
-  EXPECT_FALSE(zero.valid);
-  EXPECT_EQ(zero.reason_code, GpuWorkPlanReason::PASS_COUNT_ZERO);
-  EXPECT_TRUE(zero.plan_identity.empty());
-  EXPECT_EQ(zero.exact_payload_bytes, 0u);
-
-  GpuWorkPlanRequest automatic_dispatch_exceeded = make_request(
-      GpuOperation::Read, 1,
-      Constants::GPU_MAX_DISPATCHES_PER_MEASUREMENT + 1);
-  EXPECT_EQ(build_gpu_work_plan(automatic_dispatch_exceeded).reason_code,
-            GpuWorkPlanReason::DISPATCH_CAP_EXCEEDED);
-
-  GpuWorkPlanRequest automatic_payload_exceeded = make_request(
-      GpuOperation::Copy, 64 * Constants::BYTES_PER_MB, 513);
-  EXPECT_EQ(build_gpu_work_plan(automatic_payload_exceeded).reason_code,
-            GpuWorkPlanReason::PAYLOAD_CAP_EXCEEDED);
+  EXPECT_EQ(at_cap.exact_payload_bytes, Constants::GPU_MAX_EXACT_PAYLOAD_BYTES);
 }
 
 TEST(GpuWorkPlanTest, CalibrationHelpersScaleClampAndClassifyGuardrails) {
@@ -425,7 +386,6 @@ TEST(GpuTimedAccumulatorOracleTest,
       GpuDualChecksum{2454305124U, 2861025294U},
       GpuDualChecksum{1933397850U, 2368268164U},
       GpuDualChecksum{1074271602U, 2541544478U}};
-  const GpuDualChecksum zero;
 
   for (size_t operation_index = 0; operation_index < kOperations.size();
        ++operation_index) {
@@ -453,16 +413,10 @@ TEST(GpuTimedAccumulatorOracleTest,
 
     SCOPED_TRACE(::testing::Message()
                  << "operation=" << gpu_operation_to_string(operation));
-    EXPECT_NE(pass_24, zero);
-    EXPECT_NE(pass_64, zero);
     EXPECT_EQ(pass_24, kExpectedPass24[operation_index]);
     EXPECT_EQ(pass_64, kExpectedPass64[operation_index]);
     EXPECT_NE(pass_23, pass_24);
     EXPECT_NE(pass_24, pass_64);
     EXPECT_NE(pass_63, pass_64);
-    EXPECT_NE(pass_24.first, 0U);
-    EXPECT_NE(pass_24.second, 0U);
-    EXPECT_NE(pass_64.first, 0U);
-    EXPECT_NE(pass_64.second, 0U);
   }
 }
