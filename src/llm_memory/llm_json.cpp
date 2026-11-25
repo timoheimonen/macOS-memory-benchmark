@@ -2224,6 +2224,7 @@ LlmJsonPeakEstimate calculate_json_peak_from_identity_sizes(const LlmMemoryConfi
   return estimate;
 }
 
+/** Return whether JSON DOM peak estimation and serialization evidence apply. */
 bool llm_json_output_enabled(const LlmMemoryConfig& config) noexcept {
   return !config.output_file.empty() || config.collect_json_for_sweep;
 }
@@ -2308,8 +2309,8 @@ nlohmann::ordered_json build_llm_memory_json(const LlmMemoryConfig& config, cons
   output["build_manifest"] = metadata.build_manifest;
   output["configuration"] = configuration_json(config);
   output["resolved_plan"] = resolved_plan_json(model_plan, result, backend_evidence);
-  output["backend_evidence"] = backend_evidence_json(
-      model_plan, backend_evidence, metadata.json_peak_estimate, llm_json_output_enabled(config));
+  output["backend_evidence"] =
+      backend_evidence_json(model_plan, backend_evidence, metadata.json_peak_estimate, llm_json_output_enabled(config));
   output["memory_budget"] = memory_budget_json(
       admitted_memory_budget, model_plan.kv_layout == LlmKvLayout::Paged,
       metal == nullptr ? nullptr : &metal->resources);

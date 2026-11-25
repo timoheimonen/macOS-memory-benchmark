@@ -43,6 +43,7 @@ struct LlmSweepAssignment {
   const LlmSweepValue* value = nullptr;
 };
 
+/** Serialize the declared sweep parameter axes into envelope metadata. */
 nlohmann::ordered_json build_sweep_parameters_json(
     const LlmMemoryConfig& config) {
   nlohmann::ordered_json params = nlohmann::ordered_json::object();
@@ -56,6 +57,7 @@ nlohmann::ordered_json build_sweep_parameters_json(
   return params;
 }
 
+/** Serialize one concrete Cartesian assignment for `runs[].parameters`. */
 nlohmann::ordered_json build_assignment_json(
     const std::vector<LlmSweepAssignment>& assignments) {
   nlohmann::ordered_json params = nlohmann::ordered_json::object();
@@ -65,6 +67,7 @@ nlohmann::ordered_json build_assignment_json(
   return params;
 }
 
+/** Apply one swept parameter value and mark its corresponding explicit flag. */
 void apply_assignment(LlmMemoryConfig& config,
                       const LlmSweepAssignment& assignment) {
   switch (assignment.spec->parameter) {
@@ -87,6 +90,7 @@ void apply_assignment(LlmMemoryConfig& config,
   }
 }
 
+/** Materialize one isolated nested run configuration from a sweep base config. */
 LlmMemoryConfig build_run_config(
     const LlmMemoryConfig& base_config,
     const std::vector<LlmSweepAssignment>& assignments) {
@@ -189,9 +193,21 @@ SweepExecutionResult run_llm_memory_sweep(
     const LlmMemoryConfig run_config =
         build_run_config(base_config, assignments[run_index]);
     SweepRunOutcome outcome;
-    outcome.exit_code = run_llm_memory_collect(run_config, outcome.result_json);
-    if (outcome.exit_code != EXIT_SUCCESS && outcome.result_json.empty()) {
-      outcome.failure_reason = "nested-llm-run-failed";
+    std::string failure_reason;
+    bool preparation_interrupted = false;
+    outcome.exit_code = run_llm_memory_collect(
+        run_config, outcome.result_json, &failure_reason,
+        &preparation_interrupted);
+    outcome.interrupted = preparation_interrupted;
+    if (preparation_interrupted) {
+      outcome.failure_reason = failure_reason.empty()
+                                   ? "preparation-interrupted"
+                                   : failure_reason;
+    } else if (outcome.exit_code != EXIT_SUCCESS &&
+               outcome.result_json.empty()) {
+      outcome.failure_reason = failure_reason.empty()
+                                   ? "nested-llm-run-failed"
+                                   : failure_reason;
     }
     return outcome;
   };

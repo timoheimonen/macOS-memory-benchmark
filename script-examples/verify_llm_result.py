@@ -1367,12 +1367,14 @@ def check_manifest(manifest):
         )
 
 
-def verify_single(doc, binary=None, require_raw=False):
+def verify_single(doc, binary=None, require_raw=False, budget=None):
     if type(doc.get("schema_version")) is not int or doc["schema_version"] != 2:
         raise Rejected("unsupported-schema", True)
     if doc.get("mode") != "llm_memory":
         raise Rejected("unsupported-mode", True)
-    budget = Budget()
+    if budget is None:
+        budget = Budget()
+    work_before = budget.remaining
     m = check_geometry(doc, budget)
     m["ownership"] = ownership(m, doc, budget)
     check_identities(doc, m, budget)
@@ -1452,7 +1454,7 @@ def verify_single(doc, binary=None, require_raw=False):
             ),
             build=build,
         ),
-        oracle_work_used=MAX_WORK - budget.remaining,
+        oracle_work_used=work_before - budget.remaining,
     )
 
 
@@ -1467,6 +1469,7 @@ def verify_sweep(doc, binary=None, require_raw=False):
     run_count = integer(cfg.get("run_count"), maximum=(1 << 53) - 1)
     sweep_max_runs = integer(cfg.get("sweep_max_runs"), maximum=(1 << 53) - 1)
     planned_runs = integer(doc.get("planned_runs"), maximum=(1 << 53) - 1)
+    attempted_runs = integer(doc.get("attempted_runs"), maximum=(1 << 53) - 1)
     completed_runs = integer(doc.get("completed_runs"), maximum=(1 << 53) - 1)
     require(run_count > 0 and run_count == planned_runs and run_count <= sweep_max_runs, "sweep-plan-count-mismatch")
 
@@ -1474,6 +1477,7 @@ def verify_sweep(doc, binary=None, require_raw=False):
     require(isinstance(sweep_params, dict) and len(sweep_params) > 0, "sweep-parameters-invalid")
     param_keys = []
     param_lists = []
+    product = 1
     for key, values in sweep_params.items():
         require(key in SWEEP_PARAM_CONFIG_KEYS, "sweep-parameter-unsupported")
         require(isinstance(values, list) and len(values) > 0, "sweep-parameters-invalid")
@@ -1482,13 +1486,12 @@ def verify_sweep(doc, binary=None, require_raw=False):
             parsed = integer(value, maximum=(1 << 53) - 1)
             require(parsed > 0, "sweep-parameter-value-invalid")
             parsed_values.append(parsed)
+        product *= len(parsed_values)
+        if product > planned_runs or product > sweep_max_runs:
+            raise Rejected("sweep-plan-count-mismatch")
         param_keys.append(key)
         param_lists.append(parsed_values)
-
-    expected_assignments = [
-        dict(zip(param_keys, combo)) for combo in itertools.product(*param_lists)
-    ]
-    require(len(expected_assignments) == planned_runs, "sweep-plan-count-mismatch")
+    require(product == planned_runs, "sweep-plan-count-mismatch")
 
     status = doc.get("status")
     require(status in ("complete", "partial", "interrupted", "failed"), "sweep-status-invalid")
@@ -1497,19 +1500,47 @@ def verify_sweep(doc, binary=None, require_raw=False):
 
     runs = doc.get("runs")
     require(isinstance(runs, list) and len(runs) <= planned_runs, "sweep-runs-invalid")
+    equal(attempted_runs, len(runs), "sweep-attempted-runs-mismatch")
+
+    budget = Budget()
+    budget(len(runs))
+
+    swept_config_keys = {SWEEP_PARAM_CONFIG_KEYS[k] for k in param_keys}
+    fixed_config_keys = (
+        "weight_size_mb",
+        "layer_count",
+        "query_head_count",
+        "kv_head_count",
+        "head_dimension",
+        "kv_element_bytes",
+        "batch_size",
+        "requested_workers",
+        "available_workers",
+        "worker_source",
+        "iterations",
+        "work_policy",
+        "loop_count",
+        "base_seed_uint64_decimal",
+        "seed_source",
+        "argv",
+        "resolved_sources",
+    ) + tuple(k for k in SWEEP_PARAM_CONFIG_KEYS.values() if k not in swept_config_keys)
 
     run_verdicts = []
     observed_completed = 0
     observed_profile = None
-    total_work = 0
+    observed_base_config = None
+    observed_manifest = None
     checksum_levels = set()
     timing_levels = set()
     build_levels = set()
 
-    for index, run in enumerate(runs):
+    expected_iter = itertools.islice(itertools.product(*param_lists), len(runs))
+    for index, (run, combo) in enumerate(zip(runs, expected_iter)):
+        expected_assignment = dict(zip(param_keys, combo))
         require(isinstance(run, dict), "sweep-run-invalid")
         equal(run.get("index"), index, "sweep-run-index-mismatch")
-        equal(run.get("parameters"), expected_assignments[index], "sweep-parameters-mismatch")
+        equal(run.get("parameters"), expected_assignment, "sweep-parameters-mismatch")
         run_status = run.get("status")
         require(run_status in ("complete", "partial", "interrupted", "failed"), "sweep-run-status-invalid")
         nested = run.get("result")
@@ -1527,7 +1558,7 @@ def verify_sweep(doc, binary=None, require_raw=False):
             continue
 
         require(isinstance(nested, dict), "sweep-run-result-invalid")
-        nested_verdict = verify_single(nested, binary=binary, require_raw=require_raw)
+        nested_verdict = verify_single(nested, binary=binary, require_raw=require_raw, budget=budget)
         nested_profile = (
             nested["backend"],
             nested["phase"],
@@ -1540,7 +1571,16 @@ def verify_sweep(doc, binary=None, require_raw=False):
             equal(nested_profile, observed_profile, "sweep-profile-mismatch")
 
         nested_cfg = nested["configuration"]
-        for key, expected_value in expected_assignments[index].items():
+        equal(nested_cfg.get("output_file"), "", "sweep-nested-output-file-mismatch")
+        base_config = {k: nested_cfg.get(k) for k in fixed_config_keys}
+        if observed_base_config is None:
+            observed_base_config = base_config
+            observed_manifest = nested["build_manifest"]
+        else:
+            equal(base_config, observed_base_config, "sweep-base-config-mismatch")
+            equal(nested["build_manifest"], observed_manifest, "sweep-base-config-mismatch")
+
+        for key, expected_value in expected_assignment.items():
             equal(nested_cfg.get(SWEEP_PARAM_CONFIG_KEYS[key]), expected_value, "sweep-nested-parameter-mismatch")
 
         nested_status = nested["status"]
@@ -1550,11 +1590,13 @@ def verify_sweep(doc, binary=None, require_raw=False):
         elif run_status == "interrupted":
             require(nested_status == "interrupted", "sweep-run-status-mismatch")
         elif run_status == "failed":
-            require(nested_status in ("failed", "unsupported") or not nested_verdict["run_accepted"], "sweep-run-status-mismatch")
+            require(
+                nested_status in ("failed", "unsupported") or not nested_verdict["run_accepted"],
+                "sweep-run-status-mismatch",
+            )
         elif run_status == "partial":
             require(not nested_verdict["run_accepted"], "sweep-run-status-mismatch")
 
-        total_work += nested_verdict["oracle_work_used"]
         checksum_levels.add(nested_verdict["checks"]["checksum"])
         timing_levels.add(nested_verdict["checks"]["timing"])
         build_levels.add(nested_verdict["checks"]["build"])
@@ -1597,7 +1639,7 @@ def verify_sweep(doc, binary=None, require_raw=False):
             timing=summarize_level(timing_levels, ("elapsed-only", "unavailable", "cpu-raw-ticks", "gpu-timestamps")),
             build=summarize_level(build_levels, ("unavailable", "manifest-only", "binary-bound")),
         ),
-        oracle_work_used=total_work,
+        oracle_work_used=MAX_WORK - budget.remaining,
     )
 
 

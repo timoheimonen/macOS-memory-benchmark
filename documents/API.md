@@ -220,7 +220,13 @@ predicate.
 Each `runs[].result` in a sweep retains its nested mode's own schema-version field and completeness contract. Nested
 standard classification recognizes only current schema 3 with `configuration.mode == "benchmark"` plus typed
 `results_complete`, `conclusions_valid`, and `configuration.output_file` fields; standard schema 2 and every other
-standard schema version are unsupported. Complete, partial, interrupted, and failed current schema-3 evidence remains
+standard schema version are unsupported. Nested LLM-memory classification recognizes only schema 2 with
+`mode == "llm_memory"`, requiring `status == "complete"`, `results_complete == true`, `run_accepted == true`, and every
+planned entry in `measurements[]` having `status == "measured"` before incrementing `completed_runs`; nested
+`status == "unsupported"` maps to a failed sweep attempt while retaining the schema-2 payload, pre-initialization
+failures record `result: null` with the specific stable `status_reason`, and an interruption during pre-runner
+preparation records `status: "interrupted"` with `status_reason: "preparation-interrupted"` and exit status `0`.
+Complete, partial, interrupted, and failed current evidence remains
 classifiable and retained rather than being discarded by the complete-result consumer boundary. A non-zero nested
 execution that initialized a result remains in the envelope: its attempt is failed, but the payload is not replaced by
 a generic diagnostic. In particular, nested TLB `tlb_analysis.status == "error"` maps to a failed sweep attempt without
@@ -734,9 +740,11 @@ reduce the single-snapshot peak allowance.
 
 `python3 script-examples/verify_llm_result.py result.json` reads either one direct schema-2 `llm_memory` document or
 one schema-1 LLM sweep envelope (`configuration.mode == "sweep"`, `configuration.base_mode == "llm_memory"`,
-`configuration.sweep_schema_version == 1`). For a sweep envelope it validates the Cartesian plan, run ordering,
-envelope completion/acceptance counts, parameter consistency against each nested `configuration`, profile homogeneity,
-and runs full independent schema-2 verification on every non-null `runs[].result`.
+`configuration.sweep_schema_version == 1`). For a sweep envelope it validates the Cartesian plan cardinality without
+materializing the full Cartesian product, checks run ordering, `attempted_runs`, envelope completion/acceptance counts,
+nested `configuration.output_file == ""`, parameter consistency against each nested `configuration`, profile and fixed
+base-configuration/`build_manifest` homogeneity across all non-null runs, and runs full independent schema-2
+verification on every non-null `runs[].result` under one shared artifact-wide work budget.
 It supports the eight current CPU/Metal × decode/prefill × contiguous/paged component sets. Other schemas,
 methodologies and profiles are unsupported; there is no migration or historical field fallback. The independent
 Python arithmetic never imports or invokes producer helpers or executes the optional binary.

@@ -59,6 +59,7 @@ struct SweepRunOutcome {
   int exit_code = EXIT_FAILURE;
   nlohmann::ordered_json result_json;
   std::string failure_reason;
+  bool interrupted = false;
 };
 
 /** Side-effect seams used by the deterministic sweep coordinator. */

@@ -700,11 +700,13 @@ middle, and trailing items.
   order would change comparison policy and requires a versioned methodology/run-policy decision.
 - Uses task-boundary completion-wins interruption. A started scenario is not polled in its hot kernel; a completed and
   checksum-valid current task stays measured, while no next task starts after the stop is observed
-- Output values retain the shared raw-target syntax: empty disables JSON, exact `-` emits one final LLM schema 2 document,
-  and every other non-empty value is a file target, including `./-` and flag-shaped names. File output atomically
+- Output values retain the shared raw-target syntax: empty disables JSON for direct commands (invalid for sweeps),
+  exact `-` emits one final LLM schema 2 document (or one final schema 1 sweep envelope for `--sweep`), and every
+  other non-empty value is a file target, including `./-` and flag-shaped names. Direct file output atomically
   snapshots every `K=max(1,ceil(count/8))` completed loops plus command terminal, with at most eight progress
-  snapshots and an abrupt-loss bound of `3K` completed attempts. Stdout retains task stop observations without
-  intermediate snapshot preparation
+  snapshots and an abrupt-loss bound of `3K` completed attempts. `--llm-memory --sweep` file targets instead checkpoint
+  the schema-1 sweep envelope atomically after each attempted run and do not write intra-run loop snapshots. Stdout
+  retains task stop observations without intermediate snapshot preparation
 - CPU prefill uses layout-specific ARM64 executors and reports scenario-specific cost-balanced owner identities plus
   minimum/maximum/imbalance worker-cost evidence. Paged prefill additionally reports deterministic block-exclusive
   ownership, table/permutation identity, exact lookup metadata, and padding validation
@@ -932,7 +934,7 @@ middle, and trailing items.
 
 - An omitted output option or an empty value disables JSON output for a direct command. For a sweep, an empty value is
   a missing/invalid required output target
-- For every result-producing direct mode and the CPU modes' supported sweeps, an exact raw value of `-` selects
+- For every result-producing direct mode and supported sweep, an exact raw value of `-` selects
   machine-readable stdout. The sentinel is classified before path normalization
 - A supported stdout-target command emits exactly one two-space-indented UTF-8 JSON document followed by one newline
   after orchestration reaches its terminal state. Intermediate standard, sweep and GPU checkpoint requests are
@@ -945,9 +947,11 @@ middle, and trailing items.
   syntax in `configuration.output_file`
 - Standard and sweep file targets retain atomic intermediate checkpoints. Pattern, TLB, and core-to-core direct file
   targets each receive one final atomic write. GPU file output retains its terminal-measurement/failure checkpoints and
-  post-release replacement. LLM files snapshot every `K=max(1,ceil(count/8))` completed loops plus command terminal.
-  At most eight progress writes occur; abrupt loss is bounded by `3K` completed attempts, including during replacement.
-  No file is promised before the first successful snapshot. Failed LLM persistence is terminal without final-write retry
+  post-release replacement. Direct LLM files snapshot every `K=max(1,ceil(count/8))` completed loops plus command
+  terminal. At most eight progress writes occur; abrupt loss is bounded by `3K` completed attempts, including during
+  replacement. No file is promised before the first successful snapshot. Failed LLM persistence is terminal without
+  final-write retry. `--llm-memory --sweep` file targets instead follow the sweep checkpoint rule (one atomic envelope
+  checkpoint after each attempted run, with no intra-run loop snapshots)
 - With GPU `--output -`, every logical checkpoint transition and post-checkpoint stop observation still runs, but its
   lazy payload builder is not invoked and no intermediate document is serialized. The command boundary writes one
   terminal GPU schema 1 document. LLM retains task stop observations and emits one terminal schema 2 document, with
@@ -992,23 +996,31 @@ middle, and trailing items.
 - An explicit `--sweep-max-runs` value overrides the mode-specific default
 - Prevents accidental very large Cartesian sweeps
 - Every generated configuration is validated before the first run
-- General and core-to-core combined output use envelope schema
+- General, core-to-core, and LLM-memory combined output use envelope schema
   `configuration.sweep_schema_version: 1`; each `runs[].result` retains its own mode schema version
-- Standard, pattern, TLB, and core-to-core file output is atomically checkpointed after every attempted run. An empty
+- Standard, pattern, TLB, core-to-core, and LLM-memory sweep file output is atomically checkpointed after every
+  attempted run (without intra-run loop snapshots). An empty
   run plan or a stop observed before a run also checkpoints a terminal envelope without adding a `runs[]` entry or
   incrementing `attempted_runs`. Each envelope records `status`, `status_reason`, `planned_runs`, `attempted_runs`,
   `completed_runs`, and `conclusions_valid`. Stdout runs retain the same logical checkpoint cadence without invoking the
   persistence payload builder or serializing an intermediate document, and emit only the final envelope
-- For standard, pattern, and TLB sweeps, every attempted run is retained with its own `status` and `status_reason`.
+- For standard, pattern, TLB, and LLM-memory sweeps, every attempted run is retained with its own `status` and
+  `status_reason`.
   `attempted_runs` counts stored entries, while `completed_runs` counts only mode-specific nested results that are
   genuinely complete. Current standard schema 3 requires nested `configuration.mode: "benchmark"`,
   `status: "complete"`, `results_complete: true`, and `conclusions_valid: true`, plus a string
   `configuration.output_file`. Nested standard schema 2 and every other standard schema version are unsupported. Pattern
   requires nested `status: "complete"` with `results_complete: true`; TLB requires nested
   `tlb_analysis.status: "complete"` with
-  `tlb_analysis.conclusions_valid: true`. Partial, interrupted, and failed nested results never increment it. TLB's
-  native `tlb_analysis.status: "error"` is mapped to
-  a failed sweep attempt, and the schema-4 payload is retained without adding a nested `tlb_analysis.status_reason`
+  `tlb_analysis.conclusions_valid: true`; LLM-memory requires nested `mode: "llm_memory"`, `schema_version: 2`,
+  `status: "complete"`, `results_complete: true`, `run_accepted: true`, and every planned `measurements[]` entry having
+  `status: "measured"`. Partial, interrupted, unsupported, and failed nested results never increment `completed_runs`.
+  TLB's native `tlb_analysis.status: "error"` is mapped to
+  a failed sweep attempt, and the schema-4 payload is retained without adding a nested `tlb_analysis.status_reason`.
+  LLM-memory's native `status: "unsupported"` is mapped to a failed sweep attempt while retaining the schema-2 payload;
+  pre-initialization failures record `result: null` with the specific stable `status_reason`, and an interruption during
+  pre-runner resource preparation is recorded as `status: "interrupted"` with `status_reason: "preparation-interrupted"`
+  and exit status `0`
 - A parameter key may appear only once in one sweep command
 - Core-to-core sweeps also append and retain the latest attempted run when it is interrupted or fails; a file target
   checkpoints that update. Each entry records `status` and `status_reason`; `attempted_runs` counts those entries, while
@@ -1600,10 +1612,11 @@ report.
 
 ## JSON Output Format
 
-Every result-producing direct mode and the CPU modes' supported sweeps can serialize their payload either to a real file
+Every result-producing direct mode and supported sweep can serialize their payload either to a real file
 or, with the exact raw target `--output -`, once to stdout. The stdout transport does not wrap the result or change its
-measurement schema; sweep stdout is one final envelope rather than a checkpoint stream. LLM files snapshot bounded completed-loop progress
-plus command terminal, while LLM stdout emits one final schema 2 document. See
+measurement schema; sweep stdout is one final envelope rather than a checkpoint stream. Direct LLM files snapshot
+bounded completed-loop progress plus command terminal, LLM sweep files checkpoint the envelope after each attempted run
+without intra-run loop snapshots, and LLM stdout emits one final document or sweep envelope. See
 [API.md](API.md) for stream handling, process-status checks, current schema acceptance, and the transport support matrix.
 
 ### Standard benchmark JSON shape (schema 3)

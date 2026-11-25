@@ -45,6 +45,7 @@
 
 #include "core/config/constants.h"
 #include "core/config/version.h"
+#include "core/system/system_info.h"
 #include "llm_memory/llm_backend.h"
 #include "llm_memory/llm_memory.h"
 #include "output/console/messages/messages_api.h"
@@ -2017,5 +2018,38 @@ TEST(ExecutableCliIntegrationTest,
             std::string::npos);
   EXPECT_NE(result.stderr_output.find(Messages::msg_running_sweep(4)),
             std::string::npos);
+  expect_no_dash_transport_artifacts(result);
+}
+
+TEST(ExecutableCliIntegrationTest,
+     LlmMemorySweepPreservesPreInitFailureReasonInEnvelopeIntegration) {
+  const unsigned long available_mb = get_available_memory_mb();
+  const unsigned long excess_weight_mb = available_mb + 1024ul;
+  if (available_mb == 0ul || excess_weight_mb >= 65000ul) {
+    GTEST_SKIP() << "Host available memory (" << available_mb
+                 << " MiB) cannot exceed budget below exact-work guardrail";
+  }
+
+  const CliResult result = run_memory_benchmark({
+      "--llm-memory", "--weight-size-mb", std::to_string(excess_weight_mb),
+      "--layers", "2", "--query-heads", "4", "--kv-heads", "2", "--head-dim",
+      "16", "--sweep", "context-tokens=16,32", "--threads", "1",
+      "--iterations", "1", "--count", "1", "--seed", "42", "--output", "-"});
+
+  expect_process_completed(result);
+  ASSERT_EQ(result.exit_code, EXIT_FAILURE) << result.stderr_output;
+  const nlohmann::json envelope = parse_single_stdout_json(result);
+  EXPECT_EQ(envelope["configuration"]["mode"], Constants::SWEEP_JSON_MODE_NAME);
+  EXPECT_EQ(envelope["configuration"]["base_mode"], Constants::LLM_JSON_MODE_NAME);
+  EXPECT_EQ(envelope["planned_runs"], 2u);
+  EXPECT_EQ(envelope["attempted_runs"], 1u);
+  EXPECT_EQ(envelope["completed_runs"], 0u);
+  EXPECT_EQ(envelope["status"], "failed");
+  EXPECT_EQ(envelope["status_reason"], "memory-budget-exceeded");
+  EXPECT_FALSE(envelope["conclusions_valid"].get<bool>());
+  ASSERT_EQ(envelope["runs"].size(), 1u);
+  EXPECT_EQ(envelope["runs"][0]["status"], "failed");
+  EXPECT_EQ(envelope["runs"][0]["status_reason"], "memory-budget-exceeded");
+  EXPECT_TRUE(envelope["runs"][0]["result"].is_null());
   expect_no_dash_transport_artifacts(result);
 }

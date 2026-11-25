@@ -458,6 +458,14 @@ SweepNestedCompletion classify_pattern_completion(const nlohmann::ordered_json& 
           reason.empty() ? "nested-pattern-result-incomplete" : reason};
 }
 
+/**
+ * Classify nested LLM schema-2 completion from the authoritative API contract.
+ *
+ * Requires `mode == "llm_memory"`, integer `schema_version == 2`, typed
+ * completion/acceptance booleans, and all planned measurements in `"measured"`
+ * state before returning `SweepAttemptStatus::Complete`. Unsupported, failed,
+ * interrupted, and partial runs retain their stable `reason_code`.
+ */
 SweepNestedCompletion classify_llm_memory_completion(const nlohmann::ordered_json& result_json) {
   if (!result_json.is_object() || !result_json.contains("schema_version") ||
       !result_json.contains("mode")) {
@@ -620,13 +628,16 @@ SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<
       outcome.failure_reason = SWEEP_NESTED_RUN_EXCEPTION_REASON;
     }
     SweepNestedCompletion completion;
-    if (!outcome.result_json.empty() || outcome.exit_code == EXIT_SUCCESS) {
+    if (outcome.interrupted && outcome.result_json.empty()) {
+      completion.status = SweepAttemptStatus::Interrupted;
+      completion.reason = outcome.failure_reason.empty() ? "nested-run-interrupted" : outcome.failure_reason;
+    } else if (!outcome.result_json.empty() || outcome.exit_code == EXIT_SUCCESS) {
       completion = classify_sweep_nested_completion(mode, outcome.result_json);
     } else {
       completion.status = SweepAttemptStatus::Failed;
       completion.reason = outcome.failure_reason.empty() ? "nested-run-execution-failed" : outcome.failure_reason;
     }
-    if (outcome.exit_code != EXIT_SUCCESS) {
+    if (!outcome.interrupted && outcome.exit_code != EXIT_SUCCESS) {
       completion.status = SweepAttemptStatus::Failed;
       if (!outcome.failure_reason.empty()) {
         completion.reason = outcome.failure_reason;

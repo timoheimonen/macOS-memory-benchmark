@@ -157,7 +157,7 @@ For longer runs, prevent system sleep and collect repeated measurements:
 caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024 --output baseline.json
 ```
 
-For automation, every result-producing direct mode and the CPU modes' supported sweeps accept the exact output target
+For automation, every result-producing direct mode and supported sweep accepts the exact output target
 `-`. JSON is written once to stdout and the human-readable transcript is written to stderr:
 
 ```bash

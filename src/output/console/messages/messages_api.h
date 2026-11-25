@@ -156,6 +156,9 @@ std::string error_llm_memory_missing_required_option(
     const std::string& option);
 std::string error_llm_memory_config_invalid(
     const std::string& reason_code);
+std::string error_llm_memory_sweep_combination_invalid(
+    size_t combination_index, size_t total_combinations,
+    const std::string& combination_description);
 std::string error_llm_memory_iterations_exceed_limit(size_t requested,
                                                      size_t maximum);
 std::string error_llm_memory_run_failed(const std::string& reason_code);

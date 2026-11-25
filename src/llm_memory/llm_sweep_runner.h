@@ -51,12 +51,20 @@ std::vector<LlmMemoryConfig> build_llm_sweep_run_configs(
  *
  * @param config Concrete single-run configuration (`run_sweep == false`).
  * @param result_json Output schema-2 payload when a representable result is
- *        initialized; left empty on pre-initialization setup failures.
+ *        initialized; left empty on pre-initialization setup failures or
+ *        pre-initialization interruption.
+ * @param failure_reason Optional stable reason code populated when execution
+ *        fails or is interrupted before result initialization.
+ * @param preparation_interrupted Optional output set to `true` when stop is
+ *        observed during paged table or backend resource preparation before
+ *        measurement execution begins.
  * @return `EXIT_SUCCESS` on complete or gracefully interrupted execution;
  *         `EXIT_FAILURE` otherwise.
  */
 int run_llm_memory_collect(const LlmMemoryConfig& config,
-                           nlohmann::ordered_json& result_json);
+                           nlohmann::ordered_json& result_json,
+                           std::string* failure_reason = nullptr,
+                           bool* preparation_interrupted = nullptr);
 
 /**
  * Execute an LLM parameter sweep through one command-owned output session.

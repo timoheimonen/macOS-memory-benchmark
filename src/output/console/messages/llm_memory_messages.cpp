@@ -53,6 +53,16 @@ std::string error_llm_memory_config_invalid(
          ")";
 }
 
+std::string error_llm_memory_sweep_combination_invalid(
+    size_t combination_index, size_t total_combinations,
+    const std::string& combination_description) {
+  std::ostringstream message;
+  message << "LLM sweep combination " << combination_index << "/"
+          << total_combinations << " (" << combination_description
+          << ") failed preflight validation";
+  return message.str();
+}
+
 std::string error_llm_memory_iterations_exceed_limit(size_t requested,
                                                      size_t maximum) {
   std::ostringstream message;
@@ -159,10 +169,11 @@ std::string llm_memory_usage_options(const std::string& prog_name) {
         << "  -r, --count <count>    Cyclic weights/KV/mixed loops (default: " << Constants::LLM_DEFAULT_LOOP_COUNT
         << ").\n"
         << "      --seed <uint64>    Reproducible base seed; generated once when omitted.\n"
-        << "  -o, --output <target>  JSON schema 2 target; exact - writes one final document to\n"
-        << "                          stdout and routes human output to stderr. Every other non-empty\n"
-        << "                          target is a file with bounded loop and terminal atomic snapshots.\n"
-        << "                          K=max(1,ceil(count/8)); abrupt loss bound: 3K completed attempts.\n"
+        << "  -o, --output <target>  JSON schema 2 target (or schema 1 sweep envelope with --sweep);\n"
+        << "                          exact - writes one final document to stdout and routes human\n"
+        << "                          output to stderr. Direct file targets snapshot every\n"
+        << "                          K=max(1,ceil(count/8)) loops plus terminal (abrupt loss bound:\n"
+        << "                          3K completed attempts); sweep files checkpoint after each run.\n"
         << "                          An empty value disables JSON for direct commands and is invalid for sweeps.\n"
         << "  -S, --sweep <key=a,b>  Run a Cartesian sweep over one parameter. Repeat for multiple\n"
         << "                          parameters. Supported keys: context-tokens (decode),\n"

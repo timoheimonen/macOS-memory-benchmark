@@ -342,6 +342,7 @@ class VerifierTests(unittest.TestCase):
 
     def make_sweep_envelope(self, fixture_name="cpu-decode-contiguous", param_key="context-tokens"):
         doc = fixture(fixture_name)
+        doc["configuration"]["output_file"] = ""
         config_key = verifier.SWEEP_PARAM_CONFIG_KEYS[param_key]
         value = doc["configuration"][config_key]
         return dict(
@@ -354,6 +355,7 @@ class VerifierTests(unittest.TestCase):
                 sweep_parameters={param_key: [value]},
             ),
             planned_runs=1,
+            attempted_runs=1,
             completed_runs=1,
             status="complete",
             conclusions_valid=True,
@@ -364,6 +366,32 @@ class VerifierTests(unittest.TestCase):
                     status="complete",
                     result=doc,
                 )
+            ],
+        )
+
+    def make_two_run_sweep_envelope(self, fixture_name="cpu-decode-contiguous", param_key="context-tokens"):
+        doc0 = fixture(fixture_name)
+        doc0["configuration"]["output_file"] = ""
+        doc1 = copy.deepcopy(doc0)
+        config_key = verifier.SWEEP_PARAM_CONFIG_KEYS[param_key]
+        value = doc0["configuration"][config_key]
+        return dict(
+            configuration=dict(
+                mode="sweep",
+                base_mode="llm_memory",
+                sweep_schema_version=1,
+                run_count=2,
+                sweep_max_runs=16,
+                sweep_parameters={param_key: [value, value]},
+            ),
+            planned_runs=2,
+            attempted_runs=2,
+            completed_runs=2,
+            status="complete",
+            conclusions_valid=True,
+            runs=[
+                dict(index=0, parameters={param_key: value}, status="complete", result=doc0),
+                dict(index=1, parameters={param_key: value}, status="complete", result=doc1),
             ],
         )
 
@@ -382,9 +410,14 @@ class VerifierTests(unittest.TestCase):
                 self.assertEqual(verdict["artifact_kind"], "llm_sweep")
                 self.assertEqual(verdict["completed_runs"], 1)
 
+        def nested_truncated(status):
+            doc = truncated(status)
+            doc["configuration"]["output_file"] = ""
+            return doc
+
         failed_envelope = self.make_sweep_envelope()
         failed_envelope["runs"][0]["status"] = "failed"
-        failed_envelope["runs"][0]["result"] = truncated("failed")
+        failed_envelope["runs"][0]["result"] = nested_truncated("failed")
         failed_envelope["completed_runs"] = 0
         failed_envelope["status"] = "failed"
         failed_envelope["conclusions_valid"] = False
@@ -403,6 +436,16 @@ class VerifierTests(unittest.TestCase):
         self.assertTrue(verdict["artifact_consistent"])
         self.assertFalse(verdict["run_accepted"])
 
+        null_interrupted_envelope = self.make_sweep_envelope()
+        null_interrupted_envelope["runs"][0]["status"] = "interrupted"
+        null_interrupted_envelope["runs"][0]["result"] = None
+        null_interrupted_envelope["completed_runs"] = 0
+        null_interrupted_envelope["status"] = "interrupted"
+        null_interrupted_envelope["conclusions_valid"] = False
+        verdict = verifier.verify(null_interrupted_envelope)
+        self.assertTrue(verdict["artifact_consistent"])
+        self.assertFalse(verdict["run_accepted"])
+
         mutation_cases = [
             (
                 "unsupported-sweep-schema",
@@ -411,6 +454,26 @@ class VerifierTests(unittest.TestCase):
             (
                 "sweep-plan-count-mismatch",
                 lambda e: e.update(planned_runs=2),
+            ),
+            (
+                "sweep-plan-count-mismatch",
+                lambda e: e["configuration"].update(
+                    sweep_max_runs=1000,
+                    sweep_parameters={
+                        "context-tokens": list(range(1, 101)),
+                        "kv-block-tokens": list(range(1, 101)),
+                        "prompt-tokens": list(range(1, 101)),
+                        "attention-query-tile-tokens": list(range(1, 101)),
+                    },
+                ),
+            ),
+            (
+                "sweep-attempted-runs-mismatch",
+                lambda e: e.update(attempted_runs=0),
+            ),
+            (
+                "sweep-nested-output-file-mismatch",
+                lambda e: e["runs"][0]["result"]["configuration"].update(output_file="out.json"),
             ),
             (
                 "sweep-parameters-mismatch",
@@ -425,7 +488,7 @@ class VerifierTests(unittest.TestCase):
             ),
             (
                 "sweep-run-status-mismatch",
-                lambda e: e["runs"][0].update(result=truncated("failed")),
+                lambda e: e["runs"][0].update(result=nested_truncated("failed")),
             ),
             (
                 "sweep-completed-runs-mismatch",
@@ -445,6 +508,29 @@ class VerifierTests(unittest.TestCase):
                 envelope = self.make_sweep_envelope()
                 mutate(envelope)
                 self.assert_reason(envelope, reason)
+
+        # Splicing runs from different base configurations or build manifests must fail.
+        for splice_name, mutate in (
+            ("manifest", lambda e: e["runs"][1]["result"]["build_manifest"].update(compiler="other-cc")),
+            ("argv", lambda e: e["runs"][1]["result"]["configuration"].update(argv=["other"])),
+        ):
+            with self.subTest(splice=splice_name):
+                spliced = self.make_two_run_sweep_envelope()
+                mutate(spliced)
+                self.assert_reason(spliced, "sweep-base-config-mismatch")
+
+        # Shared work budget must apply across the entire sweep artifact, not reset per run.
+        single_verdict = verifier.verify(self.make_sweep_envelope())
+        single_work = single_verdict["oracle_work_used"]
+        two_run = self.make_two_run_sweep_envelope()
+        two_verdict = verifier.verify(two_run)
+        self.assertGreater(two_verdict["oracle_work_used"], single_work)
+        with mock.patch.object(verifier, "MAX_WORK", single_work + 1), self.assertRaises(
+            verifier.Rejected
+        ) as caught:
+            verifier.verify(two_run)
+        self.assertEqual(caught.exception.reason, "unsupported-work-limit")
+        self.assertTrue(caught.exception.unsupported)
 
         with tempfile.TemporaryDirectory(prefix="llm-sweep-verifier-", dir="/tmp") as directory:
             path = Path(directory) / "sweep.json"

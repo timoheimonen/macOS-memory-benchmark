@@ -399,6 +399,7 @@ build_runtime_metal_resource_request(
   return request;
 }
 
+/** Map a raw CLI `--sweep` parameter key to its typed LLM sweep enum. */
 bool llm_sweep_parameter_from_string(const std::string& key,
                                      LlmSweepParameter& out_parameter,
                                      std::string& out_name) {
@@ -425,6 +426,12 @@ bool llm_sweep_parameter_from_string(const std::string& key,
   return false;
 }
 
+/**
+ * Parse and type-check one `--sweep key=v1,v2,...` specification for LLM mode.
+ *
+ * Structural syntax and non-empty tokens are checked by `parse_sweep_text`;
+ * key admissibility and integer bounds are validated against LLM CLI rules.
+ */
 bool parse_llm_sweep_spec(const std::string& spec_text,
                           LlmSweepSpec& out_spec) {
   ParsedSweepText parsed_text;
@@ -466,6 +473,39 @@ bool parse_llm_sweep_spec(const std::string& spec_text,
   return true;
 }
 
+/** Format the swept parameter values of one expanded run for preflight diagnostics. */
+std::string format_llm_sweep_combination(const LlmMemoryConfig& base_config,
+                                         const LlmMemoryConfig& run_config) {
+  std::string description;
+  for (size_t i = 0; i < base_config.sweep_specs.size(); ++i) {
+    if (i > 0) {
+      description += ", ";
+    }
+    const LlmSweepSpec& spec = base_config.sweep_specs[i];
+    size_t value = 0;
+    switch (spec.parameter) {
+      case LlmSweepParameter::ContextTokens:
+        value = run_config.visible_context_tokens;
+        break;
+      case LlmSweepParameter::KvBlockTokens:
+        value = run_config.kv_block_tokens;
+        break;
+      case LlmSweepParameter::PromptTokens:
+        value = run_config.prompt_tokens;
+        break;
+      case LlmSweepParameter::AttentionQueryTileTokens:
+        value = run_config.attention_query_tile_tokens;
+        break;
+    }
+    description += spec.parameter_name + "=" + std::to_string(value);
+  }
+  return description;
+}
+
+/**
+ * Run pure logical, profile, geometry, and explicit-iteration preflight checks
+ * for one concrete LLM configuration without allocating resources.
+ */
 bool preflight_llm_single_config(const LlmMemoryConfig& config) {
   const LlmMemoryConfigValidation validation =
       validate_llm_memory_config(config);
@@ -1071,8 +1111,13 @@ int parse_llm_memory_arguments(int argc, char* argv[],
   if (config.run_sweep) {
     const std::vector<LlmMemoryConfig> run_configs =
         build_llm_sweep_run_configs(config);
-    for (const LlmMemoryConfig& run_config : run_configs) {
-      if (!preflight_llm_single_config(run_config)) {
+    for (size_t i = 0; i < run_configs.size(); ++i) {
+      if (!preflight_llm_single_config(run_configs[i])) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_llm_memory_sweep_combination_invalid(
+                         i + 1, run_configs.size(),
+                         format_llm_sweep_combination(config, run_configs[i]))
+                  << std::endl;
         return EXIT_FAILURE;
       }
     }
@@ -1088,12 +1133,34 @@ int parse_llm_memory_arguments(int argc, char* argv[],
   return EXIT_SUCCESS;
 }
 
+/**
+ * Execute one concrete LLM memory profile run for direct or sweep-collect mode.
+ *
+ * When `output_session` is non-null, persists direct file checkpoints or final
+ * stdout JSON through the caller's session. When `collected_json` is non-null,
+ * populates the in-memory schema-2 payload (or records `failure_reason` /
+ * `preparation_interrupted` when stopping before result initialization) and
+ * releases all backend resources before returning.
+ */
 int execute_llm_memory_run(const LlmMemoryConfig& config,
                            JsonOutputSession* output_session,
                            bool install_signal_mask, bool print_banner,
-                           nlohmann::ordered_json* collected_json) noexcept {
+                           nlohmann::ordered_json* collected_json,
+                           std::string* failure_reason,
+                           bool* preparation_interrupted) noexcept {
+  const auto record_failure = [&](std::string_view reason) {
+    if (failure_reason != nullptr && !reason.empty()) {
+      *failure_reason = std::string(reason);
+    }
+  };
   if (collected_json != nullptr) {
     *collected_json = nlohmann::ordered_json();
+  }
+  if (failure_reason != nullptr) {
+    failure_reason->clear();
+  }
+  if (preparation_interrupted != nullptr) {
+    *preparation_interrupted = false;
   }
   int run_status = EXIT_FAILURE;
   LlmMemoryWorkPlan model_plan;
@@ -1107,9 +1174,8 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
     }
     metadata.build_manifest = nlohmann::ordered_json::parse(LLM_BUILD_MANIFEST_JSON);
     const std::string binary_hash = capture_llm_binary_sha256();
-    if (!binary_hash.empty()) {
-      metadata.build_manifest["binary_sha256"] = binary_hash;
-    } else {
+    if (!binary_hash.empty()) metadata.build_manifest["binary_sha256"] = binary_hash;
+    else {
       metadata.build_manifest["status"] = "partial";
       metadata.build_manifest["reason_code"] = "binary-hash-unavailable";
     }
@@ -1133,6 +1199,7 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
 
     backend = create_llm_backend(config.backend);
     if (!backend) {
+      record_failure(LlmBackendReason::INVALID_BACKEND);
       std::cerr << Messages::error_prefix()
                 << Messages::error_llm_memory_run_failed(
                        LlmBackendReason::INVALID_BACKEND)
@@ -1146,6 +1213,7 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
     } else {
       if (!NumericUtils::checked_multiply(static_cast<size_t>(available_memory_mb), Constants::BYTES_PER_MB,
                                           metadata.available_memory_bytes)) {
+        record_failure(LlmWorkPlanReason::MEMORY_BUDGET_OVERFLOW);
         std::cerr << Messages::error_prefix()
                   << Messages::error_llm_memory_run_failed(LlmWorkPlanReason::MEMORY_BUDGET_OVERFLOW) << std::endl;
         return EXIT_FAILURE;
@@ -1157,6 +1225,15 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
         metadata.page_size_bytes,
         []() { return signal_received(); });
     if (!model_draft.valid) {
+      record_failure(model_draft.reason_code);
+      if (collected_json != nullptr &&
+          model_draft.reason_code == LlmKvLayoutReason::PREPARATION_INTERRUPTED) {
+        if (preparation_interrupted != nullptr) {
+          *preparation_interrupted = true;
+        }
+        std::cout << Messages::msg_interrupted_by_user() << std::endl;
+        return EXIT_SUCCESS;
+      }
       std::cerr << Messages::error_prefix()
                 << Messages::error_llm_memory_run_failed(
                        model_draft.reason_code)
@@ -1186,12 +1263,13 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
             preflight_execution.reason_code;
         if (!attach_llm_metal_execution_plan(
                 model_draft, std::move(preflight_execution))) {
+          const std::string effective_reason =
+              preflight_reason.empty()
+                  ? std::string(LlmBackendReason::EXECUTION_PLAN_MISMATCH)
+                  : preflight_reason;
+          record_failure(effective_reason);
           std::cerr << Messages::error_prefix()
-                    << Messages::error_llm_memory_run_failed(
-                           preflight_reason.empty()
-                               ? std::string(
-                                     LlmBackendReason::EXECUTION_PLAN_MISMATCH)
-                               : preflight_reason)
+                    << Messages::error_llm_memory_run_failed(effective_reason)
                     << std::endl;
           return EXIT_FAILURE;
         }
@@ -1211,6 +1289,7 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
           calculate_llm_json_peak_estimate(
               config, model_draft.auxiliary_preflight);
       if (!metadata.json_peak_estimate.valid) {
+        record_failure(metadata.json_peak_estimate.reason_code);
         std::cerr << Messages::error_prefix()
                   << Messages::error_llm_memory_run_failed(std::string(metadata.json_peak_estimate.reason_code))
                   << std::endl;
@@ -1228,12 +1307,14 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
                 ? std::string(backend_auxiliary.reason_code)
                 : (!runner_auxiliary.valid ? std::string(runner_auxiliary.reason_code)
                                            : std::string(LlmRunnerReason::AUXILIARY_BYTES_OVERFLOW));
+        record_failure(reason_code);
         std::cerr << Messages::error_prefix() << Messages::error_llm_memory_run_failed(reason_code) << std::endl;
         return EXIT_FAILURE;
       }
       if (!NumericUtils::checked_add(runner_and_backend_orchestration_bytes,
                                      metadata.json_peak_estimate.total_bytes,
                                      orchestration_auxiliary_bytes)) {
+        record_failure(LlmJsonReason::PEAK_BYTES_OVERFLOW);
         std::cerr << Messages::error_prefix()
                   << Messages::error_llm_memory_run_failed(LlmJsonReason::PEAK_BYTES_OVERFLOW) << std::endl;
         return EXIT_FAILURE;
@@ -1252,6 +1333,7 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
                   .planner_storage_bytes,
               command_auxiliary_bytes,
               additional_owned_bytes)) {
+        record_failure(LlmRunnerReason::AUXILIARY_BYTES_OVERFLOW);
         std::cerr << Messages::error_prefix()
                   << Messages::error_llm_memory_run_failed(
                          LlmRunnerReason::AUXILIARY_BYTES_OVERFLOW)
@@ -1282,6 +1364,15 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
           []() { return signal_received(); });
     }
     if (!model_plan.valid) {
+      record_failure(model_plan.reason_code);
+      if (collected_json != nullptr &&
+          model_plan.reason_code == LlmKvLayoutReason::PREPARATION_INTERRUPTED) {
+        if (preparation_interrupted != nullptr) {
+          *preparation_interrupted = true;
+        }
+        std::cout << Messages::msg_interrupted_by_user() << std::endl;
+        return EXIT_SUCCESS;
+      }
       if (model_plan.reason_code ==
           LlmWorkPlanReason::BLOCK_TABLE_PROTECTION_FAILED) {
         std::cerr << Messages::error_prefix()
@@ -1324,6 +1415,7 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
     run_status =
         run_llm_memory_suite(config, model_plan, *backend, result, hooks);
     if (!result.initialized) {
+      record_failure(result.reason_code);
       if (result.reason_code == LlmBackendReason::TIMER_UNAVAILABLE) {
         return EXIT_FAILURE;
       }
@@ -1345,6 +1437,16 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
       }
       return EXIT_FAILURE;
     }
+    if (collected_json != nullptr &&
+        result.status == LlmRunStatus::Failed &&
+        result.reason_code == LlmBackendReason::PREPARATION_INTERRUPTED) {
+      record_failure(result.reason_code);
+      if (preparation_interrupted != nullptr) {
+        *preparation_interrupted = true;
+      }
+      std::cout << Messages::msg_interrupted_by_user() << std::endl;
+      return EXIT_SUCCESS;
+    }
     if (llm_command_hooks_active &&
         active_llm_command_hooks.after_initialized_runner) {
       active_llm_command_hooks.after_initialized_runner();
@@ -1364,13 +1466,16 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
     if (result.status == LlmRunStatus::Interrupted) {
       std::cout << Messages::msg_interrupted_by_user() << std::endl;
     } else if (run_status != EXIT_SUCCESS) {
+      record_failure(result.reason_code);
       std::cerr << Messages::error_prefix() << Messages::error_llm_memory_run_failed(result.reason_code) << std::endl;
     }
   } catch (const std::exception& error) {
+    record_failure(LlmRunnerReason::RUNNER_EXCEPTION);
     report_llm_command_exception(error.what());
     run_status = EXIT_FAILURE;
     post_run_exception = result.initialized;
   } catch (...) {
+    record_failure(LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION);
     report_llm_command_exception("");
     run_status = EXIT_FAILURE;
     post_run_exception = result.initialized;
@@ -1428,10 +1533,12 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
       *collected_json = build_llm_memory_json(
           config, model_plan, backend->evidence(), metadata, result);
     } catch (const std::exception& error) {
+      record_failure(LlmRunnerReason::RUNNER_EXCEPTION);
       report_llm_command_exception(error.what());
       *collected_json = nlohmann::ordered_json();
       return EXIT_FAILURE;
     } catch (...) {
+      record_failure(LlmRunnerReason::RUNNER_UNKNOWN_EXCEPTION);
       report_llm_command_exception("");
       *collected_json = nlohmann::ordered_json();
       return EXIT_FAILURE;
@@ -1450,10 +1557,13 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
 }
 
 int run_llm_memory_collect(const LlmMemoryConfig& config,
-                           nlohmann::ordered_json& result_json) {
+                           nlohmann::ordered_json& result_json,
+                           std::string* failure_reason,
+                           bool* preparation_interrupted) {
   return execute_llm_memory_run(config, /*output_session=*/nullptr,
                                 /*install_signal_mask=*/false,
-                                /*print_banner=*/false, &result_json);
+                                /*print_banner=*/false, &result_json,
+                                failure_reason, preparation_interrupted);
 }
 
 int run_llm_memory_mode(int argc, char* argv[]) {
@@ -1529,7 +1639,9 @@ int run_llm_memory_mode(int argc, char* argv[]) {
   return execute_llm_memory_run(config, &*output_session,
                                 /*install_signal_mask=*/true,
                                 /*print_banner=*/true,
-                                /*collected_json=*/nullptr);
+                                /*collected_json=*/nullptr,
+                                /*failure_reason=*/nullptr,
+                                /*preparation_interrupted=*/nullptr);
 }
 
 LlmMemoryConfigValidation validate_llm_memory_config(

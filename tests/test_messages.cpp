@@ -185,10 +185,11 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       std::to_string(Constants::LLM_DEFAULT_LOOP_COUNT) +
       ").\n"
       "      --seed <uint64>    Reproducible base seed; generated once when omitted.\n"
-      "  -o, --output <target>  JSON schema 2 target; exact - writes one final document to\n"
-      "                          stdout and routes human output to stderr. Every other non-empty\n"
-      "                          target is a file with bounded loop and terminal atomic snapshots.\n"
-      "                          K=max(1,ceil(count/8)); abrupt loss bound: 3K completed attempts.\n"
+      "  -o, --output <target>  JSON schema 2 target (or schema 1 sweep envelope with --sweep);\n"
+      "                          exact - writes one final document to stdout and routes human\n"
+      "                          output to stderr. Direct file targets snapshot every\n"
+      "                          K=max(1,ceil(count/8)) loops plus terminal (abrupt loss bound:\n"
+      "                          3K completed attempts); sweep files checkpoint after each run.\n"
       "                          An empty value disables JSON for direct commands and is invalid for sweeps.\n"
       "  -S, --sweep <key=a,b>  Run a Cartesian sweep over one parameter. Repeat for multiple\n"
       "                          parameters. Supported keys: context-tokens (decode),\n"
@@ -222,6 +223,9 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       {"config reason", Messages::error_llm_memory_config_invalid("query-heads-not-divisible-by-kv-heads"),
        "Invalid --llm-memory configuration "
        "(reason_code=query-heads-not-divisible-by-kv-heads)"},
+      {"sweep combination invalid",
+       Messages::error_llm_memory_sweep_combination_invalid(2, 4, "prompt-tokens=32, attention-query-tile-tokens=48"),
+       "LLM sweep combination 2/4 (prompt-tokens=32, attention-query-tile-tokens=48) failed preflight validation"},
       {"iteration limit", Messages::error_llm_memory_iterations_exceed_limit(5, 4),
        "LLM memory iterations exceed the exact-work guardrail "
        "(requested 5, maximum 4)"},

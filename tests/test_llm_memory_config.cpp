@@ -1589,4 +1589,55 @@ TEST(LlmMemoryConfigTest, RejectsInvalidAndConflictingLlmSweepConfigurations) {
               std::string::npos)
         << parsed.stderr_output;
   }
+
+  // Preflight failures must identify the exact failing sweep combination.
+  {
+    LlmMemoryConfig config;
+    const CapturedLlmParse parsed = parse_llm_arguments_capturing(
+        {"memory_benchmark", "--llm-memory", "--phase", "prefill",
+         "--weight-size-mb", "64", "--layers", "4", "--query-heads", "8",
+         "--kv-heads", "2", "--head-dim", "64", "--sweep",
+         "prompt-tokens=32,64", "--sweep",
+         "attention-query-tile-tokens=16,48", "--output", "out.json"},
+        config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_NE(
+        parsed.stderr_output.find(
+            Messages::error_llm_memory_sweep_combination_invalid(
+                2u, 4u, "prompt-tokens=32, attention-query-tile-tokens=48")),
+        std::string::npos)
+        << parsed.stderr_output;
+  }
+}
+
+TEST(LlmMemoryConfigTest, LlmSweepCollectPreservesPreInitFailureReason) {
+  LlmMemoryConfig config;
+  const CapturedLlmParse parsed = parse_llm_arguments_capturing(
+      {"memory_benchmark", "--llm-memory", "--weight-size-mb", "1",
+       "--layers", "2", "--query-heads", "4", "--kv-heads", "2", "--head-dim",
+       "16", "--context-tokens", "16", "--threads", "1", "--iterations", "1",
+       "--count", "1", "--seed", "42"},
+      config);
+  ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+  config.collect_json_for_sweep = true;
+
+  const ScopedFailingTimerSystemCalls timer_system_calls;
+  nlohmann::ordered_json collected_json;
+  std::string failure_reason;
+  bool preparation_interrupted = false;
+  testing::internal::CaptureStdout();
+  testing::internal::CaptureStderr();
+  const int result = run_llm_memory_collect(config, collected_json,
+                                            &failure_reason,
+                                            &preparation_interrupted);
+  const std::string stdout_text = testing::internal::GetCapturedStdout();
+  const std::string stderr_text = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(result, EXIT_FAILURE) << stdout_text << stderr_text;
+  EXPECT_TRUE(collected_json.empty());
+  EXPECT_FALSE(preparation_interrupted);
+  EXPECT_EQ(failure_reason, LlmBackendReason::TIMER_UNAVAILABLE);
+  EXPECT_NE(stderr_text.find(Messages::error_mach_timebase_info_failed(
+                mach_error_string(KERN_FAILURE))),
+            std::string::npos);
 }
