@@ -564,3 +564,90 @@ TEST(SweepRunnerTest, InterruptionBeforeOrAfterFirstRunPreservesCompletedEvidenc
     EXPECT_TRUE(announce_flags[0]);
   }
 }
+
+TEST(SweepRunnerTest, LlmMemoryNestedCompletionRequiresSchema2Contract) {
+  auto make_llm_result = [](const std::string& status, bool results_complete,
+                            bool run_accepted, const std::string& reason = "") {
+    return Json{
+        {"schema_version", Constants::LLM_JSON_SCHEMA_VERSION},
+        {"mode", Constants::LLM_JSON_MODE_NAME},
+        {"status", status},
+        {"reason_code", reason},
+        {"results_complete", results_complete},
+        {"run_accepted", run_accepted},
+        {"measurements",
+         Json::array({{{"measurement_id", 0}, {"status", "measured"}}})},
+    };
+  };
+
+  Json complete = make_llm_result("complete", true, true, "complete");
+  Json interrupted = make_llm_result("interrupted", false, false, "interruption-requested");
+  Json interrupted_no_reason = make_llm_result("interrupted", false, false);
+  Json unsupported = make_llm_result("unsupported", false, false, "metal-device-unavailable");
+  Json unsupported_no_reason = make_llm_result("unsupported", false, false);
+  Json failed = make_llm_result("failed", false, false, "checksum-mismatch");
+  Json failed_no_reason = make_llm_result("failed", false, false);
+  Json partial = make_llm_result("partial", false, false, "partial-results");
+  Json accepted_false = make_llm_result("complete", true, false, "checkpoint-write-failed");
+  Json empty_measurements = complete;
+  empty_measurements["measurements"] = Json::array();
+  Json unmeasured_row = complete;
+  unmeasured_row["measurements"][0]["status"] = "invalid";
+  Json wrong_schema = complete;
+  wrong_schema["schema_version"] = 1;
+  Json bool_schema = complete;
+  bool_schema["schema_version"] = true;
+  Json wrong_mode = complete;
+  wrong_mode["mode"] = "benchmark";
+  Json missing_schema = complete;
+  missing_schema.erase("schema_version");
+
+  struct Case {
+    const char* name;
+    Json payload;
+    SweepAttemptStatus expected_status;
+    const char* expected_reason;
+  };
+  const std::vector<Case> cases = {
+      {"complete schema 2", complete, SweepAttemptStatus::Complete, ""},
+      {"interrupted with reason", interrupted, SweepAttemptStatus::Interrupted, "interruption-requested"},
+      {"interrupted without reason", interrupted_no_reason, SweepAttemptStatus::Interrupted, "nested-llm-run-interrupted"},
+      {"unsupported with reason", unsupported, SweepAttemptStatus::Failed, "metal-device-unavailable"},
+      {"unsupported without reason", unsupported_no_reason, SweepAttemptStatus::Failed, "nested-llm-run-unsupported"},
+      {"failed with reason", failed, SweepAttemptStatus::Failed, "checksum-mismatch"},
+      {"failed without reason", failed_no_reason, SweepAttemptStatus::Failed, "nested-llm-run-failed"},
+      {"partial with reason", partial, SweepAttemptStatus::Partial, "partial-results"},
+      {"run_accepted false", accepted_false, SweepAttemptStatus::Partial, "checkpoint-write-failed"},
+      {"empty measurements", empty_measurements, SweepAttemptStatus::Partial, "invalid-llm-schema-contract"},
+      {"unmeasured row", unmeasured_row, SweepAttemptStatus::Partial, "invalid-llm-schema-contract"},
+      {"wrong schema", wrong_schema, SweepAttemptStatus::Partial, "unsupported-llm-schema-version"},
+      {"bool schema", bool_schema, SweepAttemptStatus::Partial, "unsupported-llm-schema-version"},
+      {"wrong mode", wrong_mode, SweepAttemptStatus::Partial, "invalid-llm-schema-contract"},
+      {"missing schema", missing_schema, SweepAttemptStatus::Partial, "missing-llm-schema-version"},
+  };
+
+  for (const Case& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
+    const SweepNestedCompletion completion =
+        classify_sweep_nested_completion(SweepNestedMode::LlmMemory, test_case.payload);
+    EXPECT_EQ(completion.status, test_case.expected_status);
+    EXPECT_EQ(completion.reason, test_case.expected_reason);
+  }
+
+  std::vector<Json> checkpoints;
+  std::vector<bool> announce_flags;
+  size_t executed_runs = 0;
+  const std::vector<SweepRunOutcome> outcomes = {
+      {EXIT_SUCCESS, complete, ""},
+      {EXIT_FAILURE, unsupported, ""},
+  };
+  SweepExecutionHooks hooks = make_hooks(outcomes, checkpoints, announce_flags, executed_runs);
+  const SweepExecutionResult execution =
+      execute_sweep_plan(SweepNestedMode::LlmMemory, make_parameters(2), Json::object(), hooks);
+  EXPECT_EQ(execution.exit_code, EXIT_FAILURE);
+  EXPECT_EQ(execution.output_json["status"], "failed");
+  EXPECT_EQ(execution.output_json["completed_runs"], 1u);
+  EXPECT_EQ(execution.output_json["runs"][0]["status"], "complete");
+  EXPECT_EQ(execution.output_json["runs"][1]["status"], "failed");
+  EXPECT_EQ(execution.output_json["runs"][1]["status_reason"], "metal-device-unavailable");
+}

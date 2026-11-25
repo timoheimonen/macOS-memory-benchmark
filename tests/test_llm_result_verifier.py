@@ -340,6 +340,125 @@ class VerifierTests(unittest.TestCase):
                 verifier.verify(doc, binary.name)
             self.assertEqual(caught.exception.reason, "binary-hash-mismatch")
 
+    def make_sweep_envelope(self, fixture_name="cpu-decode-contiguous", param_key="context-tokens"):
+        doc = fixture(fixture_name)
+        config_key = verifier.SWEEP_PARAM_CONFIG_KEYS[param_key]
+        value = doc["configuration"][config_key]
+        return dict(
+            configuration=dict(
+                mode="sweep",
+                base_mode="llm_memory",
+                sweep_schema_version=1,
+                run_count=1,
+                sweep_max_runs=16,
+                sweep_parameters={param_key: [value]},
+            ),
+            planned_runs=1,
+            completed_runs=1,
+            status="complete",
+            conclusions_valid=True,
+            runs=[
+                dict(
+                    index=0,
+                    parameters={param_key: value},
+                    status="complete",
+                    result=doc,
+                )
+            ],
+        )
+
+    def test_llm_sweep_envelope_verification_and_mutations(self):
+        for fixture_name, param_key in (
+            ("cpu-decode-contiguous", "context-tokens"),
+            ("cpu-decode-paged", "kv-block-tokens"),
+            ("cpu-prefill-contiguous", "prompt-tokens"),
+            ("metal-prefill-paged", "attention-query-tile-tokens"),
+        ):
+            with self.subTest(fixture=fixture_name, key=param_key):
+                envelope = self.make_sweep_envelope(fixture_name, param_key)
+                verdict = verifier.verify(envelope)
+                self.assertTrue(verdict["artifact_consistent"])
+                self.assertTrue(verdict["run_accepted"])
+                self.assertEqual(verdict["artifact_kind"], "llm_sweep")
+                self.assertEqual(verdict["completed_runs"], 1)
+
+        failed_envelope = self.make_sweep_envelope()
+        failed_envelope["runs"][0]["status"] = "failed"
+        failed_envelope["runs"][0]["result"] = truncated("failed")
+        failed_envelope["completed_runs"] = 0
+        failed_envelope["status"] = "failed"
+        failed_envelope["conclusions_valid"] = False
+        verdict = verifier.verify(failed_envelope)
+        self.assertTrue(verdict["artifact_consistent"])
+        self.assertFalse(verdict["run_accepted"])
+        self.assertEqual(verdict["reason_code"], "sweep-not-accepted")
+
+        null_failed_envelope = self.make_sweep_envelope()
+        null_failed_envelope["runs"][0]["status"] = "failed"
+        null_failed_envelope["runs"][0]["result"] = None
+        null_failed_envelope["completed_runs"] = 0
+        null_failed_envelope["status"] = "failed"
+        null_failed_envelope["conclusions_valid"] = False
+        verdict = verifier.verify(null_failed_envelope)
+        self.assertTrue(verdict["artifact_consistent"])
+        self.assertFalse(verdict["run_accepted"])
+
+        mutation_cases = [
+            (
+                "unsupported-sweep-schema",
+                lambda e: e["configuration"].update(sweep_schema_version=2),
+            ),
+            (
+                "sweep-plan-count-mismatch",
+                lambda e: e.update(planned_runs=2),
+            ),
+            (
+                "sweep-parameters-mismatch",
+                lambda e: e["runs"][0]["parameters"].update({"context-tokens": 999}),
+            ),
+            (
+                "sweep-nested-parameter-mismatch",
+                lambda e: (
+                    e["configuration"]["sweep_parameters"].update({"context-tokens": [999]}),
+                    e["runs"][0]["parameters"].update({"context-tokens": 999}),
+                ),
+            ),
+            (
+                "sweep-run-status-mismatch",
+                lambda e: e["runs"][0].update(result=truncated("failed")),
+            ),
+            (
+                "sweep-completed-runs-mismatch",
+                lambda e: e.update(completed_runs=0),
+            ),
+            (
+                "sweep-status-mismatch",
+                lambda e: e.update(conclusions_valid=False),
+            ),
+            (
+                "counter-mismatch",
+                lambda e: e["runs"][0]["result"]["counters"].update(completed_work_units="0"),
+            ),
+        ]
+        for reason, mutate in mutation_cases:
+            with self.subTest(reason=reason):
+                envelope = self.make_sweep_envelope()
+                mutate(envelope)
+                self.assert_reason(envelope, reason)
+
+        with tempfile.TemporaryDirectory(prefix="llm-sweep-verifier-", dir="/tmp") as directory:
+            path = Path(directory) / "sweep.json"
+            for envelope, expected in ((self.make_sweep_envelope(), 0), (failed_envelope, 1)):
+                path.write_text(json.dumps(envelope))
+                result = subprocess.run(
+                    [sys.executable, str(ROOT / "script-examples/verify_llm_result.py"), str(path)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                parsed = json.loads(result.stdout)
+                self.assertEqual(parsed["artifact_kind"], "llm_sweep")
+
 
 class ArithmeticGoldens(unittest.TestCase):
     def test_published_cpu_golden_and_wrap(self):

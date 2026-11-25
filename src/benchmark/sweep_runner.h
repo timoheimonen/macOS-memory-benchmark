@@ -38,6 +38,7 @@ enum class SweepNestedMode {
   Patterns,
   TlbAnalysis,
   CoreToCore,
+  LlmMemory,
 };
 
 /** Auditable terminal state of one attempted nested sweep run. */

@@ -10,7 +10,7 @@ The documented process runtime baseline is macOS 26 or later on Apple Silicon (A
 
 ## Transport support in this revision
 
-All result-producing direct benchmark modes and the CPU modes' supported parameter sweeps provide the stdout JSON
+All result-producing direct benchmark modes and supported parameter sweeps provide the stdout JSON
 transport. GPU schema 1 remains a direct-only mode and does not support sweeps.
 
 | Command | Real JSON file | Exact `--output -` stdout transport |
@@ -24,8 +24,10 @@ transport. GPU schema 1 remains a direct-only mode and does not support sweeps.
 | `--analyze-core2core --sweep ...` | Yes | Yes |
 | Direct `--gpu-bandwidth` | Yes | Yes |
 | Direct `--llm-memory` | Yes | Yes |
+| `--llm-memory --sweep ...` | Yes | Yes |
 
-GPU schema 1 and LLM schema 2 are direct-only modes and do not support sweeps.
+GPU schema 1 is a direct-only mode and does not support sweeps. LLM sweeps use the shared schema-1 sweep envelope with
+`base_mode: "llm_memory"` and embed each run's complete schema-2 `llm_memory` payload under `runs[].result`.
 
 ## Invocation and stream contract
 
@@ -208,8 +210,9 @@ contract version 1 first appears in software version `0.62.0`.
 | LLM memory profile | `mode == "llm_memory" && schema_version == 2` | Requested backend/phase/layout match, methodology and run-policy match the exact identities, `status == "complete"`, `results_complete == true`, `run_accepted == true`, and every planned measurement is `measured` |
 | General CPU sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true` |
 | Core-to-core sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true` |
+| LLM memory sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true` |
 
-For either schema-1 sweep envelope, the table contains the authoritative completeness predicate. Producers maintain
+For any schema-1 sweep envelope, the table contains the authoritative completeness predicate. Producers maintain
 `completed_runs == planned_runs` whenever they emit a complete envelope with valid conclusions. A consumer may check
 that equality separately as a defensive producer-consistency check, but it is not an additional schema-1 acceptance
 predicate.
@@ -729,7 +732,11 @@ reduce the single-snapshot peak allowance.
 
 ## Independent LLM artifact verifier
 
-`python3 script-examples/verify_llm_result.py result.json` reads exactly one schema-2 `llm_memory` document.
+`python3 script-examples/verify_llm_result.py result.json` reads either one direct schema-2 `llm_memory` document or
+one schema-1 LLM sweep envelope (`configuration.mode == "sweep"`, `configuration.base_mode == "llm_memory"`,
+`configuration.sweep_schema_version == 1`). For a sweep envelope it validates the Cartesian plan, run ordering,
+envelope completion/acceptance counts, parameter consistency against each nested `configuration`, profile homogeneity,
+and runs full independent schema-2 verification on every non-null `runs[].result`.
 It supports the eight current CPU/Metal × decode/prefill × contiguous/paged component sets. Other schemas,
 methodologies and profiles are unsupported; there is no migration or historical field fallback. The independent
 Python arithmetic never imports or invokes producer helpers or executes the optional binary.
@@ -910,7 +917,7 @@ separate. Require the successful producer process outcome before applying `jq -e
   methodology identity, completion state, and consumed field shapes match. They retain software-version provenance but
   provide no translation layer for released standard schema 2, unversioned historical standard JSON layouts, or other
   methodology identities.
-- Both general and core-to-core sweep envelopes use `configuration.sweep_schema_version == 1`; nested results keep their
+- General, core-to-core, and LLM sweep envelopes use `configuration.sweep_schema_version == 1`; nested results keep their
   independent mode schema versions.
 - Additive optional fields may remain within a schema version only when old consumers can safely ignore them.
 - Removing or renaming a field, changing its type, or changing its meaning requires a mode schema-version bump.

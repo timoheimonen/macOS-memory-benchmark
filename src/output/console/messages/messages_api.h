@@ -170,6 +170,7 @@ const std::string& error_only_flags_require_benchmark();
 const std::string& error_sweep_requires_parameter();
 std::string error_sweep_too_many_runs(size_t run_count, size_t max_runs);
 std::string error_sweep_parameter_not_allowed(const std::string& parameter_name, const std::string& mode_name);
+std::string error_sweep_option_conflict(const std::string& option, const std::string& parameter_name);
 const std::string& error_sweep_requires_output();
 std::string error_sweep_nested_run_exception(const std::string& error_details);
 

@@ -25,7 +25,7 @@ expose calibration, workload, completion, and repeatability metadata so results 
 - **Synthetic LLM memory profile:** CPU and capability-gated Metal measurements of fixed-context decode and full-prompt
   prefill with contiguous or deterministic paged KV.
 - **Reproducible experiments:** explicit seeds, repeated loops, built-in Cartesian parameter sweeps, recoverable JSON
-  file checkpoints, and final machine-readable stdout for every result-producing direct mode and CPU sweep.
+  file checkpoints, and final machine-readable stdout for every result-producing direct mode and supported sweep.
 
 See [Measurement Capabilities](documents/CAPABILITIES.md) for the full measurement scope and interpretation guidance.
 
@@ -179,7 +179,7 @@ checkpoints are required; see the [Machine-Readable CLI API](documents/API.md) s
 | `--analyze-core2core` | Calibrated two-thread acquire/release token-protocol round-trip latency under best-effort macOS scheduler hints. |
 | `--gpu-bandwidth` | Standalone Metal GPU read/write/copy effective compute-payload bandwidth. |
 | `--llm-memory` | Standalone synthetic LLM memory profile: CPU or Metal decode/prefill with contiguous or paged KV. |
-| `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 and LLM schema 2 do not support sweeps. |
+| `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, core-to-core, and LLM-memory modes; requires `--output`. GPU schema 1 does not support sweeps. |
 
 Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](documents/MANUAL.md) for defaults, valid combinations, and the complete option reference.
 
@@ -324,7 +324,7 @@ accept compatible producer releases by checking the standard mode, schema 3, the
 They retain the top-level `version` as provenance but do not require a particular software release. They do not
 translate released standard schema 2, unversioned historical standard JSON layouts, or other methodology identities.
 Consumers making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields.
-Every result-producing direct command or CPU sweep using `--output -` reserves stdout for one final JSON document and
+Every result-producing direct command or supported sweep using `--output -` reserves stdout for one final JSON document and
 routes its post-parse human transcript to stderr; file output is atomic. LLM files receive a progress snapshot every
 `K=max(1,ceil(count/8))` completed loops plus a terminal snapshot: at most eight progress writes, with up to `3K`
 completed attempts potentially missing after abrupt termination. Stdout emits one final document. A correct complete

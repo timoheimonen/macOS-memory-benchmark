@@ -249,8 +249,8 @@ workload. Actual byte, prefix-read, lookup, and allocation arithmetic must still
 `--sweep` runs a Cartesian product over one or more parameter lists. It always requires a non-empty
 `--output <target>`; an empty value is missing/invalid. Exact `-` emits one final combined JSON document to stdout.
 Every other non-empty target is an atomically checkpointed file, including `./-` and flag-shaped names such as `-G`.
-The envelope uses `configuration.mode: "sweep"`, with per-run payloads under `runs[].result`. General and core-to-core
-envelopes use `configuration.sweep_schema_version: 1`; each nested result keeps its own mode schema version.
+The envelope uses `configuration.mode: "sweep"`, with per-run payloads under `runs[].result`. General, core-to-core,
+and LLM-memory envelopes use `configuration.sweep_schema_version: 1`; each nested result keeps its own mode schema version.
 
 | Base mode | Supported sweep keys | Not supported |
 |-----------|----------------------|---------------|
@@ -261,17 +261,17 @@ envelopes use `configuration.sweep_schema_version: 1`; each nested result keeps 
 | `--analyze-tlb` | `latency-stride-bytes`, `latency-chain-mode`, `tlb-density` | `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb` |
 | `--analyze-core2core` | `count`, `latency-samples` | `buffer-size`, `cache-size`, `threads`, latency chain/locality/stride keys, `tlb-density` |
 | `--gpu-bandwidth` | none | GPU schema 1 rejects all sweep keys and `--sweep-max-runs` |
-| `--llm-memory` | none | The standalone LLM whitelist rejects all sweep keys |
+| `--llm-memory` | `context-tokens` (decode), `prompt-tokens` and `attention-query-tile-tokens` (prefill), `kv-block-tokens` (paged KV) | All other sweep keys; combining a direct flag and `--sweep` for the same parameter is rejected |
 
 Additional sweep rules:
 
 - `--sweep-max-runs <n>` limits the generated Cartesian product; default is `16` with `--analyze-tlb` and `256` otherwise.
-- In general CPU and core-to-core modes, `--sweep-max-runs` is accepted without `--sweep` but has no effect in that
-  case. GPU and LLM standalone parsers reject it.
+- In general CPU, core-to-core, and LLM modes, `--sweep-max-runs` is accepted without `--sweep` but has no effect in that
+  case. The GPU standalone parser rejects it.
 - A sweep parameter key may appear only once; duplicate keys are rejected before execution.
 - `--sweep latency-chain-mode=global-random` is invalid with `--analyze-tlb`.
 - Direct options outside `--sweep` are used as fixed values for every generated run.
-- If the same parameter is provided both directly and through `--sweep`, the sweep value is applied per run.
+- In general CPU and core-to-core modes, if the same parameter is provided both directly and through `--sweep`, the sweep value is applied per run. In `--llm-memory`, providing both the direct flag and `--sweep` for the same parameter is rejected as a conflict.
 - A real-file sweep is atomically checkpointed after every attempted run without an additional terminal rewrite. An
   empty run plan or a stop observed before a run also checkpoints a terminal envelope without adding a `runs[]` entry or
   incrementing `attempted_runs`. A stdout sweep still performs every corresponding logical checkpoint transition without

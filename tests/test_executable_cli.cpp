@@ -1928,3 +1928,94 @@ TEST(ExecutableCliIntegrationTest, PatternAutomaticCalibrationWritesMetadataInte
     }
   }
 }
+
+TEST(ExecutableCliIntegrationTest,
+     LlmMemoryPagedSweepWritesEnvelopeAndNestedSchema2FileIntegration) {
+  const TemporaryJsonFile output("llm_memory_paged_sweep");
+
+  const CliResult result = run_memory_benchmark({
+      "--llm-memory", "--weight-size-mb", "1", "--layers", "2",
+      "--query-heads", "4", "--kv-heads", "2", "--head-dim", "16",
+      "--kv-layout", "paged", "--sweep", "context-tokens=16,32", "--sweep",
+      "kv-block-tokens=8,16", "--sweep-max-runs", "4", "--threads", "1",
+      "--iterations", "1", "--count", "1", "--seed", "42", "--output",
+      output.path()});
+
+  expect_process_completed(result);
+  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+  expect_single_runtime_banner(result);
+  EXPECT_NE(result.output.find(Messages::msg_running_sweep(4)),
+            std::string::npos);
+
+  const nlohmann::json envelope = nlohmann::json::parse(read_file(output.path()));
+  EXPECT_EQ(envelope["configuration"]["mode"], Constants::SWEEP_JSON_MODE_NAME);
+  EXPECT_EQ(envelope["configuration"]["base_mode"], Constants::LLM_JSON_MODE_NAME);
+  EXPECT_EQ(envelope["configuration"]["sweep_schema_version"], 1);
+  EXPECT_EQ(envelope["configuration"]["run_count"], 4u);
+  EXPECT_EQ(envelope["planned_runs"], 4u);
+  EXPECT_EQ(envelope["completed_runs"], 4u);
+  EXPECT_EQ(envelope["status"], "complete");
+  EXPECT_TRUE(envelope["conclusions_valid"].get<bool>());
+  ASSERT_EQ(envelope["runs"].size(), 4u);
+
+  const std::array<std::pair<size_t, size_t>, 4> expected_pairs = {{
+      {16u, 8u},
+      {16u, 16u},
+      {32u, 8u},
+      {32u, 16u},
+  }};
+  for (size_t i = 0; i < expected_pairs.size(); ++i) {
+    const nlohmann::json& run = envelope["runs"][i];
+    EXPECT_EQ(run["index"], i);
+    EXPECT_EQ(run["status"], "complete");
+    EXPECT_EQ(run["parameters"]["context-tokens"], expected_pairs[i].first);
+    EXPECT_EQ(run["parameters"]["kv-block-tokens"], expected_pairs[i].second);
+    const nlohmann::json& nested = run["result"];
+    EXPECT_EQ(nested["schema_version"], 2);
+    EXPECT_EQ(nested["mode"], Constants::LLM_JSON_MODE_NAME);
+    EXPECT_EQ(nested["status"], "complete");
+    EXPECT_TRUE(nested["results_complete"].get<bool>());
+    EXPECT_TRUE(nested["run_accepted"].get<bool>());
+    EXPECT_EQ(nested["configuration"]["visible_context_tokens"],
+              expected_pairs[i].first);
+    EXPECT_EQ(nested["configuration"]["kv_block_tokens"],
+              expected_pairs[i].second);
+    EXPECT_EQ(nested["configuration"]["base_seed_uint64_decimal"], "42");
+  }
+  EXPECT_EQ(access((output.path() + ".tmp").c_str(), F_OK), -1);
+}
+
+TEST(ExecutableCliIntegrationTest,
+     LlmMemoryPrefillSweepWritesSingleTerminalJsonToStdoutIntegration) {
+  const CliResult result = run_memory_benchmark({
+      "--llm-memory", "--phase", "prefill", "--weight-size-mb", "1",
+      "--layers", "2", "--query-heads", "4", "--kv-heads", "2", "--head-dim",
+      "16", "--sweep", "prompt-tokens=16,32", "--sweep",
+      "attention-query-tile-tokens=8,16", "--threads", "1", "--iterations",
+      "1", "--count", "1", "--seed", "42", "--output", "-"});
+
+  expect_process_completed(result);
+  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+  const nlohmann::json envelope = parse_single_stdout_json(result);
+  EXPECT_EQ(envelope["configuration"]["mode"], Constants::SWEEP_JSON_MODE_NAME);
+  EXPECT_EQ(envelope["configuration"]["base_mode"], Constants::LLM_JSON_MODE_NAME);
+  EXPECT_EQ(envelope["configuration"]["sweep_schema_version"], 1);
+  EXPECT_EQ(envelope["planned_runs"], 4u);
+  EXPECT_EQ(envelope["completed_runs"], 4u);
+  EXPECT_EQ(envelope["status"], "complete");
+  EXPECT_TRUE(envelope["conclusions_valid"].get<bool>());
+  ASSERT_EQ(envelope["runs"].size(), 4u);
+  EXPECT_EQ(envelope["runs"][0]["parameters"]["prompt-tokens"], 16u);
+  EXPECT_EQ(envelope["runs"][0]["parameters"]["attention-query-tile-tokens"], 8u);
+  EXPECT_EQ(envelope["runs"][3]["parameters"]["prompt-tokens"], 32u);
+  EXPECT_EQ(envelope["runs"][3]["parameters"]["attention-query-tile-tokens"], 16u);
+  EXPECT_EQ(envelope["runs"][3]["result"]["configuration"]["prompt_tokens"], 32u);
+  EXPECT_EQ(
+      envelope["runs"][3]["result"]["configuration"]["attention_query_tile_tokens"],
+      16u);
+  EXPECT_EQ(result.stdout_output.find(Messages::msg_running_sweep(4)),
+            std::string::npos);
+  EXPECT_NE(result.stderr_output.find(Messages::msg_running_sweep(4)),
+            std::string::npos);
+  expect_no_dash_transport_artifacts(result);
+}

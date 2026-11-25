@@ -15,7 +15,7 @@ Bandwidth is reported as **effective workload payload divided by measured time**
 | TLB analysis (`--analyze-tlb`) | Paired spread/packed latency deltas and empirical boundary estimates | Guaranteed architectural TLB sizes or direct DRAM latency |
 | Core-to-core (`--analyze-core2core`) | Effective round-trip time of a repeated two-thread acquire/release token exchange under scheduler hints | Isolated physical cache-line migration or coherence-path latency, exact physical-core placement, or a definitive topology map |
 | LLM memory profile (`--llm-memory`) | Effective logical model-payload rate and synthetic work-unit latency for CPU or capability-gated Metal decode/prefill with contiguous or paged KV | Transformer computation, inference tokens/s, TTFT, physical DRAM traffic, runtime page allocation, ANE execution, or framework performance |
-| JSON output (`--output`) and sweeps (`--sweep`) | Auditable measurement evidence through recoverable files or one final stdout document for every result-producing direct mode and supported CPU sweep | Comparability when commands, software, hardware, or run conditions differ |
+| JSON output (`--output`) and sweeps (`--sweep`) | Auditable measurement evidence through recoverable files or one final stdout document for every result-producing direct mode and supported sweep | Comparability when commands, software, hardware, or run conditions differ |
 
 ## CPU Memory and Cache Bandwidth
 
@@ -241,13 +241,15 @@ See the [Core-to-Core Whitepaper](CORE_TO_CORE_WHITEPAPER.md) for the assembly p
 
 Built-in sweeps execute supported parameter lists without shell orchestration. Standard and pattern modes can sweep
 buffer size and thread count. Standard latency also supports cache size, stride, locality, and chain-mode sweeps; TLB
-mode supports its stride, chain-mode, and density controls; core-to-core mode supports loop count and sample depth.
-Multiple sweep options form a Cartesian product, and combined output requires `--output`. GPU schema 1 and LLM schema 2
-do not support sweeps.
+mode supports its stride, chain-mode, and density controls; core-to-core mode supports loop count and sample depth;
+LLM-memory mode supports `context-tokens` (decode), `prompt-tokens` and `attention-query-tile-tokens` (prefill), and
+`kv-block-tokens` (paged KV).
+Multiple sweep options form a Cartesian product, and combined output requires `--output`. GPU schema 1
+does not support sweeps.
 
 JSON is designed as auditable evidence, not merely a list of numbers. It preserves the resolved configuration, work and seed identity, measurements, statistics, status, and enough completion information to distinguish complete, partial, interrupted, and unavailable results. Missing measurements are nullable rather than represented by numeric zero.
 
-Every result-producing direct mode and the CPU modes' supported sweeps reserve the exact target `--output -` for
+Every result-producing direct mode and supported sweep reserves the exact target `--output -` for
 machine-readable output: stdout contains one final JSON document and the post-parse human transcript is routed to
 stderr. An empty output value disables JSON for a direct command but is missing/invalid for a sweep. Every other
 non-empty value is a file target, including `./-` and flag-shaped names such as `-G`. File output is atomic; standard

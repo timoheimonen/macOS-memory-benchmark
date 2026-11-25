@@ -646,12 +646,14 @@ middle, and trailing items.
   `--kv-heads <count>`, and `--head-dim <count>` exactly once. Decode requires `--context-tokens <count>`; prefill
   requires `--prompt-tokens <P>` and `--attention-query-tile-tokens <Q>`. Cross-phase geometry is rejected
 - Allows optional `--llm-memory-backend <cpu|metal>`, `--kv-element-bytes <1|2|4>`, `--batch-size <count>`,
-  `--phase <decode|prefill>`, `--kv-layout <contiguous|paged>`, and CPU-only `-t`/`--threads <count>`,
+  `--phase <decode|prefill>`, `--kv-layout <contiguous|paged>`, CPU-only `-t`/`--threads <count>`,
   `-i`/`--iterations <count>`,
-  `-r`/`--count <count>`, `--seed <uint64>`, `-o`/`--output <target>`, and `-h`/`--help`.
-  `--kv-block-tokens <G>` is required exactly once with paged layout and rejected with contiguous layout. Every other
-  option, including all other primary modes, cache/latency modifiers, `--non-cacheable`, `--sweep`, and
-  `--sweep-max-runs`, is rejected
+  `-r`/`--count <count>`, `--seed <uint64>`, `-o`/`--output <target>`,
+  `-S`/`--sweep <key=a,b>` (repeatable for `context-tokens`, `kv-block-tokens`, `prompt-tokens`, and
+  `attention-query-tile-tokens`), `-X`/`--sweep-max-runs <count>`, and `-h`/`--help`.
+  `--kv-block-tokens <G>` is required exactly once with paged layout (unless supplied via `--sweep kv-block-tokens=...`)
+  and rejected with contiguous layout. Combining a direct flag and `--sweep` for the same parameter is rejected.
+  Every other option, including all other primary modes, cache/latency modifiers, and `--non-cacheable`, is rejected
 - Defaults to CPU, decode, contiguous layout, two-byte KV elements, batch size one, three planned cyclic loops,
   automatic scenario work, and one generated non-zero base seed. CPU defaults to detected workers. Metal performs no
   worker detection and rejects explicit `--threads`. There is no default paged block size. An explicit seed may be any
@@ -968,7 +970,7 @@ middle, and trailing items.
   value is a checkpointed file target, including `./-` and flag-shaped names such as `-G`. An empty value is
   missing/invalid for a sweep
 - Can be repeated to sweep multiple parameters
-- Supported keys: `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`, `count`, `latency-samples`
+- Supported keys: `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`, `count`, `latency-samples`, `context-tokens`, `kv-block-tokens`, `prompt-tokens`, `attention-query-tile-tokens`
 - `tlb-density` applies only with `--analyze-tlb`
 - `--patterns` supports `buffer-size` and `threads`
 - In a `--patterns` thread sweep, each `threads` value is the requested count. A strided pattern may reduce its
@@ -978,7 +980,10 @@ middle, and trailing items.
 - `--benchmark --only-latency` supports `buffer-size`, `cache-size`, and latency chain/locality/stride keys
 - `--analyze-tlb` supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`
 - `--analyze-core2core` supports `count` and `latency-samples`
-- `--gpu-bandwidth` and `--llm-memory` do not support `--sweep` or `--sweep-max-runs` (GPU schema 1, LLM schema 2)
+- `--llm-memory` supports `context-tokens` (decode), `prompt-tokens` and `attention-query-tile-tokens` (prefill), and
+  `kv-block-tokens` (paged KV); combining a direct flag and `--sweep` for the same parameter is rejected, and every
+  generated Cartesian configuration is preflight-validated before execution
+- `--gpu-bandwidth` does not support `--sweep` or `--sweep-max-runs` (GPU schema 1)
 
 #### `--sweep-max-runs <count>`
 
@@ -1140,6 +1145,12 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --k
   --kv-layout paged --kv-block-tokens 16 \
   --iterations 1 --count 3 --seed 42 --output llm_memory_prefill_paged.json
 
+# Standalone LLM decode sweep across context length and paged block size (6 runs)
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
+  --head-dim 64 --kv-layout paged \
+  --sweep context-tokens=512,2048,8192 --sweep kv-block-tokens=16,64 \
+  --iterations 1 --count 3 --seed 42 --output llm_paged_sweep.json
+
 # Benchmark latency sweep over 3 buffer sizes and 3 locality windows (9 runs)
 memory_benchmark --benchmark --only-latency --count 5 --sweep buffer-size=256,512,1024 --sweep latency-tlb-locality-kb=16,1024,0 --output latency_sweep.json
 
@@ -1187,7 +1198,7 @@ memory_benchmark --gpu-bandwidth --sweep buffer-size=64,128 --output gpu_sweep.j
 memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
   --head-dim 64 --context-tokens 512 --non-cacheable
 
-# invalid: LLM schema 2 has no sweep support
+# invalid: LLM sweep conflicts with the matching direct option
 memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --kv-heads 2 \
   --head-dim 64 --context-tokens 512 --sweep context-tokens=512,1024 --output llm_sweep.json
 
@@ -1428,7 +1439,9 @@ memory_benchmark --benchmark --only-latency --count 5 --sweep buffer-size=256,51
 The command above creates six runs and stores each run's normal benchmark JSON under `runs[].result`. TLB-analysis
 sweeps use the same envelope with `base_mode: "analyze_tlb"` and support `latency-stride-bytes`,
 `latency-chain-mode`, and `tlb-density`. Core-to-core sweeps use the same envelope with
-`base_mode: "analyze_core2core"` and support only `count` and `latency-samples`.
+`base_mode: "analyze_core2core"` and support only `count` and `latency-samples`. LLM-memory sweeps use the same
+schema-1 envelope with `base_mode: "llm_memory"`, embed each run's schema-2 result under `runs[].result`, and
+support `context-tokens`, `kv-block-tokens`, `prompt-tokens`, and `attention-query-tile-tokens`.
 
 ---
 

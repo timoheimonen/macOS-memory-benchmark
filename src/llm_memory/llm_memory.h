@@ -161,6 +161,27 @@ inline constexpr const char* JSON_INTEGER_OUT_OF_RANGE =
     "json-integer-out-of-range";
 }  // namespace LlmMemoryConfigReason
 
+/** Supported sweepable parameters for standalone `--llm-memory`. */
+enum class LlmSweepParameter : uint8_t {
+  ContextTokens = 0,
+  KvBlockTokens,
+  PromptTokens,
+  AttentionQueryTileTokens,
+};
+
+/** One parsed sweep value for an LLM memory sweep dimension. */
+struct LlmSweepValue {
+  std::string raw_value;
+  size_t integer_value = 0;
+};
+
+/** One validated `--sweep key=v1,v2,...` dimension for `--llm-memory`. */
+struct LlmSweepSpec {
+  LlmSweepParameter parameter = LlmSweepParameter::ContextTokens;
+  std::string parameter_name;
+  std::vector<LlmSweepValue> values;
+};
+
 /**
  * Parsed and resolved standalone `--llm-memory` command configuration.
  *
@@ -200,6 +221,10 @@ struct LlmMemoryConfig {
   bool user_specified_kv_layout = false;
   bool user_specified_kv_block_tokens = false;
   bool help_printed = false;
+  bool run_sweep = false;
+  size_t sweep_max_runs = Constants::DEFAULT_SWEEP_MAX_RUNS;
+  std::vector<LlmSweepSpec> sweep_specs;
+  bool collect_json_for_sweep = false;
   std::string output_file;
   std::vector<std::string> argv;
 };

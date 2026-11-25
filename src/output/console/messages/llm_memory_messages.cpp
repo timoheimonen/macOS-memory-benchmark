@@ -36,7 +36,8 @@ const std::string& error_llm_memory_must_be_used_alone() {
       "--kv-element-bytes <1|2|4>, --kv-layout <contiguous|paged>, "
       "--kv-block-tokens <count>, --batch-size <count>, "
       "-t/--threads <count>, -i/--iterations <count>, "
-      "-r/--count <count>, --seed <uint64>, -o/--output <target>, and "
+      "-r/--count <count>, --seed <uint64>, -o/--output <target>, "
+      "-S/--sweep <key=...>, -X/--sweep-max-runs <count>, and "
       "-h/--help (no other options allowed)";
   return message;
 }
@@ -162,7 +163,15 @@ std::string llm_memory_usage_options(const std::string& prog_name) {
         << "                          stdout and routes human output to stderr. Every other non-empty\n"
         << "                          target is a file with bounded loop and terminal atomic snapshots.\n"
         << "                          K=max(1,ceil(count/8)); abrupt loss bound: 3K completed attempts.\n"
-        << "                          An empty value disables JSON for this direct command.\n"
+        << "                          An empty value disables JSON for direct commands and is invalid for sweeps.\n"
+        << "  -S, --sweep <key=a,b>  Run a Cartesian sweep over one parameter. Repeat for multiple\n"
+        << "                          parameters. Supported keys: context-tokens (decode),\n"
+        << "                          prompt-tokens and attention-query-tile-tokens (prefill),\n"
+        << "                          and kv-block-tokens (paged KV). Cannot be combined with the\n"
+        << "                          matching direct flag; requires --output <target>.\n"
+        << "  -X, --sweep-max-runs <count>\n"
+        << "                          Maximum generated sweep runs (default: "
+        << Constants::DEFAULT_SWEEP_MAX_RUNS << ").\n"
         << "  -h, --help             Show this LLM-mode help and exit.\n"
         << "This profile models CPU or Metal memory traffic only: it performs no Transformer math and\n"
         << "does not report inference tokens/s. Effective model payload is not physical DRAM traffic.\n";

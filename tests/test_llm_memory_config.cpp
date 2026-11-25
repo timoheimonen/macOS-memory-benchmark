@@ -32,6 +32,7 @@
 #include "core/timing/timer.h"
 #include "llm_memory/llm_memory.h"
 #include "llm_memory/llm_runner.h"
+#include "llm_memory/llm_sweep_runner.h"
 #include "output/console/messages/messages_api.h"
 #include "third_party/nlohmann/json.hpp"
 
@@ -1382,4 +1383,210 @@ TEST(LlmMemoryConfigTest,
   EXPECT_TRUE(validate_llm_memory_config(config).valid);
   ++config.loop_count;
   expect_invalid(config, LlmMemoryConfigReason::JSON_INTEGER_OUT_OF_RANGE);
+}
+
+TEST(LlmMemoryConfigTest, ParsesDecodeAndPagedCartesianSweepAndExpandsConfigs) {
+  LlmParserHooksScope hooks(4, 987654321ULL);
+  LlmMemoryConfig config;
+  const CapturedLlmParse parsed = parse_llm_arguments_capturing(
+      {"memory_benchmark", "--llm-memory", "--weight-size-mb", "64", "--layers",
+       "4", "--query-heads", "8", "--kv-heads", "2", "--head-dim", "64",
+       "--kv-layout", "paged", "--sweep", "context-tokens=32,64", "--sweep",
+       "kv-block-tokens=16,32", "--sweep-max-runs", "4", "--output",
+       "llm_sweep.json"},
+      config);
+
+  ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+  EXPECT_TRUE(config.run_sweep);
+  EXPECT_EQ(config.sweep_max_runs, 4u);
+  EXPECT_EQ(calculate_llm_sweep_run_count(config), 4u);
+  EXPECT_EQ(config.seed, 987654321ULL);
+  EXPECT_FALSE(config.user_specified_seed);
+
+  const std::vector<LlmMemoryConfig> run_configs =
+      build_llm_sweep_run_configs(config);
+  ASSERT_EQ(run_configs.size(), 4u);
+  const std::array<std::pair<size_t, size_t>, 4> expected_pairs = {{
+      {32u, 16u},
+      {32u, 32u},
+      {64u, 16u},
+      {64u, 32u},
+  }};
+  for (size_t i = 0; i < expected_pairs.size(); ++i) {
+    EXPECT_FALSE(run_configs[i].run_sweep);
+    EXPECT_TRUE(run_configs[i].sweep_specs.empty());
+    EXPECT_TRUE(run_configs[i].output_file.empty());
+    EXPECT_TRUE(run_configs[i].collect_json_for_sweep);
+    EXPECT_EQ(run_configs[i].visible_context_tokens, expected_pairs[i].first);
+    EXPECT_TRUE(run_configs[i].user_specified_context_tokens);
+    EXPECT_EQ(run_configs[i].kv_block_tokens, expected_pairs[i].second);
+    EXPECT_TRUE(run_configs[i].user_specified_kv_block_tokens);
+    EXPECT_EQ(run_configs[i].seed, config.seed);
+  }
+}
+
+TEST(LlmMemoryConfigTest, ParsesPrefillAndMetalSweeps) {
+  LlmParserHooksScope hooks(4, 12345ULL);
+  {
+    LlmMemoryConfig config;
+    const CapturedLlmParse parsed = parse_llm_arguments_capturing(
+        {"memory_benchmark", "--llm-memory", "--phase", "prefill",
+         "--weight-size-mb", "64", "--layers", "4", "--query-heads", "8",
+         "--kv-heads", "2", "--head-dim", "64", "--kv-layout", "paged",
+         "--sweep", "prompt-tokens=64,128", "--sweep",
+         "attention-query-tile-tokens=16,32", "--sweep",
+         "kv-block-tokens=16,64", "--seed", "42", "--output", "-"},
+        config);
+    ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+    EXPECT_TRUE(config.run_sweep);
+    EXPECT_EQ(calculate_llm_sweep_run_count(config), 8u);
+    const std::vector<LlmMemoryConfig> runs =
+        build_llm_sweep_run_configs(config);
+    ASSERT_EQ(runs.size(), 8u);
+    EXPECT_EQ(runs[0].prompt_tokens, 64u);
+    EXPECT_EQ(runs[0].attention_query_tile_tokens, 16u);
+    EXPECT_EQ(runs[0].kv_block_tokens, 16u);
+    EXPECT_EQ(runs[7].prompt_tokens, 128u);
+    EXPECT_EQ(runs[7].attention_query_tile_tokens, 32u);
+    EXPECT_EQ(runs[7].kv_block_tokens, 64u);
+  }
+  {
+    LlmMemoryConfig config;
+    const CapturedLlmParse parsed = parse_llm_arguments_capturing(
+        {"memory_benchmark", "--llm-memory", "--llm-memory-backend", "metal",
+         "--weight-size-mb", "64", "--layers", "4", "--query-heads", "8",
+         "--kv-heads", "2", "--head-dim", "64", "--sweep",
+         "context-tokens=32,64", "--output", "metal_sweep.json"},
+        config);
+    ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+    EXPECT_EQ(config.backend, LlmMemoryBackend::Metal);
+    EXPECT_EQ(config.available_workers, 0u);
+    EXPECT_EQ(config.requested_workers, 0u);
+  }
+}
+
+TEST(LlmMemoryConfigTest, RejectsInvalidAndConflictingLlmSweepConfigurations) {
+  LlmParserHooksScope hooks(4, 12345ULL);
+
+  struct InvalidSweepCase {
+    const char* name;
+    std::vector<std::string> args;
+    std::string expected_substring;
+  };
+  const std::vector<InvalidSweepCase> cases = {
+      {"direct context conflict",
+       {"memory_benchmark", "--llm-memory", "--weight-size-mb", "64",
+        "--layers", "4", "--query-heads", "8", "--kv-heads", "2", "--head-dim",
+        "64", "--context-tokens", "32", "--sweep", "context-tokens=32,64",
+        "--output", "out.json"},
+       Messages::error_sweep_option_conflict("--context-tokens",
+                                             "context-tokens")},
+      {"direct block conflict",
+       {"memory_benchmark", "--llm-memory", "--weight-size-mb", "64",
+        "--layers", "4", "--query-heads", "8", "--kv-heads", "2", "--head-dim",
+        "64", "--context-tokens", "64", "--kv-layout", "paged",
+        "--kv-block-tokens", "16", "--sweep", "kv-block-tokens=16,32",
+        "--output", "out.json"},
+       Messages::error_sweep_option_conflict("--kv-block-tokens",
+                                             "kv-block-tokens")},
+      {"direct prompt conflict",
+       {"memory_benchmark", "--llm-memory", "--phase", "prefill",
+        "--weight-size-mb", "64", "--layers", "4", "--query-heads", "8",
+        "--kv-heads", "2", "--head-dim", "64", "--prompt-tokens", "64",
+        "--attention-query-tile-tokens", "16", "--sweep",
+        "prompt-tokens=64,128", "--output", "out.json"},
+       Messages::error_sweep_option_conflict("--prompt-tokens",
+                                             "prompt-tokens")},
+      {"direct query tile conflict",
+       {"memory_benchmark", "--llm-memory", "--phase", "prefill",
+        "--weight-size-mb", "64", "--layers", "4", "--query-heads", "8",
+        "--kv-heads", "2", "--head-dim", "64", "--prompt-tokens", "64",
+        "--attention-query-tile-tokens", "16", "--sweep",
+        "attention-query-tile-tokens=16,32", "--output", "out.json"},
+       Messages::error_sweep_option_conflict("--attention-query-tile-tokens",
+                                             "attention-query-tile-tokens")},
+      {"context sweep in prefill",
+       {"memory_benchmark", "--llm-memory", "--phase", "prefill",
+        "--weight-size-mb", "64", "--layers", "4", "--query-heads", "8",
+        "--kv-heads", "2", "--head-dim", "64", "--prompt-tokens", "64",
+        "--attention-query-tile-tokens", "16", "--sweep",
+        "context-tokens=32,64", "--output", "out.json"},
+       Messages::error_sweep_parameter_not_allowed(
+           "context-tokens", "--llm-memory --phase prefill")},
+      {"prompt sweep in decode",
+       {"memory_benchmark", "--llm-memory", "--weight-size-mb", "64",
+        "--layers", "4", "--query-heads", "8", "--kv-heads", "2", "--head-dim",
+        "64", "--context-tokens", "64", "--sweep", "prompt-tokens=32,64",
+        "--output", "out.json"},
+       Messages::error_sweep_parameter_not_allowed(
+           "prompt-tokens", "--llm-memory --phase decode")},
+      {"tile sweep in decode",
+       {"memory_benchmark", "--llm-memory", "--weight-size-mb", "64",
+        "--layers", "4", "--query-heads", "8", "--kv-heads", "2", "--head-dim",
+        "64", "--context-tokens", "64", "--sweep",
+        "attention-query-tile-tokens=16,32", "--output", "out.json"},
+       Messages::error_sweep_parameter_not_allowed(
+           "attention-query-tile-tokens", "--llm-memory --phase decode")},
+      {"block sweep in contiguous",
+       {"memory_benchmark", "--llm-memory", "--weight-size-mb", "64",
+        "--layers", "4", "--query-heads", "8", "--kv-heads", "2", "--head-dim",
+        "64", "--context-tokens", "64", "--sweep", "kv-block-tokens=16,32",
+        "--output", "out.json"},
+       Messages::error_sweep_parameter_not_allowed(
+           "kv-block-tokens", "--llm-memory --kv-layout contiguous")},
+      {"unsupported key",
+       {"memory_benchmark", "--llm-memory", "--weight-size-mb", "64",
+        "--layers", "4", "--query-heads", "8", "--kv-heads", "2", "--head-dim",
+        "64", "--context-tokens", "64", "--sweep", "layers=4,8", "--output",
+        "out.json"},
+       Messages::error_sweep_parameter_not_allowed("layers", "--llm-memory")},
+      {"duplicate sweep key",
+       {"memory_benchmark", "--llm-memory", "--weight-size-mb", "64",
+        "--layers", "4", "--query-heads", "8", "--kv-heads", "2", "--head-dim",
+        "64", "--sweep", "context-tokens=32,64", "--sweep",
+        "context-tokens=128", "--output", "out.json"},
+       Messages::error_duplicate_sweep_parameter("context-tokens")},
+      {"missing output",
+       {"memory_benchmark", "--llm-memory", "--weight-size-mb", "64",
+        "--layers", "4", "--query-heads", "8", "--kv-heads", "2", "--head-dim",
+        "64", "--sweep", "context-tokens=32,64"},
+       Messages::error_sweep_requires_output()},
+      {"exceeds sweep-max-runs",
+       {"memory_benchmark", "--llm-memory", "--weight-size-mb", "64",
+        "--layers", "4", "--query-heads", "8", "--kv-heads", "2", "--head-dim",
+        "64", "--sweep", "context-tokens=32,64,128", "--sweep-max-runs", "2",
+        "--output", "out.json"},
+       Messages::error_sweep_too_many_runs(3u, 2u)},
+      {"non-power-of-two block in sweep preflight",
+       {"memory_benchmark", "--llm-memory", "--weight-size-mb", "64",
+        "--layers", "4", "--query-heads", "8", "--kv-heads", "2", "--head-dim",
+        "64", "--context-tokens", "64", "--kv-layout", "paged", "--sweep",
+        "kv-block-tokens=16,24", "--output", "out.json"},
+       LlmMemoryConfigReason::KV_BLOCK_TOKENS_NOT_POWER_OF_TWO},
+      {"prefill tile exceeds prompt in Cartesian product",
+       {"memory_benchmark", "--llm-memory", "--phase", "prefill",
+        "--weight-size-mb", "64", "--layers", "4", "--query-heads", "8",
+        "--kv-heads", "2", "--head-dim", "64", "--sweep",
+        "prompt-tokens=32,64", "--sweep", "attention-query-tile-tokens=16,48",
+        "--output", "out.json"},
+       LlmMemoryConfigReason::ATTENTION_QUERY_TILE_TOKENS_EXCEEDS_PROMPT},
+      {"metal sweep rejects threads",
+       {"memory_benchmark", "--llm-memory", "--llm-memory-backend", "metal",
+        "--weight-size-mb", "64", "--layers", "4", "--query-heads", "8",
+        "--kv-heads", "2", "--head-dim", "64", "--threads", "2", "--sweep",
+        "context-tokens=32,64", "--output", "out.json"},
+       LlmMemoryConfigReason::THREADS_NOT_APPLICABLE},
+  };
+
+  for (const InvalidSweepCase& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
+    LlmMemoryConfig config;
+    const CapturedLlmParse parsed =
+        parse_llm_arguments_capturing(test_case.args, config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_TRUE(parsed.stdout_output.empty());
+    EXPECT_NE(parsed.stderr_output.find(test_case.expected_substring),
+              std::string::npos)
+        << parsed.stderr_output;
+  }
 }

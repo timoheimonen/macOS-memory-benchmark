@@ -458,6 +458,64 @@ SweepNestedCompletion classify_pattern_completion(const nlohmann::ordered_json& 
           reason.empty() ? "nested-pattern-result-incomplete" : reason};
 }
 
+SweepNestedCompletion classify_llm_memory_completion(const nlohmann::ordered_json& result_json) {
+  if (!result_json.is_object() || !result_json.contains("schema_version") ||
+      !result_json.contains("mode")) {
+    return {SweepAttemptStatus::Partial, "missing-llm-schema-version"};
+  }
+  const nlohmann::ordered_json& schema_version = result_json["schema_version"];
+  if (!schema_version.is_number_integer() || schema_version.is_boolean() ||
+      schema_version != Constants::LLM_JSON_SCHEMA_VERSION) {
+    return {SweepAttemptStatus::Partial, "unsupported-llm-schema-version"};
+  }
+  const bool has_mode = result_json["mode"].is_string() &&
+                        result_json["mode"] == Constants::LLM_JSON_MODE_NAME;
+  const bool has_status =
+      result_json.contains("status") && result_json["status"].is_string();
+  const bool has_results_complete =
+      result_json.contains("results_complete") &&
+      result_json["results_complete"].is_boolean();
+  const bool has_run_accepted = result_json.contains("run_accepted") &&
+                                result_json["run_accepted"].is_boolean();
+  if (!has_mode || !has_status || !has_results_complete || !has_run_accepted) {
+    return {SweepAttemptStatus::Partial, "invalid-llm-schema-contract"};
+  }
+
+  const std::string status = optional_string(result_json, "status");
+  const std::string reason = optional_string(result_json, "reason_code");
+  if (status == "complete" &&
+      result_json["results_complete"].get<bool>() &&
+      result_json["run_accepted"].get<bool>()) {
+    if (!result_json.contains("measurements") ||
+        !result_json["measurements"].is_array() ||
+        result_json["measurements"].empty()) {
+      return {SweepAttemptStatus::Partial, "invalid-llm-schema-contract"};
+    }
+    for (const auto& measurement : result_json["measurements"]) {
+      if (!measurement.is_object() || !measurement.contains("status") ||
+          !measurement["status"].is_string() ||
+          measurement["status"] != "measured") {
+        return {SweepAttemptStatus::Partial, "invalid-llm-schema-contract"};
+      }
+    }
+    return {SweepAttemptStatus::Complete, ""};
+  }
+  if (status == "interrupted") {
+    return {SweepAttemptStatus::Interrupted,
+            reason.empty() ? "nested-llm-run-interrupted" : reason};
+  }
+  if (status == "unsupported") {
+    return {SweepAttemptStatus::Failed,
+            reason.empty() ? "nested-llm-run-unsupported" : reason};
+  }
+  if (status == "failed") {
+    return {SweepAttemptStatus::Failed,
+            reason.empty() ? "nested-llm-run-failed" : reason};
+  }
+  return {SweepAttemptStatus::Partial,
+          reason.empty() ? "nested-llm-result-incomplete" : reason};
+}
+
 const char* sweep_attempt_status_to_string(SweepAttemptStatus status) {
   switch (status) {
     case SweepAttemptStatus::Complete:
@@ -485,6 +543,8 @@ SweepNestedCompletion classify_sweep_nested_completion(SweepNestedMode mode,
       return classify_tlb_completion(result_json);
     case SweepNestedMode::CoreToCore:
       return classify_core_to_core_completion(result_json);
+    case SweepNestedMode::LlmMemory:
+      return classify_llm_memory_completion(result_json);
   }
   return {SweepAttemptStatus::Failed, "unknown-sweep-nested-mode"};
 }

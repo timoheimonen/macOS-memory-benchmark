@@ -79,6 +79,8 @@ TEST(MessagesErrorTest, ValidationErrorsHaveExactOutput) {
        "Sweep would generate 12 runs, exceeding --sweep-max-runs 10"},
       {"parameter not allowed", Messages::error_sweep_parameter_not_allowed("cache-size", "--patterns"),
        "Sweep parameter 'cache-size' is not allowed with --patterns"},
+      {"option conflict", Messages::error_sweep_option_conflict("--context-tokens", "context-tokens"),
+       "Cannot specify both --context-tokens and --sweep context-tokens"},
       {"locality mode", Messages::error_latency_chain_mode_requires_locality("same-random-in-box-increasing-box"),
        "latency-chain-mode 'same-random-in-box-increasing-box' requires --latency-tlb-locality-kb > 0"},
       {"locality minimum", Messages::error_latency_tlb_locality_too_small_for_stride(4096, 4096),
@@ -187,7 +189,16 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       "                          stdout and routes human output to stderr. Every other non-empty\n"
       "                          target is a file with bounded loop and terminal atomic snapshots.\n"
       "                          K=max(1,ceil(count/8)); abrupt loss bound: 3K completed attempts.\n"
-      "                          An empty value disables JSON for this direct command.\n"
+      "                          An empty value disables JSON for direct commands and is invalid for sweeps.\n"
+      "  -S, --sweep <key=a,b>  Run a Cartesian sweep over one parameter. Repeat for multiple\n"
+      "                          parameters. Supported keys: context-tokens (decode),\n"
+      "                          prompt-tokens and attention-query-tile-tokens (prefill),\n"
+      "                          and kv-block-tokens (paged KV). Cannot be combined with the\n"
+      "                          matching direct flag; requires --output <target>.\n"
+      "  -X, --sweep-max-runs <count>\n"
+      "                          Maximum generated sweep runs (default: " +
+      std::to_string(Constants::DEFAULT_SWEEP_MAX_RUNS) +
+      ").\n"
       "  -h, --help             Show this LLM-mode help and exit.\n"
       "This profile models CPU or Metal memory traffic only: it performs no Transformer math and\n"
       "does not report inference tokens/s. Effective model payload is not physical DRAM traffic.\n";
@@ -203,7 +214,8 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "--kv-element-bytes <1|2|4>, --kv-layout <contiguous|paged>, "
        "--kv-block-tokens <count>, --batch-size <count>, "
        "-t/--threads <count>, -i/--iterations <count>, "
-       "-r/--count <count>, --seed <uint64>, -o/--output <target>, and "
+       "-r/--count <count>, --seed <uint64>, -o/--output <target>, "
+       "-S/--sweep <key=...>, -X/--sweep-max-runs <count>, and "
        "-h/--help (no other options allowed)"},
       {"required option", Messages::error_llm_memory_missing_required_option("--layers"),
        "Missing required --llm-memory option: --layers"},
@@ -520,7 +532,7 @@ TEST(MessagesFormattingTest, UsageOptions) {
            "--output <target>",
            "Exact - writes one final JSON document to stdout",
            "one final",
-           "every result-producing direct mode and CPU sweep",
+           "every result-producing direct mode and supported sweep",
            "routes human output to stderr",
            "an empty value disables JSON for direct commands",
            "invalid for sweeps",

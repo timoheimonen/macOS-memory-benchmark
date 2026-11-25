@@ -510,6 +510,11 @@ std::string error_sweep_parameter_not_allowed(const std::string& parameter_name,
   return "Sweep parameter '" + parameter_name + "' is not allowed with " + mode_name;
 }
 
+std::string error_sweep_option_conflict(const std::string& option,
+                                        const std::string& parameter_name) {
+  return "Cannot specify both " + option + " and --sweep " + parameter_name;
+}
+
 const std::string& error_sweep_requires_output() {
   static const std::string msg = "--sweep requires --output <target> for the combined JSON result";
   return msg;

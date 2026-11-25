@@ -34,6 +34,7 @@
 #include <utility>
 
 #include "core/config/config.h"
+#include "core/config/sweep_utils.h"
 #include "core/config/version.h"
 #include "core/signal/signal_handler.h"
 #include "core/system/benchmark_qos.h"
@@ -45,6 +46,7 @@
 #include "llm_memory/llm_metal_backend.h"
 #include "llm_memory/llm_output.h"
 #include "llm_memory/llm_runner.h"
+#include "llm_memory/llm_sweep_runner.h"
 #include "llm_memory/llm_work_plan.h"
 #include "output/console/messages/messages_api.h"
 #include "output/console/output_printer.h"
@@ -397,6 +399,132 @@ build_runtime_metal_resource_request(
   return request;
 }
 
+bool llm_sweep_parameter_from_string(const std::string& key,
+                                     LlmSweepParameter& out_parameter,
+                                     std::string& out_name) {
+  if (key == "context-tokens") {
+    out_parameter = LlmSweepParameter::ContextTokens;
+    out_name = "context-tokens";
+    return true;
+  }
+  if (key == "kv-block-tokens") {
+    out_parameter = LlmSweepParameter::KvBlockTokens;
+    out_name = "kv-block-tokens";
+    return true;
+  }
+  if (key == "prompt-tokens") {
+    out_parameter = LlmSweepParameter::PromptTokens;
+    out_name = "prompt-tokens";
+    return true;
+  }
+  if (key == "attention-query-tile-tokens") {
+    out_parameter = LlmSweepParameter::AttentionQueryTileTokens;
+    out_name = "attention-query-tile-tokens";
+    return true;
+  }
+  return false;
+}
+
+bool parse_llm_sweep_spec(const std::string& spec_text,
+                          LlmSweepSpec& out_spec) {
+  ParsedSweepText parsed_text;
+  try {
+    parsed_text = parse_sweep_text(spec_text);
+  } catch (const std::invalid_argument& error) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_invalid_value("--sweep", spec_text,
+                                               error.what())
+              << std::endl;
+    return false;
+  }
+
+  LlmSweepSpec spec;
+  if (!llm_sweep_parameter_from_string(parsed_text.key, spec.parameter,
+                                       spec.parameter_name)) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_sweep_parameter_not_allowed(parsed_text.key,
+                                                             "--llm-memory")
+              << std::endl;
+    return false;
+  }
+
+  const std::string option_name = "--" + spec.parameter_name;
+  spec.values.reserve(parsed_text.values.size());
+  for (const std::string& raw_value : parsed_text.values) {
+    size_t parsed = 0;
+    const bool ok =
+        (spec.parameter == LlmSweepParameter::ContextTokens)
+            ? parse_positive_size(option_name, raw_value, parsed)
+            : parse_nonnegative_size(option_name, raw_value, parsed);
+    if (!ok) {
+      return false;
+    }
+    spec.values.push_back(LlmSweepValue{raw_value, parsed});
+  }
+
+  out_spec = std::move(spec);
+  return true;
+}
+
+bool preflight_llm_single_config(const LlmMemoryConfig& config) {
+  const LlmMemoryConfigValidation validation =
+      validate_llm_memory_config(config);
+  if (!validation.valid) {
+    report_llm_config_failure(validation.reason_code);
+    return false;
+  }
+  if (const char* profile_reason =
+          validate_llm_activated_profile(config)) {
+    report_llm_config_failure(profile_reason);
+    return false;
+  }
+  LlmGeometryRequest geometry_request{
+      validation.active_weight_bytes,
+      config.layer_count,
+      config.query_head_count,
+      config.kv_head_count,
+      config.head_dimension,
+      config.kv_element_bytes,
+      config.visible_context_tokens,
+      config.batch_size,
+      config.kv_block_tokens,
+      config.phase,
+      config.kv_layout};
+  geometry_request.prompt_tokens = config.prompt_tokens;
+  geometry_request.attention_query_tile_tokens =
+      config.attention_query_tile_tokens;
+  const LlmGeometry geometry = resolve_llm_geometry(geometry_request);
+  if (!geometry.valid) {
+    report_llm_config_failure(geometry.reason_code);
+    return false;
+  }
+
+  constexpr std::array<LlmScenario, kLlmScenarioCount> kScenarios = {
+      LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed};
+  size_t maximum_explicit_iterations =
+      std::numeric_limits<size_t>::max();
+  for (LlmScenario scenario : kScenarios) {
+    const LlmScenarioLimits limits = calculate_llm_scenario_limits(
+        geometry, scenario, config.backend);
+    if (!limits.valid) {
+      report_llm_config_failure(limits.reason_code);
+      return false;
+    }
+    maximum_explicit_iterations =
+        std::min(maximum_explicit_iterations,
+                 limits.effective_maximum_work_units);
+  }
+  if (config.user_specified_iterations &&
+      config.iterations > maximum_explicit_iterations) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_llm_memory_iterations_exceed_limit(
+                     config.iterations, maximum_explicit_iterations)
+              << std::endl;
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 void set_llm_memory_parser_test_hooks(
@@ -449,6 +577,7 @@ int parse_llm_memory_arguments(int argc, char* argv[],
   bool count_seen = false;
   bool seed_seen = false;
   bool output_seen = false;
+  bool sweep_max_runs_seen = false;
   bool help_seen = false;
 
   for (int index = 1; index < argc; ++index) {
@@ -735,6 +864,39 @@ int parse_llm_memory_arguments(int argc, char* argv[],
       }
       continue;
     }
+    if (is_option(argument, "-S", "--sweep")) {
+      std::string token;
+      if (!take_value(argc, argv, index, "--sweep", token)) {
+        return EXIT_FAILURE;
+      }
+      LlmSweepSpec spec;
+      if (!parse_llm_sweep_spec(token, spec)) {
+        return EXIT_FAILURE;
+      }
+      for (const LlmSweepSpec& existing : config.sweep_specs) {
+        if (existing.parameter == spec.parameter) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_duplicate_sweep_parameter(
+                           spec.parameter_name)
+                    << std::endl;
+          return EXIT_FAILURE;
+        }
+      }
+      config.sweep_specs.push_back(std::move(spec));
+      config.run_sweep = true;
+      continue;
+    }
+    if (is_option(argument, "-X", "--sweep-max-runs")) {
+      if (report_duplicate(sweep_max_runs_seen, "--sweep-max-runs")) {
+        return EXIT_FAILURE;
+      }
+      std::string token;
+      if (!take_value(argc, argv, index, "--sweep-max-runs", token) ||
+          !parse_positive_size(argument, token, config.sweep_max_runs)) {
+        return EXIT_FAILURE;
+      }
+      continue;
+    }
 
     std::cerr << Messages::error_prefix()
               << Messages::error_llm_memory_must_be_used_alone()
@@ -753,6 +915,104 @@ int parse_llm_memory_arguments(int argc, char* argv[],
     return EXIT_SUCCESS;
   }
 
+  bool sweeps_context_tokens = false;
+  bool sweeps_kv_block_tokens = false;
+  bool sweeps_prompt_tokens = false;
+  bool sweeps_attention_query_tile_tokens = false;
+  for (const LlmSweepSpec& spec : config.sweep_specs) {
+    switch (spec.parameter) {
+      case LlmSweepParameter::ContextTokens:
+        sweeps_context_tokens = true;
+        break;
+      case LlmSweepParameter::KvBlockTokens:
+        sweeps_kv_block_tokens = true;
+        break;
+      case LlmSweepParameter::PromptTokens:
+        sweeps_prompt_tokens = true;
+        break;
+      case LlmSweepParameter::AttentionQueryTileTokens:
+        sweeps_attention_query_tile_tokens = true;
+        break;
+    }
+  }
+
+  if (config.run_sweep) {
+    if (sweeps_context_tokens && context_tokens_seen) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_sweep_option_conflict("--context-tokens",
+                                                         "context-tokens")
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (sweeps_kv_block_tokens && kv_block_tokens_seen) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_sweep_option_conflict("--kv-block-tokens",
+                                                         "kv-block-tokens")
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (sweeps_prompt_tokens && prompt_tokens_seen) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_sweep_option_conflict("--prompt-tokens",
+                                                         "prompt-tokens")
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (sweeps_attention_query_tile_tokens &&
+        attention_query_tile_tokens_seen) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_sweep_option_conflict(
+                       "--attention-query-tile-tokens",
+                       "attention-query-tile-tokens")
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (sweeps_context_tokens && config.phase != LlmPhase::Decode) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_sweep_parameter_not_allowed(
+                       "context-tokens", "--llm-memory --phase prefill")
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (sweeps_prompt_tokens && config.phase != LlmPhase::Prefill) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_sweep_parameter_not_allowed(
+                       "prompt-tokens", "--llm-memory --phase decode")
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (sweeps_attention_query_tile_tokens &&
+        config.phase != LlmPhase::Prefill) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_sweep_parameter_not_allowed(
+                       "attention-query-tile-tokens",
+                       "--llm-memory --phase decode")
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (sweeps_kv_block_tokens && config.kv_layout != LlmKvLayout::Paged) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_sweep_parameter_not_allowed(
+                       "kv-block-tokens",
+                       "--llm-memory --kv-layout contiguous")
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (config.output_file.empty()) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_sweep_requires_output() << std::endl;
+      return EXIT_FAILURE;
+    }
+    const size_t run_count = calculate_llm_sweep_run_count(config);
+    if (run_count == 0 || run_count > config.sweep_max_runs) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_sweep_too_many_runs(run_count,
+                                                       config.sweep_max_runs)
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+  }
+
   const std::array<std::pair<bool, const char*>, 5> required_options = {{
       {weight_seen, "--weight-size-mb"},
       {layers_seen, "--layers"},
@@ -768,22 +1028,27 @@ int parse_llm_memory_arguments(int argc, char* argv[],
       return EXIT_FAILURE;
     }
   }
-  if (config.phase == LlmPhase::Decode && !context_tokens_seen) {
-    std::cerr << Messages::error_prefix() << Messages::error_llm_memory_missing_required_option("--context-tokens")
+  if (config.phase == LlmPhase::Decode && !context_tokens_seen &&
+      !sweeps_context_tokens) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_llm_memory_missing_required_option(
+                     "--context-tokens")
               << std::endl;
     return EXIT_FAILURE;
   }
-  if (config.kv_layout == LlmKvLayout::Paged &&
-      !kv_block_tokens_seen) {
+  if (config.kv_layout == LlmKvLayout::Paged && !kv_block_tokens_seen &&
+      !sweeps_kv_block_tokens) {
     std::cerr << Messages::error_prefix()
               << Messages::error_llm_memory_missing_required_option(
                      "--kv-block-tokens")
               << std::endl;
     return EXIT_FAILURE;
   }
-  if (const char* layout_reason = validate_llm_kv_layout_options(config)) {
-    report_llm_config_failure(layout_reason);
-    return EXIT_FAILURE;
+  if (!sweeps_kv_block_tokens) {
+    if (const char* layout_reason = validate_llm_kv_layout_options(config)) {
+      report_llm_config_failure(layout_reason);
+      return EXIT_FAILURE;
+    }
   }
   if (config.backend == LlmMemoryBackend::Metal &&
       config.user_specified_workers) {
@@ -803,60 +1068,18 @@ int parse_llm_memory_arguments(int argc, char* argv[],
     }
   }
 
-  const LlmMemoryConfigValidation validation =
-      validate_llm_memory_config(config);
-  if (!validation.valid) {
-    report_llm_config_failure(validation.reason_code);
-    return EXIT_FAILURE;
-  }
-  if (const char* profile_reason =
-          validate_llm_activated_profile(config)) {
-    report_llm_config_failure(profile_reason);
-    return EXIT_FAILURE;
-  }
-  LlmGeometryRequest geometry_request{
-      validation.active_weight_bytes,
-      config.layer_count,
-      config.query_head_count,
-      config.kv_head_count,
-      config.head_dimension,
-      config.kv_element_bytes,
-      config.visible_context_tokens,
-      config.batch_size,
-      config.kv_block_tokens,
-      config.phase,
-      config.kv_layout};
-  geometry_request.prompt_tokens = config.prompt_tokens;
-  geometry_request.attention_query_tile_tokens =
-      config.attention_query_tile_tokens;
-  const LlmGeometry geometry = resolve_llm_geometry(geometry_request);
-  if (!geometry.valid) {
-    report_llm_config_failure(geometry.reason_code);
-    return EXIT_FAILURE;
-  }
-
-  constexpr std::array<LlmScenario, kLlmScenarioCount> kScenarios = {
-      LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed};
-  size_t maximum_explicit_iterations =
-      std::numeric_limits<size_t>::max();
-  for (LlmScenario scenario : kScenarios) {
-    const LlmScenarioLimits limits = calculate_llm_scenario_limits(
-        geometry, scenario, config.backend);
-    if (!limits.valid) {
-      report_llm_config_failure(limits.reason_code);
+  if (config.run_sweep) {
+    const std::vector<LlmMemoryConfig> run_configs =
+        build_llm_sweep_run_configs(config);
+    for (const LlmMemoryConfig& run_config : run_configs) {
+      if (!preflight_llm_single_config(run_config)) {
+        return EXIT_FAILURE;
+      }
+    }
+  } else {
+    if (!preflight_llm_single_config(config)) {
       return EXIT_FAILURE;
     }
-    maximum_explicit_iterations =
-        std::min(maximum_explicit_iterations,
-                 limits.effective_maximum_work_units);
-  }
-  if (config.user_specified_iterations &&
-      config.iterations > maximum_explicit_iterations) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_llm_memory_iterations_exceed_limit(
-                     config.iterations, maximum_explicit_iterations)
-              << std::endl;
-    return EXIT_FAILURE;
   }
 
   if (!config.user_specified_seed) {
@@ -865,74 +1088,37 @@ int parse_llm_memory_arguments(int argc, char* argv[],
   return EXIT_SUCCESS;
 }
 
-int run_llm_memory_mode(int argc, char* argv[]) {
-  LlmMemoryConfig config;
-  int parse_status = EXIT_FAILURE;
-  try {
-    parse_status = parse_llm_memory_arguments(argc, argv, config);
-  } catch (const std::exception& error) {
-    report_llm_command_exception(error.what());
-    return EXIT_FAILURE;
-  } catch (...) {
-    report_llm_command_exception("");
-    return EXIT_FAILURE;
+int execute_llm_memory_run(const LlmMemoryConfig& config,
+                           JsonOutputSession* output_session,
+                           bool install_signal_mask, bool print_banner,
+                           nlohmann::ordered_json* collected_json) noexcept {
+  if (collected_json != nullptr) {
+    *collected_json = nlohmann::ordered_json();
   }
-  if (parse_status != EXIT_SUCCESS) {
-    return EXIT_FAILURE;
-  }
-  if (config.help_printed) {
-    return EXIT_SUCCESS;
-  }
-
-  JsonOutputTarget output_target;
-  try {
-    output_target = make_json_output_target(
-        config.output_file,
-        JsonFilePathPolicy::ResolveAgainstCurrentDirectory);
-  } catch (const std::exception& error) {
-    report_json_output_boundary_failure(
-        config.output_file,
-        Messages::error_json_output_initialization_failed(error.what()));
-    return EXIT_FAILURE;
-  } catch (...) {
-    report_json_output_boundary_failure(
-        config.output_file,
-        Messages::error_json_output_initialization_failed(""));
-    return EXIT_FAILURE;
-  }
-
   int run_status = EXIT_FAILURE;
-  std::optional<JsonOutputSession> output_session;
-  try {
-    output_session.emplace(std::move(output_target));
-  } catch (const std::exception& error) {
-    report_json_output_boundary_failure(
-        config.output_file,
-        Messages::error_json_output_initialization_failed(error.what()));
-    return EXIT_FAILURE;
-  } catch (...) {
-    report_json_output_boundary_failure(
-        config.output_file,
-        Messages::error_json_output_initialization_failed(""));
-    return EXIT_FAILURE;
-  }
   LlmMemoryWorkPlan model_plan;
   std::unique_ptr<LlmBackend> backend;
   LlmResultMetadata metadata;
   LlmMemoryResult result;
   bool post_run_exception = false;
   try {
-    print_runtime_banner();
+    if (print_banner) {
+      print_runtime_banner();
+    }
     metadata.build_manifest = nlohmann::ordered_json::parse(LLM_BUILD_MANIFEST_JSON);
     const std::string binary_hash = capture_llm_binary_sha256();
-    if (!binary_hash.empty()) metadata.build_manifest["binary_sha256"] = binary_hash;
-    else {
+    if (!binary_hash.empty()) {
+      metadata.build_manifest["binary_sha256"] = binary_hash;
+    } else {
       metadata.build_manifest["status"] = "partial";
       metadata.build_manifest["reason_code"] = "binary-hash-unavailable";
     }
     metadata.timestamp = build_utc_timestamp();
     metadata.main_thread_qos = prepare_main_thread_benchmark_qos(MainThreadQosSetter{}, false);
-    BenchmarkSignalMaskGuard signal_guard;
+    std::optional<BenchmarkSignalMaskGuard> signal_guard;
+    if (install_signal_mask) {
+      signal_guard.emplace();
+    }
 
     metadata.environment_start = capture_llm_host_environment();
     metadata.environment_end = metadata.environment_start;
@@ -1111,19 +1297,29 @@ int run_llm_memory_mode(int argc, char* argv[]) {
     }
 
     LlmRunnerHooks hooks;
-    hooks.progress_snapshots = output_session->persists_checkpoints();
-    hooks.observe_file_writes = [&]() {
-      return std::make_pair(output_session->file_writer_attempts(), output_session->successful_file_writes());
-    };
-    hooks.checkpoint = [&](const LlmMemoryResult& snapshot, LlmCheckpointKind kind) {
-      static_cast<void>(kind);
-      return output_session->checkpoint([&]() {
-        metadata.environment_end = capture_llm_host_environment();
-        return build_llm_memory_json(config, model_plan,
-                                     backend->evidence(), metadata,
-                                     snapshot);
-      });
-    };
+    if (output_session != nullptr) {
+      hooks.progress_snapshots = output_session->persists_checkpoints();
+      hooks.observe_file_writes = [&]() {
+        return std::make_pair(output_session->file_writer_attempts(),
+                              output_session->successful_file_writes());
+      };
+      hooks.checkpoint = [&](const LlmMemoryResult& snapshot,
+                             LlmCheckpointKind kind) {
+        static_cast<void>(kind);
+        return output_session->checkpoint([&]() {
+          metadata.environment_end = capture_llm_host_environment();
+          return build_llm_memory_json(config, model_plan,
+                                       backend->evidence(), metadata,
+                                       snapshot);
+        });
+      };
+    } else {
+      hooks.progress_snapshots = false;
+      hooks.observe_file_writes = []() { return std::make_pair(0U, 0U); };
+      hooks.checkpoint = [](const LlmMemoryResult&, LlmCheckpointKind) {
+        return EXIT_SUCCESS;
+      };
+    }
 
     run_status =
         run_llm_memory_suite(config, model_plan, *backend, result, hooks);
@@ -1135,10 +1331,17 @@ int run_llm_memory_mode(int argc, char* argv[]) {
                 << Messages::error_llm_memory_run_failed(result.reason_code)
                 << std::endl;
       const std::string reason_code = result.reason_code;
-      if (write_llm_setup_failure_final(
-              *output_session, config, model_plan, backend->evidence(),
-              metadata, reason_code, result) != EXIT_SUCCESS) {
-        return EXIT_FAILURE;
+      if (output_session != nullptr) {
+        if (write_llm_setup_failure_final(
+                *output_session, config, model_plan, backend->evidence(),
+                metadata, reason_code, result) != EXIT_SUCCESS) {
+          return EXIT_FAILURE;
+        }
+      } else if (collected_json != nullptr) {
+        initialize_llm_setup_failure_result(config, reason_code, result);
+        metadata.environment_end = capture_llm_host_environment();
+        *collected_json = build_llm_memory_json(
+            config, model_plan, backend->evidence(), metadata, result);
       }
       return EXIT_FAILURE;
     }
@@ -1146,13 +1349,16 @@ int run_llm_memory_mode(int argc, char* argv[]) {
         active_llm_command_hooks.after_initialized_runner) {
       active_llm_command_hooks.after_initialized_runner();
     }
-    if (output_session->kind() != JsonOutputKind::File || !result.terminal_checkpoint_completed) {
+    if (output_session == nullptr ||
+        output_session->kind() != JsonOutputKind::File ||
+        !result.terminal_checkpoint_completed) {
       metadata.environment_end = capture_llm_host_environment();
     }
     print_llm_memory_console_report(model_plan, backend->evidence(), metadata, result);
 
-    if (output_session->kind() == JsonOutputKind::File && result.terminal_checkpoint_completed &&
-        !result.checkpoint_failed) {
+    if (output_session != nullptr &&
+        output_session->kind() == JsonOutputKind::File &&
+        result.terminal_checkpoint_completed && !result.checkpoint_failed) {
       std::cout << Messages::msg_results_saved_to(config.output_file) << std::endl;
     }
     if (result.status == LlmRunStatus::Interrupted) {
@@ -1170,35 +1376,160 @@ int run_llm_memory_mode(int argc, char* argv[]) {
     post_run_exception = result.initialized;
   }
 
-  if (output_session && model_plan.valid && backend &&
-      !result.initialized) {
-    if (write_llm_setup_failure_final(
-            *output_session, config, model_plan, backend->evidence(),
-            metadata, LlmRunnerReason::RUNNER_EXCEPTION,
-            result) != EXIT_SUCCESS) {
-      return EXIT_FAILURE;
+  if (model_plan.valid && backend && !result.initialized) {
+    if (output_session != nullptr) {
+      if (write_llm_setup_failure_final(
+              *output_session, config, model_plan, backend->evidence(),
+              metadata, LlmRunnerReason::RUNNER_EXCEPTION,
+              result) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+      }
+    } else if (collected_json != nullptr) {
+      try {
+        initialize_llm_setup_failure_result(
+            config, LlmRunnerReason::RUNNER_EXCEPTION, result);
+        metadata.environment_end = capture_llm_host_environment();
+        *collected_json = build_llm_memory_json(
+            config, model_plan, backend->evidence(), metadata, result);
+      } catch (...) {
+        *collected_json = nlohmann::ordered_json();
+      }
     }
     return EXIT_FAILURE;
   }
 
-  if (post_run_exception && output_session && model_plan.valid && backend) {
-    if (write_llm_post_run_exception_final(
-            *output_session, config, model_plan, backend->evidence(),
-            metadata, result) != EXIT_SUCCESS) {
-      return EXIT_FAILURE;
+  if (post_run_exception && model_plan.valid && backend) {
+    if (output_session != nullptr) {
+      if (write_llm_post_run_exception_final(
+              *output_session, config, model_plan, backend->evidence(),
+              metadata, result) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+      }
+    } else if (collected_json != nullptr) {
+      try {
+        result.snapshot_request = "late-command-error-correction";
+        result.terminal_checkpoint_completed = false;
+        result.status = LlmRunStatus::Failed;
+        result.reason_code = LlmRunnerReason::RUNNER_EXCEPTION;
+        result.run_accepted = false;
+        result.diagnostic.clear();
+        metadata.environment_end = capture_llm_host_environment();
+        *collected_json = build_llm_memory_json(
+            config, model_plan, backend->evidence(), metadata, result);
+      } catch (...) {
+        *collected_json = nlohmann::ordered_json();
+      }
     }
     return EXIT_FAILURE;
   }
 
-  if (output_session && output_session->kind() == JsonOutputKind::Stdout &&
-      result.initialized &&
-      backend &&
+  if (collected_json != nullptr && result.initialized && backend) {
+    try {
+      *collected_json = build_llm_memory_json(
+          config, model_plan, backend->evidence(), metadata, result);
+    } catch (const std::exception& error) {
+      report_llm_command_exception(error.what());
+      *collected_json = nlohmann::ordered_json();
+      return EXIT_FAILURE;
+    } catch (...) {
+      report_llm_command_exception("");
+      *collected_json = nlohmann::ordered_json();
+      return EXIT_FAILURE;
+    }
+  }
+
+  if (output_session != nullptr &&
+      output_session->kind() == JsonOutputKind::Stdout &&
+      result.initialized && backend &&
       write_llm_stdout_final(*output_session, config, model_plan,
                              backend->evidence(), metadata,
                              result) != EXIT_SUCCESS) {
     return EXIT_FAILURE;
   }
   return run_status;
+}
+
+int run_llm_memory_collect(const LlmMemoryConfig& config,
+                           nlohmann::ordered_json& result_json) {
+  return execute_llm_memory_run(config, /*output_session=*/nullptr,
+                                /*install_signal_mask=*/false,
+                                /*print_banner=*/false, &result_json);
+}
+
+int run_llm_memory_mode(int argc, char* argv[]) {
+  LlmMemoryConfig config;
+  int parse_status = EXIT_FAILURE;
+  try {
+    parse_status = parse_llm_memory_arguments(argc, argv, config);
+  } catch (const std::exception& error) {
+    report_llm_command_exception(error.what());
+    return EXIT_FAILURE;
+  } catch (...) {
+    report_llm_command_exception("");
+    return EXIT_FAILURE;
+  }
+  if (parse_status != EXIT_SUCCESS) {
+    return EXIT_FAILURE;
+  }
+  if (config.help_printed) {
+    return EXIT_SUCCESS;
+  }
+
+  JsonOutputTarget output_target;
+  try {
+    output_target = make_json_output_target(
+        config.output_file,
+        JsonFilePathPolicy::ResolveAgainstCurrentDirectory);
+  } catch (const std::exception& error) {
+    report_json_output_boundary_failure(
+        config.output_file,
+        Messages::error_json_output_initialization_failed(error.what()));
+    return EXIT_FAILURE;
+  } catch (...) {
+    report_json_output_boundary_failure(
+        config.output_file,
+        Messages::error_json_output_initialization_failed(""));
+    return EXIT_FAILURE;
+  }
+
+  std::optional<JsonOutputSession> output_session;
+  try {
+    output_session.emplace(std::move(output_target));
+  } catch (const std::exception& error) {
+    report_json_output_boundary_failure(
+        config.output_file,
+        Messages::error_json_output_initialization_failed(error.what()));
+    return EXIT_FAILURE;
+  } catch (...) {
+    report_json_output_boundary_failure(
+        config.output_file,
+        Messages::error_json_output_initialization_failed(""));
+    return EXIT_FAILURE;
+  }
+
+  if (config.run_sweep) {
+    try {
+      const SweepExecutionResult execution =
+          run_llm_memory_sweep(config, *output_session);
+      if (output_session->kind() == JsonOutputKind::Stdout &&
+          !execution.output_json.empty() &&
+          output_session->write_final(execution.output_json) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+      }
+      return execution.exit_code;
+    } catch (const std::exception& error) {
+      report_llm_command_exception(error.what());
+      return EXIT_FAILURE;
+    } catch (...) {
+      report_llm_command_exception("");
+      return EXIT_FAILURE;
+    }
+  }
+
+  return execute_llm_memory_run(config, &*output_session,
+                                /*install_signal_mask=*/true,
+                                /*print_banner=*/true,
+                                /*collected_json=*/nullptr);
 }
 
 LlmMemoryConfigValidation validate_llm_memory_config(

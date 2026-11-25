@@ -259,12 +259,15 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 - `--llm-memory` uses a dedicated parser outside `argument_parser.cpp`. It accepts only `-M`/`--llm-memory`, optional
   `--llm-memory-backend <cpu|metal>`, the five
   required weight/layer/head inputs, phase and its context or prompt/tile geometry, optional KV width, batch,
-  `--kv-layout`, `--kv-block-tokens`, threads, iterations, count, seed, output, and help.
+  `--kv-layout`, `--kv-block-tokens`, threads, iterations, count, seed, output, `-S`/`--sweep`, `-X`/`--sweep-max-runs`,
+  and help.
   Duplicate/unknown/incompatible options, missing values, non-complete decimal tokens, zero size/count values, invalid
   KV widths, invalid query/KV sharing, checked geometry overflow, impossible one-step payloads, and explicit scenario
   work above the strictest limit fail before output-session creation. Output consumes exactly one opaque raw token.
-  Help still completes the whitelist pass but returns before required/default/preparation work. LLM rejects sweeps and
-  all cache, latency, TLB, pattern, GPU, and non-cacheable modifiers. Defaults are two-byte KV elements, batch one,
+  Help still completes the whitelist pass but returns before required/default/preparation work. LLM supports repeatable
+  Cartesian sweeps over `context-tokens` (decode), `prompt-tokens` and `attention-query-tile-tokens` (prefill), and
+  `kv-block-tokens` (paged KV), rejecting direct-flag/sweep conflicts, requiring non-empty `--output`, and preflight-validating
+  every generated run configuration before execution. LLM rejects all cache, latency, TLB, pattern, GPU, and non-cacheable modifiers. Defaults are two-byte KV elements, batch one,
   three loops, automatic per-scenario calibration, one generated nonzero seed, CPU, decode, and
   contiguous KV. Decode requires positive `--context-tokens` and rejects prefill geometry. Prefill requires positive
   `--prompt-tokens P` and `--attention-query-tile-tokens Q`, requires `Q <= P`, and rejects decode context.
@@ -1111,7 +1114,7 @@ Contract highlights:
 - Aggregate statistics printed when loop count > 1.
 - Errors and warnings use `Messages::error_prefix()` / `Messages::warning_prefix()` conventions.
 - Live progress uses the shared spinner on `stderr` only when it is a TTY; redirected standard and pattern output contains no carriage-return control sequences.
-- For every result-producing direct command or CPU sweep using `--output -`, the output session is installed before
+- For every result-producing direct command or supported sweep using `--output -`, the output session is installed before
   runtime console
   rendering and worker-thread creation. The general standard/pattern/TLB branch installs it before sweep/direct
   validation; core-to-core installs it after its combined parse/preflight; GPU installs it after its dedicated parser
@@ -1124,7 +1127,7 @@ Contract highlights:
 
 JSON writer API (`src/output/json/json_output/json_output.cpp`):
 
-Every result-producing direct mode and the CPU modes' supported sweeps can send their existing payload either to an
+Every result-producing direct mode and supported sweep can send its existing payload either to an
 atomic file target or, for exact raw `-`, to one final stdout document. This transport does not wrap or change the
 measurement schema. [API.md](API.md) is the process-integration contract and support matrix.
 
@@ -1144,7 +1147,7 @@ measurement schema. [API.md](API.md) is the process-integration contract and sup
   `backend_evidence`, memory-budget/calibration evidence, status-bearing generic work-unit measurements, measured-only
   aggregates, and interpretation, plus additive exact traffic, checksum, loop/checkpoint, environment, and warning
   evidence.
-- Sweep envelope schema 1: general and core-to-core producers record `configuration.mode = "sweep"`,
+- Sweep envelope schema 1: general, core-to-core, and LLM-memory producers record `configuration.mode = "sweep"`,
   `configuration.sweep_schema_version = 1`, `configuration.base_mode`, `configuration.sweep_parameters`, top-level
   `status`, `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`, plus per-entry
   `runs[].status`, `status_reason`, and `result`. Every attempted run is retained and

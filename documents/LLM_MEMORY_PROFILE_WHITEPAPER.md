@@ -79,7 +79,7 @@ It intentionally excludes:
 - runtime KV allocation/free lists, prefix sharing, copy-on-write, eviction, sliding windows, ragged batches, block
   swapping, fragmentation simulation, or KV compression;
 - speculative decoding and model-specific control flow;
-- built-in model presets, model-file introspection, and LLM parameter sweeps;
+- built-in model presets and model-file introspection;
 - recycling a small physical buffer to represent a larger logical model;
 - hardware-counter claims about cache, SLC, TLB, memory-controller, or DRAM traffic.
 
@@ -112,16 +112,22 @@ The standalone primary mode is `-M` / `--llm-memory`. Its exact whitelist is:
 -i, --iterations <count>    default automatic per-scenario calibration
 -r, --count <count>         default 3
 --seed <uint64>             default one generated nonzero base seed
--o, --output <target>       default console only
+-o, --output <target>       default console only; required for sweeps
+-S, --sweep <key=a,b>       optional repeatable Cartesian sweep (context-tokens, kv-block-tokens,
+                            prompt-tokens, attention-query-tile-tokens); conflicts with matching direct flag
+-X, --sweep-max-runs <n>    optional sweep run cap (default 256)
 -h, --help
 ```
 
-Every required common and phase-specific option must occur exactly once. Optional values and the mode/help selector may
+Every required common and phase-specific option must occur exactly once (unless supplied through a matching `--sweep`
+key, which cannot be combined with that direct option). Optional values and the mode/help selector may
 occur at most once. Numeric input is a complete decimal token; counts are positive, while an explicit seed may be zero.
 Query heads must be at least the KV-head count and divisible by it. `G` must be a positive power of two no greater than
 `UINT32_MAX`; it may exceed the active phase length. Phase/layout validation is order-independent.
 All other primary modes and all buffer/cache/latency/TLB/pattern/GPU,
-`--non-cacheable`, `--sweep`, and `--sweep-max-runs` options are rejected.
+and `--non-cacheable` options are rejected. Sweep execution reuses the shared schema-1 sweep envelope with
+`base_mode: "llm_memory"` and embeds each concrete run's full schema-2 document under `runs[].result`, releasing
+backend resources between consecutive runs.
 
 Backend defaults to `cpu`; phase defaults to `decode`. Layout defaults to `contiguous`; explicit backend/phase/layout
 and block-size sources are retained in `configuration.resolved_sources`. Decode and prefill inputs are mutually

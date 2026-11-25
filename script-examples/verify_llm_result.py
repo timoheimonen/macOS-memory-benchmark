@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify one LLM schema-2 artifact independently of the C++ producer.
+"""Verify one LLM schema-2 artifact or schema-1 LLM sweep envelope independently of the C++ producer.
 
 Usage: python3 script-examples/verify_llm_result.py result.json [--binary memory_benchmark]
 Exit 0: consistent accepted artifact; 1: inconsistent or unaccepted; 2: unsupported.
@@ -8,6 +8,7 @@ See documents/API.md for evidence limits. No benchmark or executable is invoked.
 
 import argparse
 import hashlib
+import itertools
 import json
 import math
 from pathlib import Path
@@ -24,6 +25,12 @@ METRICS = (
     "synthetic_memory_work_units_per_second",
     "effective_model_payload_gb_s",
 )
+SWEEP_PARAM_CONFIG_KEYS = {
+    "context-tokens": "visible_context_tokens",
+    "kv-block-tokens": "kv_block_tokens",
+    "prompt-tokens": "prompt_tokens",
+    "attention-query-tile-tokens": "attention_query_tile_tokens",
+}
 MAX_INPUT = 64 * 1024 * 1024
 MAX_WORK = 1000000
 
@@ -1360,7 +1367,7 @@ def check_manifest(manifest):
         )
 
 
-def verify(doc, binary=None, require_raw=False):
+def verify_single(doc, binary=None, require_raw=False):
     if type(doc.get("schema_version")) is not int or doc["schema_version"] != 2:
         raise Rejected("unsupported-schema", True)
     if doc.get("mode") != "llm_memory":
@@ -1447,6 +1454,159 @@ def verify(doc, binary=None, require_raw=False):
         ),
         oracle_work_used=MAX_WORK - budget.remaining,
     )
+
+
+def verify_sweep(doc, binary=None, require_raw=False):
+    cfg = doc.get("configuration")
+    require(isinstance(cfg, dict), "sweep-configuration-invalid")
+    if cfg.get("mode") != "sweep" or cfg.get("base_mode") != "llm_memory":
+        raise Rejected("unsupported-mode", True)
+    if type(cfg.get("sweep_schema_version")) is not int or cfg["sweep_schema_version"] != 1:
+        raise Rejected("unsupported-sweep-schema", True)
+
+    run_count = integer(cfg.get("run_count"), maximum=(1 << 53) - 1)
+    sweep_max_runs = integer(cfg.get("sweep_max_runs"), maximum=(1 << 53) - 1)
+    planned_runs = integer(doc.get("planned_runs"), maximum=(1 << 53) - 1)
+    completed_runs = integer(doc.get("completed_runs"), maximum=(1 << 53) - 1)
+    require(run_count > 0 and run_count == planned_runs and run_count <= sweep_max_runs, "sweep-plan-count-mismatch")
+
+    sweep_params = cfg.get("sweep_parameters")
+    require(isinstance(sweep_params, dict) and len(sweep_params) > 0, "sweep-parameters-invalid")
+    param_keys = []
+    param_lists = []
+    for key, values in sweep_params.items():
+        require(key in SWEEP_PARAM_CONFIG_KEYS, "sweep-parameter-unsupported")
+        require(isinstance(values, list) and len(values) > 0, "sweep-parameters-invalid")
+        parsed_values = []
+        for value in values:
+            parsed = integer(value, maximum=(1 << 53) - 1)
+            require(parsed > 0, "sweep-parameter-value-invalid")
+            parsed_values.append(parsed)
+        param_keys.append(key)
+        param_lists.append(parsed_values)
+
+    expected_assignments = [
+        dict(zip(param_keys, combo)) for combo in itertools.product(*param_lists)
+    ]
+    require(len(expected_assignments) == planned_runs, "sweep-plan-count-mismatch")
+
+    status = doc.get("status")
+    require(status in ("complete", "partial", "interrupted", "failed"), "sweep-status-invalid")
+    conclusions_valid = doc.get("conclusions_valid")
+    require(type(conclusions_valid) is bool, "sweep-conclusions-invalid")
+
+    runs = doc.get("runs")
+    require(isinstance(runs, list) and len(runs) <= planned_runs, "sweep-runs-invalid")
+
+    run_verdicts = []
+    observed_completed = 0
+    observed_profile = None
+    total_work = 0
+    checksum_levels = set()
+    timing_levels = set()
+    build_levels = set()
+
+    for index, run in enumerate(runs):
+        require(isinstance(run, dict), "sweep-run-invalid")
+        equal(run.get("index"), index, "sweep-run-index-mismatch")
+        equal(run.get("parameters"), expected_assignments[index], "sweep-parameters-mismatch")
+        run_status = run.get("status")
+        require(run_status in ("complete", "partial", "interrupted", "failed"), "sweep-run-status-invalid")
+        nested = run.get("result")
+        if nested is None:
+            require(run_status != "complete", "sweep-run-status-mismatch")
+            run_verdicts.append(
+                dict(
+                    run_index=index,
+                    status=run_status,
+                    artifact_consistent=True,
+                    run_accepted=False,
+                    reason_code="nested-result-null",
+                )
+            )
+            continue
+
+        require(isinstance(nested, dict), "sweep-run-result-invalid")
+        nested_verdict = verify_single(nested, binary=binary, require_raw=require_raw)
+        nested_profile = (
+            nested["backend"],
+            nested["phase"],
+            nested["kv_layout"],
+            nested["methodology_version"],
+        )
+        if observed_profile is None:
+            observed_profile = nested_profile
+        else:
+            equal(nested_profile, observed_profile, "sweep-profile-mismatch")
+
+        nested_cfg = nested["configuration"]
+        for key, expected_value in expected_assignments[index].items():
+            equal(nested_cfg.get(SWEEP_PARAM_CONFIG_KEYS[key]), expected_value, "sweep-nested-parameter-mismatch")
+
+        nested_status = nested["status"]
+        if run_status == "complete":
+            require(nested_verdict["run_accepted"] is True, "sweep-run-status-mismatch")
+            observed_completed += 1
+        elif run_status == "interrupted":
+            require(nested_status == "interrupted", "sweep-run-status-mismatch")
+        elif run_status == "failed":
+            require(nested_status in ("failed", "unsupported") or not nested_verdict["run_accepted"], "sweep-run-status-mismatch")
+        elif run_status == "partial":
+            require(not nested_verdict["run_accepted"], "sweep-run-status-mismatch")
+
+        total_work += nested_verdict["oracle_work_used"]
+        checksum_levels.add(nested_verdict["checks"]["checksum"])
+        timing_levels.add(nested_verdict["checks"]["timing"])
+        build_levels.add(nested_verdict["checks"]["build"])
+        run_verdicts.append(
+            dict(
+                run_index=index,
+                status=run_status,
+                artifact_consistent=nested_verdict["artifact_consistent"],
+                run_accepted=nested_verdict["run_accepted"],
+                reason_code=nested_verdict["reason_code"],
+            )
+        )
+
+    equal(completed_runs, observed_completed, "sweep-completed-runs-mismatch")
+    all_complete = planned_runs > 0 and len(runs) == planned_runs and completed_runs == planned_runs
+    if status == "complete":
+        require(all_complete and conclusions_valid is True, "sweep-status-mismatch")
+    else:
+        require(conclusions_valid is False, "sweep-status-mismatch")
+
+    envelope_accepted = status == "complete" and conclusions_valid is True and all_complete
+
+    def summarize_level(levels, preferred_order):
+        for candidate in preferred_order:
+            if candidate in levels:
+                return candidate
+        return "unavailable"
+
+    return dict(
+        artifact_consistent=True,
+        run_accepted=envelope_accepted,
+        reason_code="valid" if envelope_accepted else "sweep-not-accepted",
+        artifact_kind="llm_sweep",
+        planned_runs=planned_runs,
+        completed_runs=completed_runs,
+        verified_runs=len(runs),
+        run_verdicts=run_verdicts,
+        checks=dict(
+            checksum=summarize_level(checksum_levels, ("unavailable", "independent-oracle")),
+            timing=summarize_level(timing_levels, ("elapsed-only", "unavailable", "cpu-raw-ticks", "gpu-timestamps")),
+            build=summarize_level(build_levels, ("unavailable", "manifest-only", "binary-bound")),
+        ),
+        oracle_work_used=total_work,
+    )
+
+
+def verify(doc, binary=None, require_raw=False):
+    require(isinstance(doc, dict), "invalid-input")
+    cfg = doc.get("configuration")
+    if isinstance(cfg, dict) and cfg.get("mode") == "sweep" and cfg.get("base_mode") == "llm_memory":
+        return verify_sweep(doc, binary=binary, require_raw=require_raw)
+    return verify_single(doc, binary=binary, require_raw=require_raw)
 
 
 def load(path):
