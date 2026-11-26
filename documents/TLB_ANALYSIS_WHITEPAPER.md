@@ -22,14 +22,21 @@ Primary implementation references:
 - `src/benchmark/tlb_analysis.cpp`
 - `src/benchmark/tlb_analysis.h`
 - `src/benchmark/tlb_boundary_detector.cpp`
+- `src/benchmark/tlb_analysis_json.cpp`
 - `src/benchmark/tlb_analysis_json.h`
+- `src/benchmark/tlb_chain.cpp`
+- `src/benchmark/tlb_measurement_scheduler.cpp`
+- `src/benchmark/tlb_runtime_policy.cpp`
+- `src/benchmark/tlb_sweep_planner.cpp`
 - `src/core/config/argument_parser.cpp`
+- `src/core/config/config_validator.cpp`
 - `tests/test_analysis.cpp`
 
 Related user-facing docs:
 
-- `README.md`
-- `MANUAL.md`
+- [README.md](../README.md)
+- [MANUAL.md](MANUAL.md)
+- [API.md](API.md)
 
 Related whitepaper for the other standalone analysis mode:
 
@@ -609,7 +616,7 @@ comparable run conditions. Use the same explicit seed when workload identity mus
 If L1 detection reports "Not detected":
 
 1. **Check the selected buffer size:** Is it large enough to sweep through the TLB capacity? The 16 KB sweep start may be insufficient if stride is large.
-2. **Review the stride:** If `--latency-stride-bytes` is large (e.g., 512 bytes), `min_sweep_locality = max(16KB, 2 * stride)` may skip the actual L1 TLB boundary. Try re-running with a smaller stride.
+2. **Review the stride:** If `--latency-stride-bytes` exceeds half of 16 KB (for example, `16384` bytes on a 16 KiB page system, which is the maximum stride accepted by `--analyze-tlb`), `min_sweep_locality = page_align_up(max(16KB, 2 * stride))` rises to `32 KB` and skips the 16 KB start point, which may obscure an early boundary. Try re-running with a smaller stride.
 3. **Check the paired JSON data:** Export with `--output` and inspect `sweep[].translation_delta_p50_ns` for the accepted signal. Use `spread_p50_latency_ns`, `packed_p50_latency_ns`, and `active_cache_line_footprint_bytes` only as explicitly named cache-hot diagnostics.
 4. **Verify CPU/system state:** Thermal throttling or power-saving modes can obscure boundaries; run in a stable, idle state.
 

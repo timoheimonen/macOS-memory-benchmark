@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify one LLM schema-2 artifact or schema-1 LLM sweep envelope independently of the C++ producer.
 
-Usage: python3 script-examples/verify_llm_result.py result.json [--binary memory_benchmark]
+Usage: python3 script-examples/verify_llm_result.py result.json [--binary memory_benchmark] [--require-raw-timing]
 Exit 0: consistent accepted artifact; 1: inconsistent or unaccepted; 2: unsupported.
 See documents/API.md for evidence limits. No benchmark or executable is invoked.
 """

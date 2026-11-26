@@ -99,15 +99,15 @@ The standalone primary mode is `-M` / `--llm-memory`. Its exact whitelist is:
 --kv-heads <count>          required
 --head-dim <count>          required
 --phase <decode|prefill>    default decode
---context-tokens <count>    required only for decode
---prompt-tokens <P>         required only for prefill
+--context-tokens <count>    required for decode (direct or via --sweep)
+--prompt-tokens <P>         required for prefill (direct or via --sweep)
 --attention-query-tile-tokens <Q>
-                            required only for prefill; 1 <= Q <= P
+                            required for prefill (direct or via --sweep); 1 <= Q <= P
 --kv-element-bytes <1|2|4>  default 2
 --batch-size <count>        default 1
 --kv-layout <contiguous|paged>
                             default contiguous
---kv-block-tokens <G>       required exactly once for paged; rejected for contiguous
+--kv-block-tokens <G>       required for paged (direct or via --sweep); rejected for contiguous
 -t, --threads <count>       CPU only; default detected CPU worker count
 -i, --iterations <count>    default automatic per-scenario calibration
 -r, --count <count>         default 3
@@ -120,14 +120,29 @@ The standalone primary mode is `-M` / `--llm-memory`. Its exact whitelist is:
 ```
 
 Every required common and phase-specific option must occur exactly once (unless supplied through a matching `--sweep`
-key, which cannot be combined with that direct option). Optional values and the mode/help selector may
-occur at most once. Numeric input is a complete decimal token; counts are positive, while an explicit seed may be zero.
+key, which cannot be combined with that direct option). Optional non-sweep values and the mode/help selector may occur
+at most once; `-S` / `--sweep` is repeatable across distinct parameter keys, and duplicate keys are rejected.
+Sweep keys follow the same phase and layout guards as their direct flags: `context-tokens` is decode-only,
+`prompt-tokens` and `attention-query-tile-tokens` are prefill-only, and `kv-block-tokens` is paged-KV-only.
+Numeric input is a complete decimal token; counts are positive, while an explicit seed may be zero. All JSON-integer
+configuration fields—and `--sweep-max-runs` when `--sweep` is active—are bounded by the exact JSON safe-integer limit
+`2^53 - 1` (with `loop_count <= (2^53 - 1) / 3` so planned measurement indices remain exact integers).
 Query heads must be at least the KV-head count and divisible by it. `G` must be a positive power of two no greater than
 `UINT32_MAX`; it may exceed the active phase length. Phase/layout validation is order-independent.
 All other primary modes and all buffer/cache/latency/TLB/pattern/GPU,
-and `--non-cacheable` options are rejected. Sweep execution reuses the shared schema-1 sweep envelope with
-`base_mode: "llm_memory"` and embeds each concrete run's full schema-2 document under `runs[].result`, releasing
-backend resources between consecutive runs.
+and `--non-cacheable` options are rejected.
+
+Sweep execution preflight-validates the complete Cartesian product before run 0, reuses the single command base seed
+across every generated run, releases backend resources between consecutive runs, and writes the shared schema-1 sweep
+envelope (`configuration.mode: "sweep"`, `configuration.base_mode: "llm_memory"`,
+`configuration.sweep_schema_version: 1`) embedding each concrete run's full schema-2 document under `runs[].result`
+(with nested `configuration.output_file: ""`). If a nested run fails before runner-result initialization or is
+interrupted during preparation, its `runs[].result` is `null` with a non-empty `status_reason`. A nested attempt
+increments `completed_runs` only when nested `schema_version == 2`, `mode == "llm_memory"`, `status == "complete"`,
+`results_complete == true`, `run_accepted == true`, and every planned measurement has `status == "measured"`;
+`unsupported` nested runs map to attempt `status: "failed"`. The first incomplete run stops further sweep runs, and
+authoritative sweep acceptance requires `status == "complete"` and `conclusions_valid == true` (with
+`completed_runs == planned_runs`).
 
 Backend defaults to `cpu`; phase defaults to `decode`. Layout defaults to `contiguous`; explicit backend/phase/layout
 and block-size sources are retained in `configuration.resolved_sources`. Decode and prefill inputs are mutually
@@ -137,14 +152,22 @@ falls back to another profile.
 
 Output targets follow the shared process contract:
 
-- omitted or empty output means console only;
-- exact `--output -` reserves stdout for one final schema 2 document and routes the post-parse human transcript to
-  stderr;
+- for direct runs, omitted or empty output means console only; for `--sweep`, a non-empty `--output <target>` is
+  required (an empty value is rejected);
+- exact `--output -` reserves stdout for one final document (schema 2 for a direct run, or schema-1 sweep envelope for
+  `--sweep`) and routes the post-parse human transcript to stderr;
 - every other non-empty raw token is a file, including `./-` and flag-shaped names;
-- file output uses atomic `<target>.tmp` replacement every `K=max(1,ceil(count/8))` completed loops plus command terminal;
+- direct file output uses atomic `<target>.tmp` replacement every `K=max(1,ceil(count/8))` completed loops plus command
+  terminal;
+- sweep file output atomically checkpoints the schema-1 envelope after each attempted run without intra-run loop
+  snapshots;
 - stdout preserves task-boundary stop observations but performs no intermediate snapshot preparation or serialization.
 
-Parser/logical-preflight or JSON-output peak-estimation failure before runner-result initialization leaves stdout empty.
+Parser/logical-preflight, work-plan finalization, or auxiliary/JSON-output peak-estimation failures before `model_plan`
+is finalized—as well as post-plan `timer-unavailable` before runner-result initialization—leave stdout empty and exit
+nonzero. Once `model_plan` is finalized, any other uninitialized runner failure or setup exception initializes a
+terminal `failed` schema-2 document with populated `loops`, unattempted `failed` measurements
+(`not-run-after-runtime-failure`), and `terminal_measurements == planned_measurements`.
 A Metal runtime capability failure after output-session creation emits terminal `unsupported` JSON when enabled and
 returns nonzero without CPU fallback. Runtime compiler, pipeline, resource, or task failure emits terminal
 `failed`/`invalid` schema evidence and returns nonzero. Once the runner initializes status-bearing evidence, normal
@@ -273,7 +296,7 @@ P_b = B * N
 block_bytes = G * R
 last_block_tokens = A - (N - 1) * G
 last_block_valid_bytes = last_block_tokens * R
-decode_append_offset_in_last_block = ((A - 1) % G) * R  # decode only; null for prefill
+decode_append_offset_in_last_block = ((A - 1) % G) * R  # see three-way phase semantics below
 
 k_logical_bytes = L * B * A * R
 k_physical_bytes = L * P_b * block_bytes
@@ -284,6 +307,16 @@ v_layout_padding_bytes = k_layout_padding_bytes
 block_table_entries = B * N
 block_table_bytes = block_table_entries * 4
 ```
+
+`decode_append_offset_in_last_block` has distinct phase semantics across three contract layers:
+
+1. In `resolved_plan.layout.decode_append_offset_in_last_block`, the JSON field is the decimal string
+   `((A - 1) % G) * R` for paged decode and `null` for paged prefill (and contiguous).
+2. In `LlmGeometry` and `resolved_plan.plan_identity` (`llm-memory-work-plan-v1`), it is `((A - 1) % G) * R` for paged
+   decode and `0` for paged prefill (and contiguous).
+3. In the phase-agnostic `LlmKvLayoutPlan` and `resolved_plan.layout.layout_geometry_identity`
+   (`llm-kv-layout-geometry-v1`), it is always `((sequence_tokens - 1) % G) * R` using `A` for decode or `P` for
+   prefill.
 
 Every physical block has exactly `G` records; there is no extra inter-block alignment padding. Each batch sequence's
 last block has initialized suffix padding. Timed work never reads or writes that padding, and post-validation checks its
@@ -428,14 +461,16 @@ released before timed work. The normal policy admits no more than 80% of the cur
 existing fallback applies when that sample is unavailable and caps the admitted total at 2 GiB. The workload is
 rejected rather than silently scaled, and `G`, context, workers, or work-unit geometry are never changed to fit.
 
-A non-empty file or stdout JSON target also reserves a conservative peak for one live schema DOM and its serialized
-transport text before final memory admission. The estimate covers fixed schema storage, captured input strings, every
-planned measurement record, and both expected and actual worker-checksum trees. The input-string term also includes
-the frozen model-plan, methodology, component/layout identities, and applicable prefill aggregate, scenario, execution,
-and scope identities. Frozen identities are charged once. Canonical scenario-plan identities scale with the bounded maximum retained calibration shapes plus frozen plans,
-independently of measured loop count. Actual measurement records/checksums still scale with planned loops. Each variable-length addition is checked, and preliminary and finalized-plan
-estimates use the same canonical identity-size formula. Omitted or empty output adds no serialization reserve; normal
-console-only execution does not serialize a schema document.
+A non-empty file or stdout JSON target—or an internal sweep-collected run whose nested `configuration.output_file` is
+`""`—also reserves a conservative peak for one live schema DOM and its serialized transport text before final memory
+admission. The estimate covers fixed schema storage, captured input strings, every planned measurement record, and both
+expected and actual worker-checksum trees. The input-string term also includes the frozen model-plan, methodology,
+component/layout identities, and applicable prefill aggregate, scenario, execution, and scope identities. Frozen
+identities are charged once. Canonical scenario-plan identities scale with the bounded maximum retained calibration
+shapes plus frozen plans, independently of measured loop count. Actual measurement records/checksums still scale with
+planned loops. Each variable-length addition is checked, and preliminary and finalized-plan estimates use the same
+canonical identity-size formula. Omitted or empty output adds no serialization reserve only for direct console-only
+execution, which does not serialize a schema document.
 
 Schema ownership separates immutable resource geometry from allocation/admission evidence. `resolved_plan.resources`
 contains canonical decimal-string logical weight/K/V lengths, physical K/V lengths, layout padding, and nullable
@@ -710,8 +745,10 @@ against the final task-local ordinal `T-1`, after timer stop and all worker join
 `decode-post-validation-failed`: the invalid attempt is retained with null rates and excluded from
 aggregates. The timed workload and checksum algorithm are unchanged. KV-write evidence applies only
 to KV-bearing scenarios; schema 2 retains independent write, structure and applicable padding verdicts with the
-existing sampling limits. No new memory scan or stronger fault-coverage claim follows from naming these checks. CPU paged decode weights-only checks its append slots and padding; CPU paged prefill weights-only checks padding,
-not valid prompt contents.
+existing sampling limits. No new memory scan or stronger fault-coverage claim follows from naming these checks. CPU
+contiguous prefill `weights_only` still checks `post-validation-structure`; CPU paged decode `weights_only` checks
+structure, unchanged append slots, and suffix padding (when `A % G != 0`); CPU paged prefill `weights_only` checks
+structure and suffix padding (when `P % G != 0`), not valid prompt contents.
 See the [CPU final-state evidence contract](API.md#result-schemas-and-completion) for field and null semantics.
 
 
@@ -875,7 +912,9 @@ The corresponding excluded-attempt purpose tokens are `calibration_shape_warmup`
 `single_unit_confirmation_warmup`, `single_unit_confirmation`, and `frozen_measurement_warmup`. An explicit-work run
 records only `frozen_measurement_warmup` for each scenario.
 
-The one-billion-work-unit and 64 GiB accounted-byte ceilings apply per scenario task. For every scenario:
+The **64 GiB** (`LLM_MAX_ACCOUNTED_BYTES_PER_TASK`) accounted-byte ceiling applies per scenario task on both CPU and
+Metal. The per-task work-unit ceiling is **1,000,000,000** (`LLM_MAX_WORK_UNITS_PER_MEASUREMENT`) on CPU and **65,536**
+(`LLM_METAL_MAX_WORK_UNITS_PER_DISPATCH`) on Metal. For every scenario:
 
 ```text
 accounted_bytes_per_work_unit =
@@ -885,12 +924,19 @@ planned_task_accounted_bytes = planned_work_units * accounted_bytes_per_work_uni
 completed_task_accounted_bytes = completed_work_units * accounted_bytes_per_work_unit
 ```
 
-Contiguous Metal prefill checks the exact lane-local serial range-helper count
-`T * ((weight_active ? L : 0) + (kv_active ? 2 * L * B * (P + C) : 0))`; paged `weights_only` checks `T * L`, while
-paged KV-bearing owner kernels report zero serial range visits. Metal prefill publishes the applicable count in grid
-evidence and the 1,048,576 cap in methodology evidence. Scenario planning divides the cap by the exact per-operation count, so
-explicit work and automatic calibration remain within it; runtime overflow and cap checks still run before the bounded
-CPU oracle or GPU dispatch.
+Metal adds profile-specific kernel and dispatch guardrails:
+
+- **Paged KV-bearing semantic lookup cap:** Metal paged `kv_only` and `mixed` (both decode and prefill) cap per-task
+  semantic lookups at **268,435,456** (`LLM_METAL_MAX_PAGED_SEMANTIC_LOOKUPS_PER_TASK`), folding
+  `floor(268,435,456 / (L * B * lookups_per_layer_seq))` into the scenario's effective work-unit ceiling.
+- **Prefill serial range-visit cap:** Contiguous Metal prefill checks the exact lane-local serial range-helper count
+  `T * ((weight_active ? L : 0) + (kv_active ? 2 * L * B * (P + C) : 0))`; paged `weights_only` checks `T * L`, while
+  paged KV-bearing owner kernels report zero serial range visits. Metal prefill publishes the applicable count in grid
+  evidence and the **1,048,576** (`LLM_METAL_MAX_SERIAL_RANGE_VISITS_PER_LANE_PER_TASK`) cap in methodology evidence.
+  Scenario planning divides the cap by the exact per-operation count, so explicit work and automatic calibration remain
+  within it; runtime overflow and cap checks still run before the bounded CPU oracle or GPU dispatch.
+- **Metal grid caps:** Dispatch geometry is further bounded by `256` threads per threadgroup, `8,192` threadgroups per
+  grid, `65,536` owner ordinals per threadgroup, and `1,048,576` vector iterations per lane per visit.
 
 The contiguous profile has zero layout-metadata bytes. Paged KV-only and mixed use the exact lookup metadata calculated
 above, while weights-only remains zero; metadata constrains calibration and explicit-work admission without entering the
@@ -1014,15 +1060,17 @@ The required top-level fields are:
 
 ```text
 schema_version, mode, backend, phase, kv_layout, methodology_version,
-software, configuration, resolved_plan, backend_evidence, memory_budget,
+software, build_manifest, configuration, resolved_plan, backend_evidence, memory_budget,
 calibration, measurements, aggregates, status, reason_code,
 results_complete, run_accepted, interpretation, diagnostic, interruption_requested,
 scenario_order_balance_complete, seeds, counters, checkpoint_lifecycle, loop_records,
-environment, quality_warnings, build_manifest
+environment, quality_warnings
 ```
 
 `configuration` preserves exact argv/output target and resolved/default input sources. Omitted iterations means
-automatic calibration; file output still needs a target. Omitted/empty output is disabled, with no automatic filename.
+automatic calibration; file output still needs a target. Omitted/empty output disables JSON for direct runs with no
+automatic filename, while nested sweep runs record `configuration.output_file: ""` because the sweep envelope owns
+persistence.
 
 `resolved_plan` owns `plan_identity`, logical `geometry`, `model_context`, `layout`, `resources`,
 `component_identities`, `methodology`, `model_work_plan`, `scenario_plans`, and `frozen_plan_refs`.
@@ -1030,8 +1078,10 @@ Exactly one geometry phase object is populated. Decode uses integer visible-cont
 and decimal-string tile/prefix visits. Decode-only crossover and classification values are null for prefill.
 `model_context.prefill` contains nullable theoretical quantities as described above; it is null for decode.
 
-Paged layout retains integer block size, decimal block/tail/table geometry and materialized permutation domain,
-seed, version and hash. Before Metal table preparation, admitted geometry survives with null runtime permutation.
+Paged layout retains integer block size, decimal block/tail/table geometry, and materialized permutation domain,
+seed, version and hash; `resolved_plan.layout.decode_append_offset_in_last_block` is `null` for paged prefill while
+`plan_identity` encodes `0` and phase-agnostic `layout_geometry_identity` encodes `((P - 1) % G) * R`. Before Metal
+table preparation, admitted geometry survives with null runtime permutation.
 Resources retain exact logical/physical K/V, suffix padding, table and Metal segment/argument-buffer geometry.
 Component identity retains fixed-order length-prefixed logical/layout/permutation/backend/ABI/schedule/timer/
 buffer/write/checksum/MSL fields under `llm-memory-components-v1`; CPU MSL and contiguous permutation fields are null.
@@ -1064,11 +1114,15 @@ canonical components, and CPU/Metal numerical witnesses are not cross-backend co
 Named checks under measurement/calibration `execution.validation.checks[]` preserve the independently completed
 structure, applicable phase/scenario write/unchanged and padding observations. Their kind tokens are
 `post-validation-structure`, `kv-append-final`, `kv-prefill-final-samples`, `kv-append-unchanged`, `kv-padding-canary`.
-CPU paged decode weights-only checks unchanged append and applicable padding; CPU paged prefill weights-only checks
-structure/padding, not valid prompt content. Metal weights-only has no write/padding check. Inapplicable evaluated/valid are null;
-applicable unresolved valid is null; observed mismatch remains false. Checksum agreement may coexist with failed cold
-validation and cannot override it. The [fault matrix](#checksum-fault-model-and-evidence-limits) retains its scope:
-new names add no collision resistance, unsampled-byte coverage or runtime trace.
+`post-validation-structure` applies on CPU whenever `paged || prefill || writes` (including CPU contiguous prefill
+`weights_only`). `kv-append-final` applies to decode KV-bearing scenarios, `kv-prefill-final-samples` applies to
+prefill KV-bearing scenarios, and `kv-append-unchanged` applies only to CPU paged decode `weights_only`.
+`kv-padding-canary` applies only when paged suffix padding exists (`sequence_tokens % G != 0`): on CPU across all three
+scenarios (including `weights_only`), and on Metal for KV-bearing scenarios only (falling back to `model.geometry`
+padding when the Metal paged plan is unresolved). Metal `weights_only` has no write or padding check. Inapplicable
+evaluated/valid are null; applicable unresolved valid is null; observed mismatch remains false. Checksum agreement may
+coexist with failed cold validation and cannot override it. The [fault matrix](#checksum-fault-model-and-evidence-limits)
+retains its scope: new names add no collision resistance, unsampled-byte coverage or runtime trace.
 
 `backend_evidence` retains tagged CPU/Metal branches, lifecycle, capability, resources and bounded error diagnostics.
 CPU prefill preserves execution/scope identities and exact worker-cost vectors; paged prefill also has paged evidence.
@@ -1104,6 +1158,43 @@ The `interpretation` object preserves the memory-only boundary: effective GB/s i
 elapsed time, not physical DRAM; timed table metadata is excluded; prefill does no Transformer math and predicts no TTFT;
 private Metal memory is not separate VRAM; cache/SLC/DRAM residency is unmeasured. Distinct backend/phase/layout/model/
 component cohorts must not be pooled as one distribution.
+
+### Independent artifact verifier
+
+An independent offline Python 3 verifier (`script-examples/verify_llm_result.py`, supported by
+`script-examples/llm_verify_oracles.py` and `script-examples/llm_verify_profiles.py`, exercised by
+`make test-llm-verifier` and `make test-all`) re-derives and checks both single-run **schema-2 LLM artifacts** across
+all eight profiles and **schema-1 LLM sweep envelopes** (`configuration.mode == "sweep"`,
+`configuration.base_mode == "llm_memory"`, `configuration.sweep_schema_version == 1`):
+
+```bash
+python3 script-examples/verify_llm_result.py <result.json> [--binary <path>] [--require-raw-timing]
+```
+
+The verifier never executes the benchmark or `--binary`. It enforces strict input and work bounds—artifact-wide limits
+of 64 MiB maximum file size, JSON depth 64, 1,000,000 JSON nodes, and a 1,000,000 shared oracle work budget
+(`oracle_work_used`), plus per-run schema-2 limits of 1,024 scenario plans and 100,000 measurements—and rejects
+duplicate JSON keys and non-finite numbers.
+
+For each schema-2 artifact, it independently verifies profile and component identities (including unresolved Metal
+failures with null MSL fields), exact geometry/resource/worker-plan/descriptor formulas, SplitMix64 seeds and paged
+permutation SHA-256 digests, canonical plan/layout/prefill-scope identities and nested hashes, CPU and Metal expected
+checksum oracles against retained actual witnesses, CPU raw Mach tick reconstruction (`--require-raw-timing`) or Metal
+GPU timestamp bounds, required cold validation checks, aggregate statistics, status/counter/checkpoint lifecycle
+invariants, and `build_manifest` version 1 (plus optional `--binary` SHA-256 matching, hashed once per sweep). For a
+schema-1 LLM sweep envelope, it additionally checks order-independent Cartesian parameter matching against
+`configuration.sweep_parameters`, invariant non-swept base configuration and build manifest across runs,
+`runs[].result.configuration.output_file == ""`, first-incomplete prefix-stop semantics, `null` nested-result handling
+(`nested-result-null`), and conservative `checks` aggregation across runs.
+
+The verifier prints a JSON verdict containing `artifact_consistent`, `run_accepted`, `reason_code`, `checks`
+(`checksum`, `timing`, `build`), and `oracle_work_used` (sweeps add `artifact_kind: "llm_sweep"`, `planned_runs`,
+`completed_runs`, `verified_runs`, and `run_verdicts`). Exit code `0` means consistent and accepted; `1` means
+inconsistent, unaccepted, or invalid/unreadable JSON input (`invalid-input`, `duplicate-json-key`,
+`nonfinite-json-number`, `sweep-not-accepted`); and `2` means an unsupported verdict (`artifact_consistent: null`:
+unsupported schema/mode/profile/methodology, exceeded verifier limits, or missing required raw timing) or CLI
+argument-parsing error (`argparse`). See [API.md](API.md#independent-llm-artifact-verifier) for the full verifier
+contract.
 
 ## Console contract and quality warnings
 

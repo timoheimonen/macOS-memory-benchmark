@@ -98,12 +98,16 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
 ```
 
 `--kv-layout` accepts `contiguous` or `paged` and defaults to `contiguous`. Paged requests require exactly one
-`--kv-block-tokens <G>`; `G` must be positive, a power of two, and at most `UINT32_MAX`. A value larger than the active
-phase length is valid. Contiguous requests reject `--kv-block-tokens`. Phase defaults to decode. Decode requires
-`--context-tokens`; prefill requires `--prompt-tokens P` and `--attention-query-tile-tokens Q` with
-`1 <= Q <= P`, and the phase-specific inputs are mutually exclusive. `--llm-memory-backend` defaults to `cpu`. All
-eight backend/phase/layout combinations are active: CPU and Metal each accept decode and
-prefill with contiguous or paged KV. Metal rejects explicit `--threads`, and no request receives a backend fallback.
+`--kv-block-tokens <G>` (or a `kv-block-tokens` sweep); `G` must be positive, a power of two, and at most `UINT32_MAX`.
+A value larger than the active phase length is valid. Contiguous requests reject `--kv-block-tokens`. Phase defaults to
+decode. Decode requires `--context-tokens` (or a `context-tokens` sweep); prefill requires `--prompt-tokens P` and
+`--attention-query-tile-tokens Q` (direct or swept) with `1 <= Q <= P`, and the phase-specific inputs are mutually
+exclusive. `--llm-memory-backend` defaults to `cpu`. All eight backend/phase/layout combinations are active: CPU and
+Metal each accept decode and prefill with contiguous or paged KV. Metal rejects explicit `--threads`, and no request
+receives a backend fallback. `--llm-memory --sweep` supports `context-tokens` (decode), `prompt-tokens` and
+`attention-query-tile-tokens` (prefill), and `kv-block-tokens` (paged KV); it requires `--output`, rejects supplying
+the matching direct option, defaults `--sweep-max-runs` to `256` (bounded by `2^53 - 1`), and validates every expanded
+combination during preflight before execution begins.
 Metal capability admission requires a default unified-memory device with Apple7-or-later support, Tier 2 argument
 buffers, and `maxBufferLength >= 256 MiB`. The selected MSL 2.3 source must compile, its pipelines must be created, and
 the runtime layout probe must pass. Capability absence produces terminal `unsupported` evidence; compiler, pipeline,
@@ -131,18 +135,21 @@ status, write the centralized diagnostic to stderr, and leave stdout empty. Help
 prints normal help to stdout and does not promise JSON when the selected parser accepts that combination. The standalone
 TLB whitelist rejects `--analyze-tlb --help`; use `--help` without that mode flag.
 
-Some runtime setup failures also occur before a schema-valid payload exists. The general command's early timer failure,
-TLB setup, memory-budget, or allocation failures before analysis-state initialization, a GPU backend-factory failure,
-and LLM logical preflight or JSON-output peak-estimation failure before runner-result initialization therefore produce
-stderr plus a non-zero status and leave stdout empty. After the LLM runner has initialized a representable result, a
-selected Metal backend that fails its runtime capability check emits one terminal schema-2 `unsupported` document;
-runtime compiler, pipeline, resource, or task failures emit a terminal schema-2 `failed` run with failed or invalid
-measurement evidence as applicable. All return non-zero, and none is retried on CPU. Once a mode has initialized a
-representable result, graceful interruption or a normal runtime failure emits the available partial, interrupted,
-error, failed, or unsupported payload. Core-to-core measurement failures, TLB measurement errors, GPU
-post-initialization failures, and LLM runner, backend-task, checksum, or checkpoint failures fall on this status-bearing
-path. Initialized failed payloads retain their non-zero process status; established graceful-interruption paths may
-return zero but are not complete conclusions.
+Some runtime setup failures also occur before a schema-valid payload exists. The general command's or any sweep runner's
+early timer-creation failure, TLB setup, memory-budget, or allocation failures before analysis-state initialization, a GPU
+backend-factory failure, and direct LLM pre-finalization failures (backend-factory failure, available-memory overflow,
+work-plan draft/finalization failure, Metal preflight plan mismatch, or auxiliary/JSON-output peak-estimation failure)
+or `timer-unavailable` before runner-result initialization therefore produce stderr plus a non-zero status and leave
+stdout empty. Once an LLM work plan is finalized, an uninitialized runner failure or setup exception (other than
+`timer-unavailable`) still emits one terminal schema-2 `failed` document with non-zero exit status. After the LLM runner
+has initialized a representable result, a selected Metal backend that fails its runtime capability check emits one
+terminal schema-2 `unsupported` document; runtime compiler, pipeline, resource, or task failures emit a terminal
+schema-2 `failed` run with failed or invalid measurement evidence as applicable. All return non-zero, and none is
+retried on CPU. Once a mode has initialized a representable result, graceful interruption or a normal runtime failure
+emits the available partial, interrupted, error, failed, or unsupported payload. Core-to-core measurement failures, TLB
+measurement errors, GPU post-initialization failures, and LLM runner, backend-task, checksum, or checkpoint failures
+fall on this status-bearing path. Initialized failed payloads retain their non-zero process status; established
+graceful-interruption paths may return zero but are not complete conclusions.
 
 An observable final serialization, write, or flush failure returns `EXIT_FAILURE` and reports its diagnostic to stderr
 without changing the already-computed measurement state. Any stdout bytes from that failed transfer are not an
@@ -160,7 +167,7 @@ Real file targets retain their existing persistence behavior:
 - parameter sweeps atomically checkpoint their combined envelope after each attempted run and also checkpoint a terminal
   zero-attempt envelope when the run plan is empty or interruption is observed before a run;
 - GPU mode retains its mode-specific terminal-measurement and failure checkpoints;
-- LLM mode atomically snapshots bounded completed-loop progress and command terminal as specified below;
+- direct LLM mode atomically snapshots bounded completed-loop progress and command terminal as specified below;
 - a temporary `<target>.tmp` file is replaced atomically, and a failed replacement preserves the preceding destination
   when possible.
 
@@ -170,8 +177,8 @@ construction still occur. LLM skips intermediate snapshot preparation on stdout 
 The command serializes one terminal snapshot after orchestration finishes. Stdout is not JSON Lines and never contains
 a sequence of checkpoint documents.
 
-For LLM, let `N=planned_loops` and `K=max(1,ceil(N/8))`, calculated without addition overflow. File targets
-write progress after every Kth fully completed loop, at most eight times, and one command-terminal snapshot on
+For direct LLM file targets, let `N=planned_loops` and `K=max(1,ceil(N/8))`, calculated without addition overflow. File
+targets write progress after every Kth fully completed loop, at most eight times, and one command-terminal snapshot on
 success, graceful interruption or representable failure. The current cadence gives at most 4/7/9 normal
 snapshots for N=3/12/48. One late command exception after successful terminal persistence may write one corrective
 failure snapshot; a failed checkpoint is terminal and never retried or followed by a disguised final write.
@@ -191,7 +198,10 @@ Stdout builds one final DOM; disabled output builds none.
 this snapshot, not the current write's eventual success. Builder failure is not writer entry; stdout/disabled no-ops
 are not file writes. For a successful N=3 file command the terminal document normally reports three prior successes,
 not four self-inclusive successes. No extra write is made just to count itself. A retained prior snapshot cannot attest
-to a future write/cleanup failure; final collection must retain actual process outcome and terminal context.
+to a future write/cleanup failure; final collection must retain actual process outcome and terminal context. Nested
+LLM sweep runs collect schema-2 payloads in memory without intra-run file snapshots (`prior_file_writer_attempts: 0`,
+`prior_successful_file_writes: 0`), while the enclosing sweep envelope performs atomic per-run file checkpoints or
+final-only stdout emission.
 
 Use a real file target when crash-resilient intermediate checkpoints are required.
 
@@ -225,7 +235,8 @@ standard schema version are unsupported. Nested LLM-memory classification recogn
 planned entry in `measurements[]` having `status == "measured"` before incrementing `completed_runs`; nested
 `status == "unsupported"` maps to a failed sweep attempt while retaining the schema-2 payload, pre-initialization
 failures record `result: null` with the specific stable `status_reason`, and an interruption during pre-runner
-preparation records `status: "interrupted"` with `status_reason: "preparation-interrupted"` and exit status `0`.
+work-plan/table preparation or backend resource preparation records `status: "interrupted"`,
+`status_reason: "preparation-interrupted"`, `result: null`, and exit status `0`.
 Complete, partial, interrupted, and failed current evidence remains
 classifiable and retained rather than being discarded by the complete-result consumer boundary. A non-zero nested
 execution that initialized a result remains in the envelope: its attempt is failed, but the payload is not replaced by
@@ -288,7 +299,9 @@ environment, quality_warnings, build_manifest
 ```
 
 `configuration` preserves exact `argv`, the raw output target, requested/resolved inputs, and a `resolved_sources`
-object. Defaults remain evidence as `default`; they are not fabricated as explicit argv. Backend defaults to CPU and
+object. Defaults remain evidence as `default`; they are not fabricated as explicit argv. Nested LLM sweep runs record
+`configuration.output_file: ""` because the enclosing sweep envelope owns persistence, preserve the sweep command's
+captured `argv`, and record each swept parameter as `"explicit"` in `resolved_sources`. Backend defaults to CPU and
 phase defaults to decode; an explicit prefill selection records `phase: "explicit"`. Decode configuration publishes
 integer `visible_context_tokens` and null prompt/tile values. Prefill publishes integer prompt/tile values and null
 `visible_context_tokens`. Layout resolves to `contiguous` by default or to the explicit `--kv-layout` value. The
@@ -307,8 +320,9 @@ requested/available/effective worker contract.
   causal-pair, attention-pair and FMA-term values instead belong to `model_context.prefill`. Decode-only crossover numerator, denominator, and context, current visible context, weight/KV-read
   ratio, and `current_context_classification` are null for prefill. `classification_version` and
   `classification_is_payload_only` remain populated because they describe the schema field's semantics.
-- `layout.kv_layout` is the selected `contiguous` or `paged` token. Contiguous results use null for paged-only fields
-  and report applicable lookup/read counts as decimal-string zero. An admitted paged plan populates integer
+- `layout.kv_layout` is the selected `contiguous` or `paged` token. Contiguous results use null for all paged-only
+  fields in `resolved_plan.layout` and report layout-metadata lookup/read counts as decimal-string `"0"` in
+  `resolved_plan.scenario_plans[]`, `measurements[]`, and `counters`. An admitted paged plan populates integer
   `kv_block_tokens` and decimal-string block, tail, table-entry, and table-byte counts. A materialized table additionally
   populates permutation domain/algorithm/hash strings and the decimal-string resolved permutation seed. If Metal exits
   unsupported or failed before table preparation, the admitted geometry remains populated while runtime permutation
@@ -478,9 +492,9 @@ decimal-string `resource_rounding_bytes`, `transient_peak_bytes`, `known_owned_p
 descriptor/planner/checksum/orchestration storage, and the permutation-validation transient before table
 materialization. The sampled available-memory value and its derived admitted budget remain runtime evidence and are
 excluded from resource, execution, model, and frozen-plan identities, so identical fixed-seed work retains its identity
-when only the admission sample changes. A non-empty JSON target's orchestration reserve uses checked arithmetic for
-every variable-length component/layout identity and, for prefill, the aggregate execution identity plus all scenario
-and scope identities.
+when only the admission sample changes. When JSON emission is enabled (any direct non-empty `--output` target or any
+nested LLM sweep run), the orchestration reserve uses checked arithmetic for every variable-length component/layout
+identity and, for prefill, the aggregate execution identity plus all scenario and scope identities.
 For Metal it also reserves a maximum-sized grid/task evidence tree for every retained measurement and excluded
 calibration attempt. The preflight and finalized-plan estimates cover the same identity set. `calibration` contains
 excluded work-resolution and post-freeze same-shape warmup evidence;
@@ -536,8 +550,10 @@ actuals and false validity. Calibration keeps the compact actual-run-only counte
 that record's plan reference. Algorithm identity comes from canonical `component_identities.checksum_pattern_version`.
 
 The one accepted `elapsed_seconds` and completed work/payload derive `synthetic_work_unit_latency_seconds`,
-`synthetic_memory_work_units_per_second`, and `effective_model_payload_gb_s`. Invalid/excluded measurements have null
-rates and accepted elapsed; any observed time is retained as `execution.timing.diagnostic_elapsed_seconds`. Metal retains
+`synthetic_memory_work_units_per_second`, and `effective_model_payload_gb_s`. Non-measured entries in `measurements[]`
+have null rates and accepted `elapsed_seconds`; any observed evaluated time is retained at
+`execution.timing.diagnostic_elapsed_seconds` (excluded attempts in `calibration.attempts.<scenario>[]` instead record
+evaluated valid duration at `execution.elapsed_seconds`). Metal retains
 raw GPU start/end, host submit/wait envelope, nullable same-clock queue delay, pipeline/grid and command/encoder/dispatch
 observations. Queue delay is null unless measured in the same clock domain. Effective payload includes logical W/K/V
 bytes; timed table metadata stays outside that numerator.
@@ -557,16 +573,17 @@ the effective work-unit ceiling so explicit work and automatic calibration canno
 `serial-range-visit-count-overflow` and `serial-range-visit-cap-exceeded` safeguards before expected-checksum
 enumeration and GPU dispatch.
 
-For KV-active paged prefill, each layer/batch pair performs `N` paired full-prompt-write lookups followed by `M` K-prefix and `M`
-V-prefix lookups, where `M = sum(ceil(e_j/G))` across query-tile ends. Thus every KV-active operation reports exactly
-`L * B * (N + 2 * M)` timed uint32 loads. Its row-major owner count is `L * B * N`; each owner ordinal is assigned to
-one threadgroup by a deterministic cyclic grid stride for all work units and semantic visits. Grid evidence publishes
-the owner count, actual threadgroups, owner ordinals per threadgroup, exact per-threadgroup accounted-byte vector,
-minimum, maximum, and max-minus-min imbalance with `cost_unit: "actual-threadgroup-cost"`. Paged `weights_only` uses
-the weight-vector grid-stride schedule and reports zero metadata work. The same exact weight-grid cost evidence is
-published for every Metal `weights_only` task. Contiguous KV-bearing grids retain the grid geometry but publish null
-cost unit/minimum/maximum/imbalance fields and an empty cost vector. The cyclic KV schedule is deliberately not
-described as weighted-balanced.
+For KV-active paged Metal tasks, each layer/batch pair performs `N` paired full-prompt-write lookups followed by `M`
+K-prefix and `M` V-prefix lookups in prefill (`L * B * (N + 2 * M)` timed uint32 loads, where `M = sum(ceil(e_j/G))`
+across query-tile ends), or one paired append lookup plus `N` K-scan and `N` V-scan lookups in decode
+(`L * B * (2 * N + 1)` timed uint32 loads). In both paged phases the row-major owner count is `L * B * N`; each owner
+ordinal is assigned to one threadgroup by a deterministic cyclic grid stride for all work units and semantic visits.
+Grid evidence for both paged KV-bearing phases publishes the owner count, actual threadgroups, owner ordinals per
+threadgroup, exact per-threadgroup accounted-byte vector, minimum, maximum, and max-minus-min imbalance with
+`cost_unit: "actual-threadgroup-cost"`. Paged `weights_only` uses the weight-vector grid-stride schedule and reports
+zero metadata work. The same exact weight-grid cost evidence is published for every Metal `weights_only` task.
+Contiguous KV-bearing grids retain the grid geometry but publish null cost unit/minimum/maximum/imbalance fields and an
+empty cost vector. The cyclic KV schedule is deliberately not described as weighted-balanced.
 Partial prefix visits stop at the exact tile or prompt end. KV-bearing prefill tasks require final-operation
 representative/boundary sample validation of the prompt writes, plus applicable suffix-padding validation.
 
@@ -581,10 +598,13 @@ accounted_bytes_per_work_unit =
   effective_model_payload_bytes_per_work_unit + layout_metadata_read_bytes_per_work_unit
 ```
 
-Task totals multiply these quantities by the exact work-unit count with checked arithmetic. The shared one-billion
-work-unit ceiling and 64 GiB task-accounted-byte guardrail apply to model plus metadata work. The
-effective-model-payload
-numerator never includes table bytes.
+Task totals multiply these quantities by the exact work-unit count with checked arithmetic. The shared `64 GiB`
+(`68,719,476,736` bytes) task-accounted-byte guardrail applies to model plus metadata work on both backends, while the
+base work-unit ceiling published in `resolved_plan.methodology.maximum_work_units_per_measurement` is backend-specific:
+`1,000,000,000` for CPU and `65,536` per dispatch for Metal. For Metal paged KV-bearing scenarios in either decode or
+prefill, total timed semantic lookups per task may not exceed `268,435,456`; scenario planning reduces
+`maximum_work_units_by_work_unit_cap` accordingly, and both planning and runtime grid validation guard against breaches
+with `semantic-visit-cap-exceeded`. The effective-model-payload numerator never includes table bytes.
 
 Every paged semantic visit loads its uint32 physical ID inside the timed backend path and calculates the block address
 after that load; the host does not replace the table with a pre-resolved pointer list. CPU uses the ARM64 kernel path;
@@ -792,8 +812,9 @@ uses the documented double evaluation order. Zero/nonfinite accepted durations a
 Statistics use sample standard deviation (n−1; singleton zero), linearly interpolated quantiles at `(n−1)p`,
 median absolute deviation and the accepted measurement IDs only. Empty populations require null statistics.
 
-Input limits are 64 MiB UTF-8 JSON, depth 64, one million JSON nodes, 100,000 measurements, 1,024 canonical
-plans, 1 MiB per identity and one million charged oracle/partition steps across the artifact. Decimal uint64
+Input limits are 64 MiB UTF-8 JSON, depth 64, one million JSON nodes, 1 MiB per identity, and one million charged
+oracle/partition steps across the whole artifact (including sweeps), plus 100,000 measurements and 1,024 canonical
+plans per schema-2 run. Decimal uint64
 strings have at most 20 digits. Duplicate JSON keys, booleans used as integers and nonfinite JSON numbers
 are rejected. A limit produces an explicit unsupported verdict, never successful verification; large calibrated
 work can exceed this verifier's budget even when the benchmark itself supports it. Parsing errors do not become
@@ -802,8 +823,9 @@ partial success. Exact acceptance claims remain subject to the checksum collisio
 cannot replace kernel qualification tests, prove executed instructions or establish physical GPU/DRAM traffic.
 
 `make test-llm-verifier` runs independent small arithmetic goldens, all eight captured current profile fixtures,
-status fixtures, malformed input and specific artifact mutations. `make test-all` includes this separate gate
-alongside the existing standard-memory script-example gate.
+status fixtures, schema-1 LLM sweep verification (complete/incomplete envelopes, multi-axis order independence, shared
+sweep work budget, single binary hashing, and envelope/splicing mutations), malformed input, and specific artifact
+mutations. `make test-all` includes this separate gate alongside the existing standard-memory script-example gate.
 
 ## Consumer acceptance procedure
 
@@ -949,7 +971,8 @@ separate. Require the successful producer process outcome before applying `jq -e
 - Schema-location normalization belongs in client code; this API does not move existing version fields.
 - Direct standard, GPU, and LLM payloads retain raw `configuration.output_file`. With stdout transport it is the original
   target token `"-"`, not a filesystem path; `./-`, flag-shaped names, and every other non-empty non-sentinel value retain
-  their file meaning. GPU and LLM additionally retain their exact captured `argv`.
+  their file meaning. Nested standard and nested LLM sweep payloads record `configuration.output_file: ""` because the
+  sweep envelope owns persistence. GPU and LLM additionally retain their exact captured `argv`.
 
 ## Benchmark process policy
 

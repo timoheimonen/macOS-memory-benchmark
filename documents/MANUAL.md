@@ -206,10 +206,10 @@ backend/phase/layout profiles: CPU and Metal each support decode and prefill wit
 
 All four active Metal profiles are governed by runtime capability checks.
 
-`--kv-layout` defaults to `contiguous`. Paged layout requires exactly one `--kv-block-tokens <G>` option. `G` must be
-positive, a power of two, and no greater than `UINT32_MAX`; it may be larger than the active phase's sequence length.
-Contiguous layout
-rejects `--kv-block-tokens`, so a block size is never silently ignored or defaulted.
+`--kv-layout` defaults to `contiguous`. Paged layout requires `--kv-block-tokens <G>` (or `--sweep kv-block-tokens=...`,
+not both). `G` must be positive, a power of two, and no greater than `UINT32_MAX`; it may be larger than the active
+phase's sequence length. Contiguous layout rejects both `--kv-block-tokens` and `--sweep kv-block-tokens=...`, so a
+block size is never silently ignored or defaulted.
 
 Each selected profile measures three memory-only scenarios for one explicitly supplied phase geometry. `weights_only`
 reads all active weights once per work unit. `kv_only` performs the phase-specific K/V writes and reads. `mixed`
@@ -530,7 +530,7 @@ middle, and trailing items.
 #### `--iterations <count>`
 
 - Exact measured bandwidth pass/dispatch count, or exact LLM scenario work-unit count, when explicitly supplied
-- Positive integer
+- Positive integer (`1..INT_MAX` for `--benchmark` and `--patterns`)
 - Not allowed with `--only-latency`
 - In `--benchmark`, `--patterns`, `--gpu-bandwidth`, and `--llm-memory`, omission enables excluded
   operation- or scenario-specific work and automatic calibration toward 150 ms (100–250 ms intended window, at most
@@ -539,9 +539,11 @@ middle, and trailing items.
 - An explicit value bypasses pilot/corrections but not the operation-specific warmup
 - In GPU mode, the value is an exact full-buffer dispatch count. It must fit both the 16,384-dispatch limit and the
   64 GiB exact-payload limit; copy's 2× numerator defines the strict shared CLI ceiling
-- In LLM mode, the value is an exact decode-step or full-prompt prefill-operation count per scenario. Paged KV
-  table-read bytes are included in the 64 GiB task-accounted-byte ceiling even though they are excluded from
-  effective-model-payload GB/s
+- In LLM mode, the value is an exact decode-step or full-prompt prefill-operation count per scenario. CPU caps one
+  measurement at `1,000,000,000` work units, while Metal caps one dispatch at `65,536` work units (further lowered when
+  applicable by Metal prefill's `1,048,576` lane-local serial range-helper visit cap or Metal paged KV's `268,435,456`
+  semantic lookup cap). Paged KV table-read bytes are included in the 64 GiB task-accounted-byte ceiling even though
+  they are excluded from effective-model-payload GB/s
 
 #### `--count <count>`
 
@@ -551,7 +553,9 @@ middle, and trailing items.
 - GPU-bandwidth default: `3`; its operation order rotates so one complete three-loop block gives read/write/copy one
   first, middle, and last position each
 - LLM-memory default: `3`; its planned weights-only/KV-only/mixed order rotates across one complete three-loop block
-- Positive integer
+- Positive integer: up to `INT_MAX` (`2,147,483,647`) for general, core-to-core, and GPU modes, and up to
+  `floor((2^53 - 1) / 3)` (`3,002,399,751,580,330`) for `--llm-memory` so `planned_measurements = 3 * count` remains
+  within the exact IEEE-754 JSON safe integer range
 - Use `5` to `10` for stable statistics
 
 #### `--threads <count>`
@@ -578,7 +582,7 @@ middle, and trailing items.
 #### `--benchmark`
 
 - **Required** to run standard memory benchmark (bandwidth + latency)
-- Mutually exclusive with `--patterns`
+- Mutually exclusive with `--patterns` and all other primary modes
 - Can be combined with `--only-bandwidth`, `--only-latency`, `--cache-size`, `--threads`, and other modifier flags
 - Rotates enabled phase groups and read/write/copy order in deterministic cyclic schedules across `--count` loops
 - Uses continuous latency headlines calibrated toward 250 ms, accepted in a 100–300 ms window, and rounded to at least
@@ -660,8 +664,15 @@ middle, and trailing items.
   automatic scenario work, and one generated non-zero base seed. CPU defaults to detected workers. Metal performs no
   worker detection and rejects explicit `--threads`. There is no default paged block size. An explicit seed may be any
   unsigned 64-bit value, including zero
-- Parses every integer as one complete decimal token. Model counts, sizes, worker count, iterations, and loop count
-  must be positive. Query heads must be at least the KV-head count and evenly divisible by it
+- Parses every integer as one complete unsigned decimal token (rejecting signs, whitespace, and trailing characters).
+  Model counts, sizes, worker count, iterations, and loop count must be positive. Every serialized integer configuration
+  field (`--weight-size-mb`, `--layers`, `--query-heads`, `--kv-heads`, `--head-dim`, `--context-tokens`,
+  `--prompt-tokens`, `--attention-query-tile-tokens`, `--kv-block-tokens`, `--batch-size`, `--threads`, `--iterations`,
+  `--count`) and, when `--sweep` is active, `--sweep-max-runs` must not exceed the IEEE-754 exact safe integer ceiling
+  `2^53 - 1` (`9,007,199,254,740,991`; `reason_code=json-integer-out-of-range`), and `--count` is further bounded by
+  `floor((2^53 - 1) / 3)` (`3,002,399,751,580,330`). Without `--sweep`, `--sweep-max-runs` accepts any positive `size_t`
+  with no effect and does not apply the `2^53 - 1` sweep-envelope ceiling. Query heads must be at least the KV-head
+  count and evenly divisible by it
 - Requires `P >= 1` and `1 <= Q <= P` for prefill. Requires paged block size `G` to be positive, a power of two, and at
   most `UINT32_MAX`. `G > A` is valid for decode and produces one partially used physical block per batch sequence;
   unused capacity is reported rather than silently removed
@@ -670,8 +681,11 @@ middle, and trailing items.
   resource, or task failure produces terminal `failed`/`invalid` schema evidence and a non-zero exit. The command never
   substitutes CPU
 - Treats `--context-tokens` as the fixed visible context including the current synthetic token. Checked preflight
-  resolves weight/KV byte geometry and ensures all three scenarios can fit the one-billion-work-unit and 64 GiB
-  accounted-byte task limits; explicit iterations must fit the strictest scenario limit
+  resolves weight/KV byte geometry and ensures all three scenarios can fit the backend's work-unit cap (`1,000,000,000`
+  on CPU; `65,536` on Metal, further lowered by Metal prefill's `1,048,576` lane-local serial range-helper visit cap or
+  Metal paged KV's `268,435,456` semantic lookup cap where applicable) and 64 GiB accounted-byte task limits; explicit
+  iterations must fit the strictest scenario limit. For `--llm-memory --sweep`, every generated Cartesian combination is
+  preflight-validated before the first run starts
 - Treats one prefill work unit as one complete prompt rewrite plus tiled causal-prefix scans for every batch sequence;
   weights are read once per full-prompt operation, not once per token or tile. With paged KV, full-prompt writes and
   exact partial-prefix scans perform timed uint32 table lookups
@@ -828,7 +842,8 @@ middle, and trailing items.
 - Standalone TLB JSON stores the resolved seed, source (`user` or `generated`), schedule policy, and each task seed
 - In GPU mode, the base seed is generated once when omitted, recorded as an exact decimal string, and used to derive
   stable domain-separated read/write/copy operation seeds. It reproduces data/work identity, not performance
-- In LLM-memory mode, one base seed is generated when omitted. The work planner derives separate weight/K/V buffer
+- In LLM-memory mode, one base seed is generated when omitted and reused across every generated run in an `--llm-memory`
+  Cartesian sweep. The work planner derives separate weight/K/V buffer
   seeds and weights-only/KV-only/mixed scenario seeds; the executor uses them for deterministic initialization, append
   values, and checksum-observable scenario identity. They reproduce workload identity, not performance
 
@@ -962,10 +977,13 @@ middle, and trailing items.
 - GPU syntax/config errors, including a buffer below 64 MB, fail before result JSON is created. A backend-factory failure
   also precedes result initialization. Initialized capability, compilation, allocation, or work-plan failures remain
   auditable in the selected file or stdout target
-- LLM parser/preflight, plan, JSON-output peak-estimation, timer-creation, memory-budget, mapping, initialization, or
-  descriptor-preparation failures occur before runner-result initialization and therefore leave stdout empty. Once
-  initialized, runner, backend-task, checksum, interruption, and checkpoint states remain auditable through the selected
-  non-empty output target
+- LLM parser/preflight, output-session initialization, backend-factory, work-plan/memory-budget, CPU paged block-table
+  mapping/materialization/protection, JSON-output peak-estimation, auxiliary-bytes overflow, and CPU timer-creation
+  (`timer-unavailable`) failures occur before runner-result initialization and therefore leave stdout empty (and write no
+  direct JSON file). Once the work plan is finalized, backend capability/initialization (other than `timer-unavailable`),
+  plan resolution, resource preparation (weight/K/V mapping, initialization, descriptor preparation, and Metal
+  compilation/pipeline/allocation/upload/validation), post-plan setup exceptions, and runner/backend-task/checksum/
+  interruption/checkpoint states emit terminal schema-2 evidence through the selected non-empty output target
 - An observable terminal stdout serialization, write, or flush failure returns failure without changing the
   already-computed measurement state; any bytes from that failed transfer must be rejected
 
@@ -995,6 +1013,10 @@ middle, and trailing items.
 
 - Maximum number of generated sweep combinations
 - General default: `256`; default with `--analyze-tlb`: `16`
+- Mode-specific upper bounds: `1..LLONG_MAX` for general CPU and `--analyze-tlb`; `1..INT_MAX` for `--analyze-core2core`;
+  positive `size_t` for `--llm-memory`, additionally capped at the IEEE-754 exact JSON safe integer bound `2^53 - 1`
+  (`9,007,199,254,740,991`; `reason_code=json-integer-out-of-range`) when `--sweep` is active. Accepted without `--sweep`
+  (with no effect, and without enforcing the `2^53 - 1` bound in direct `--llm-memory`); rejected by `--gpu-bandwidth`
 - An explicit `--sweep-max-runs` value overrides the mode-specific default
 - Prevents accidental very large Cartesian sweeps
 - Every generated configuration is validated before the first run
@@ -1021,8 +1043,8 @@ middle, and trailing items.
   a failed sweep attempt, and the schema-4 payload is retained without adding a nested `tlb_analysis.status_reason`.
   LLM-memory's native `status: "unsupported"` is mapped to a failed sweep attempt while retaining the schema-2 payload;
   pre-initialization failures record `result: null` with the specific stable `status_reason`, and an interruption during
-  pre-runner resource preparation is recorded as `status: "interrupted"` with `status_reason: "preparation-interrupted"`
-  and exit status `0`
+  pre-runner or backend resource preparation records `result: null` and `status: "interrupted"` with
+  `status_reason: "preparation-interrupted"` and exit status `0`
 - A parameter key may appear only once in one sweep command
 - Core-to-core sweeps also append and retain the latest attempted run when it is interrupted or fails; a file target
   checkpoints that update. Each entry records `status` and `status_reason`; `attempted_runs` counts those entries, while
@@ -2225,7 +2247,7 @@ returns only, excludes QoS and pilot outcomes, and does not prove physical place
         "buffer-size": 256,
         "latency-stride-bytes": 64
       },
-      "result": { "...": "normal benchmark, pattern, TLB, or core-to-core JSON payload" }
+      "result": { "...": "normal benchmark, pattern, TLB, core-to-core, or LLM-memory JSON payload" }
     }
   ],
   "execution_time_sec": 123.4,
@@ -2842,13 +2864,20 @@ because the process exit code was zero.
 
 ### LLM mode fails before producing JSON
 
-Parser/configuration errors, one-step payload-limit failures, work-plan/JSON-output-peak/memory-budget rejection, timer
-creation, and weight/K/V mapping, initialization, or descriptor-preparation failures occur before runner-result
-initialization. A stdout target is intentionally empty on these paths; use the process status and stderr reason. Check
-that all common model options and the selected phase's geometry options are present, query heads are divisible by KV
-heads, and each scenario fits the 64 GiB task-accounted-byte limit. For paged layout, also require exactly one
-positive power-of-two
-`--kv-block-tokens` value at or below `UINT32_MAX`; for contiguous layout, remove that option. Confirm that the
+Parser/configuration errors, one-work-unit payload-limit failures, output-session initialization or backend-factory
+errors, work-plan/JSON-output-peak/memory-budget rejection, CPU paged block-table mapping/materialization/protection
+failures, and CPU timer creation (`timer-unavailable`) occur before runner-result initialization. A stdout target is
+intentionally empty (and no direct JSON file is created) on these paths; use the process status and stderr reason. Once
+the work plan is finalized, backend capability checks (`unsupported`), backend initialization (other than
+`timer-unavailable`), plan resolution, resource preparation (weight/K/V mapping, initialization, descriptor preparation,
+and Metal compilation/pipeline/allocation/upload/validation), and post-plan setup exceptions emit terminal schema-2 JSON
+on non-empty file or stdout targets while returning a non-zero exit status. Check
+that all common model options and the selected phase's geometry options are present (directly or via `--sweep`, never
+both), all serialized integer configuration inputs (and active `--sweep-max-runs`) fit within `2^53 - 1` (with
+`--count <= floor((2^53 - 1) / 3)`), query heads are divisible by KV
+heads, and each scenario fits the backend work-unit cap and 64 GiB task-accounted-byte limit. For paged layout, also
+require one positive power-of-two `--kv-block-tokens` value (or `--sweep kv-block-tokens=...`) at or below `UINT32_MAX`;
+for contiguous layout, remove that option. Confirm that the
 page-rounded weight, physical K/V, optional table, transient, and auxiliary peak fits the reported available-memory
 policy.
 
@@ -2858,14 +2887,16 @@ executable once before tasks. These fields bind available artifacts and do not c
 execution attestation. See the [LLM process contract](API.md) for availability and numeric rules.
 Python 3 is required to generate build provenance.
 
-A saved schema-2 artifact can be checked without running the benchmark:
+A saved schema-2 artifact or schema-1 LLM sweep envelope can be checked without running the benchmark:
 
 ```bash
 python3 script-examples/verify_llm_result.py llm-result.json --binary ./memory_benchmark --require-raw-timing
 ```
 
 The optional binary is hashed, never executed. The verdict distinguishes artifact consistency, run acceptance,
-independent checksum reconstruction, raw timing availability and binary binding. A consistent failed run exits 1;
+independent checksum reconstruction, raw timing availability and binary binding (and, for schema-1 LLM sweeps, emits
+`artifact_kind: "llm_sweep"` with per-run `run_verdicts` under the shared artifact budget). A consistent failed or
+unaccepted run/sweep exits 1;
 an unsupported schema or exceeded verifier work budget exits 2. Only a consistent accepted artifact exits 0.
 See the [bounded verifier contract](API.md#independent-llm-artifact-verifier) for limits and float tolerances.
 
@@ -2906,7 +2937,9 @@ Make sure you are passing `script-examples/final_output.txt` generated by the la
 ## Additional Resources
 
 - [README.md](../README.md) - project overview, install, examples
+- [API.md](API.md) - machine-readable process contract, stdout/stderr transport, schemas, and verifier contract
 - [CAPABILITIES.md](CAPABILITIES.md) - measurement capability overview and interpretation notes
+- [PARAMETER_MATRIX.md](PARAMETER_MATRIX.md) - complete flag list, mode compatibility tables, numeric limits, and sweep rules
 - [LATENCY_WHITEPAPER.md](LATENCY_WHITEPAPER.md) - pointer-chase latency methodology deep dive
 - [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md) - TLB analysis methodology and JSON schema
 - [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) - Core-to-Core Cache-Line Handoff Latency Benchmark: methodology, assembly protocol, scheduler-hint scenarios, and JSON contract

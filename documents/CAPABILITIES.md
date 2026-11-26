@@ -62,15 +62,17 @@ Reset, expected dual-mod32 checksum construction, and phase-neutral `kv_write` v
 Metal prefill publishes its checked lane-local serial range-helper count and rejects overflow or more than 1,048,576
 visits per lane before the checksum oracle or GPU dispatch. Contiguous tasks count their applicable weight/K/V range
 visits; paged `weights_only` counts `T * L`, while paged KV-bearing owner kernels report zero and use the semantic-lookup
-cap.
+cap (`268,435,456` timed lookups per task, alongside Metal's `65,536` work-units-per-dispatch cap and shared `64 GiB`
+task-accounted-byte guardrail).
 Private/tracked W/K/V resources use exact-tail
 segments no larger than 256 MiB and a Tier 2 argument buffer. Both paged Metal profiles additionally use block-aligned
 K/V segments, segmented private table storage, named-lane volatile table loads with threadgroup
-publication/barriers, and excluded padding-canary validation. Paged prefill performs exactly `N + 2*M` semantic
-lookups per layer/batch pair, assigns layer/batch/logical-block owners with a deterministic cyclic threadgroup map, and
-reports its exact `actual-threadgroup-cost` accounted-byte vector, minimum, maximum, and imbalance without claiming
-weighted balance. Every Metal `weights_only` task instead uses its weight-vector grid-stride ownership and reports the
-same exact cost unit. Contiguous KV-bearing grids do not publish threadgroup-cost evidence.
+publication/barriers, and excluded padding-canary validation. Both paged Metal KV-bearing profiles assign
+layer/batch/logical-block owners with a deterministic cyclic threadgroup map (`2*N + 1` semantic lookups per layer/batch
+pair in decode and `N + 2*M` in prefill) and report their exact `actual-threadgroup-cost` accounted-byte vector,
+minimum, maximum, and imbalance without claiming weighted balance. Every Metal `weights_only` task instead uses its
+weight-vector grid-stride ownership and reports the same exact cost unit. Contiguous KV-bearing grids do not publish
+threadgroup-cost evidence.
 Runtime admission requires unified memory, Apple7-or-later
 capability, Tier 2 argument buffers, `maxBufferLength >= 256 MiB`, and MSL 2.3 runtime compilation. Unsupported
 capability does not authorize CPU fallback. Runtime compiler, pipeline, resource, or task failures remain terminal
@@ -158,11 +160,13 @@ applicable validation checks, and backend completion evidence enter aggregates. 
 `accepted_measurement_ids` defines the shared population for all its metrics; rates are calculated per measurement
 before aggregation.
 
-For file output, let `K=max(1,ceil(count/8))`. An atomic progress snapshot is written after every Kth fully completed
-loop, at most eight times, followed by a command-terminal snapshot on success, graceful interruption, or representable
-failure. An abrupt exit can lose up to `3K` completed measurement attempts since the last successful snapshot.
-A failed checkpoint is terminal and is not retried. Exact `--output -` skips intermediate snapshot preparation,
-preserves task-boundary stop observations, and emits only one final schema 2 document.
+For direct LLM file output, let `K=max(1,ceil(count/8))`. An atomic progress snapshot is written after every Kth fully
+completed loop, at most eight times, followed by a command-terminal snapshot on success, graceful interruption, or
+representable failure. An abrupt exit can lose up to `3K` completed measurement attempts since the last successful
+snapshot. A failed checkpoint is terminal and is not retried. `--llm-memory --sweep` file output instead checkpoints
+the combined schema-1 sweep envelope atomically after each attempted run without intra-run LLM snapshots. Exact
+`--output -` skips intermediate snapshot preparation, preserves task-boundary stop observations, and emits only one
+final document (schema 2 directly, or one schema-1 sweep envelope).
 
 Schema 2 stores canonical plans and expected checksums once, with measurement and calibration references to those
 plans. `build_manifest` records available build-time Git, compiler, flags, target, SDK, and minimum-OS provenance,
@@ -170,10 +174,12 @@ plus the executable file's SHA-256 when available. CPU `execution.timing.cpu_raw
 and delta ticks and the timebase for independent elapsed-time reconstruction; unavailable evidence is null.
 Metal retains GPU timestamps. Build hashes bind reported content to a file; they do not authenticate execution.
 
-The independent [LLM artifact verifier](../script-examples/verify_llm_result.py) checks the eight current schema-2
-profiles using independent arithmetic for geometry, work, checksums, timing, rates, accepted populations, and
-statistics. Run `python3 script-examples/verify_llm_result.py result.json`; optional `--require-raw-timing` requires
-CPU raw timing evidence and `--binary PATH` checks the supplied file's hash without executing it. The verdict
+The independent [LLM artifact verifier](../script-examples/verify_llm_result.py) checks both direct schema-2 results
+across the eight current profiles and schema-1 LLM sweep envelopes (`configuration.mode == "sweep"`,
+`configuration.base_mode == "llm_memory"`, `configuration.sweep_schema_version == 1`), using independent arithmetic for
+geometry, work, checksums, timing, rates, accepted populations, statistics, and sweep plan/homogeneity rules under one
+shared artifact budget. Run `python3 script-examples/verify_llm_result.py result.json`; optional `--require-raw-timing`
+requires CPU raw timing evidence and `--binary PATH` checks the supplied file's hash without executing it. The verdict
 separates artifact consistency from run acceptance. Unsupported profiles, unavailable required evidence, and resource
 limits produce an unsupported verdict, not successful verification. An artifact cannot establish the original process
 exit status or prove physical DRAM service. See the [Machine-Readable CLI API](API.md#independent-llm-artifact-verifier)
@@ -239,11 +245,12 @@ See the [Core-to-Core Whitepaper](CORE_TO_CORE_WHITEPAPER.md) for the assembly p
 
 ## Parameter Sweeps and JSON Evidence
 
-Built-in sweeps execute supported parameter lists without shell orchestration. Standard and pattern modes can sweep
-buffer size and thread count. Standard latency also supports cache size, stride, locality, and chain-mode sweeps; TLB
-mode supports its stride, chain-mode, and density controls; core-to-core mode supports loop count and sample depth;
-LLM-memory mode supports `context-tokens` (decode), `prompt-tokens` and `attention-query-tile-tokens` (prefill), and
-`kv-block-tokens` (paged KV).
+Built-in sweeps execute supported parameter lists without shell orchestration. Full `--benchmark` mode can sweep buffer
+size, cache size, thread count, stride, locality, and chain mode; `--benchmark --only-bandwidth` and `--patterns` can
+sweep buffer size and thread count; and `--benchmark --only-latency` can sweep buffer size, cache size, stride,
+locality, and chain mode (not thread count). TLB mode supports its stride, chain-mode, and density controls;
+core-to-core mode supports loop count and sample depth; LLM-memory mode supports `context-tokens` (decode),
+`prompt-tokens` and `attention-query-tile-tokens` (prefill), and `kv-block-tokens` (paged KV).
 Multiple sweep options form a Cartesian product, and combined output requires `--output`. GPU schema 1
 does not support sweeps.
 
