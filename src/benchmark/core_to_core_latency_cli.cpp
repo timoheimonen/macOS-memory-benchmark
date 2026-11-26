@@ -28,6 +28,7 @@
 #include "benchmark/core_to_core_latency.h"
 #include "benchmark/core_to_core_sweep_runner.h"
 
+#include <array>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -35,7 +36,9 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
+#include "core/config/cli_parser.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
 #include "core/config/sweep_utils.h"
@@ -61,8 +64,37 @@ constexpr const char* OPT_SWEEP_LONG = "--sweep";
 constexpr const char* OPT_SWEEP_MAX_RUNS_SHORT = "-X";
 constexpr const char* OPT_SWEEP_MAX_RUNS_LONG = "--sweep-max-runs";
 
-bool is_option(const std::string& arg, const char* short_option, const char* long_option) {
-  return arg == short_option || arg == long_option;
+enum CoreToCoreOptionId {
+  OPT_ID_ANALYZE_CORE_TO_CORE = 1,
+  OPT_ID_HELP,
+  OPT_ID_OUTPUT,
+  OPT_ID_SWEEP,
+  OPT_ID_SWEEP_MAX_RUNS,
+  OPT_ID_COUNT,
+  OPT_ID_LATENCY_SAMPLES,
+};
+
+constexpr std::array<CliOptionSpec, 7> kCoreToCoreOptionSpecs{{
+    {OPT_ID_ANALYZE_CORE_TO_CORE, OPT_ANALYZE_CORE_TO_CORE_SHORT, OPT_ANALYZE_CORE_TO_CORE_LONG,
+     CliOptionValueKind::None, CliOptionArity::Single},
+    {OPT_ID_HELP, OPT_HELP_SHORT, OPT_HELP_LONG, CliOptionValueKind::None, CliOptionArity::Single},
+    {OPT_ID_OUTPUT, OPT_OUTPUT_SHORT, OPT_OUTPUT_LONG, CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {OPT_ID_SWEEP, OPT_SWEEP_SHORT, OPT_SWEEP_LONG, CliOptionValueKind::RequiredValue, CliOptionArity::Repeatable},
+    {OPT_ID_SWEEP_MAX_RUNS, OPT_SWEEP_MAX_RUNS_SHORT, OPT_SWEEP_MAX_RUNS_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {OPT_ID_COUNT, OPT_COUNT_SHORT, OPT_COUNT_LONG, CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {OPT_ID_LATENCY_SAMPLES, OPT_LATENCY_SAMPLES_SHORT, OPT_LATENCY_SAMPLES_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+}};
+
+void report_core_to_core_command_exception(const std::string& details) noexcept {
+  try {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_command_execution_exception("Core-to-core analysis", details)
+              << std::endl;
+  } catch (...) {
+    // A secondary diagnostic failure must not escape the command boundary.
+  }
 }
 
 void report_json_output_initialization_failure(const std::string& raw_output,
@@ -86,8 +118,7 @@ void report_json_output_initialization_failure(const std::string& raw_output,
 // Shared validator for positive integer options used by standalone mode flags.
 bool parse_positive_int_option(const std::string& option,
                                const std::string& value,
-                               int& out_value,
-                               const char* prog_name) {
+                               int& out_value) {
   long long parsed = 0;
   const StrictIntegerParseStatus parse_status =
       parse_strict_signed_decimal(value, parsed);
@@ -97,7 +128,6 @@ bool parse_positive_int_option(const std::string& option,
                      option, value,
                      strict_signed_decimal_error_reason(parse_status))
               << std::endl;
-    print_usage(prog_name);
     return false;
   }
 
@@ -106,9 +136,8 @@ bool parse_positive_int_option(const std::string& option,
               << Messages::error_invalid_value(
                      option,
                      value,
-                     "must be between 1 and " + std::to_string(std::numeric_limits<int>::max()))
+                     Messages::reason_positive_int_range(std::numeric_limits<int>::max()))
               << std::endl;
-    print_usage(prog_name);
     return false;
   }
 
@@ -133,8 +162,7 @@ bool core_to_core_sweep_parameter_from_string(const std::string& key,
 }
 
 bool parse_core_to_core_sweep_spec(const std::string& spec_text,
-                                   CoreToCoreSweepSpec& out_spec,
-                                   const char* prog_name) {
+                                   CoreToCoreSweepSpec& out_spec) {
   ParsedSweepText parsed_text;
   try {
     parsed_text = parse_sweep_text(spec_text);
@@ -142,7 +170,6 @@ bool parse_core_to_core_sweep_spec(const std::string& spec_text,
     std::cerr << Messages::error_prefix()
               << Messages::error_invalid_value(OPT_SWEEP_LONG, spec_text, error.what())
               << std::endl;
-    print_usage(prog_name);
     return false;
   }
 
@@ -151,9 +178,8 @@ bool parse_core_to_core_sweep_spec(const std::string& spec_text,
     std::cerr << Messages::error_prefix()
               << Messages::error_invalid_value(
                      OPT_SWEEP_LONG, spec_text,
-                     "unsupported core-to-core sweep parameter: " + parsed_text.key)
+                     Messages::reason_unsupported_core_to_core_sweep_parameter(parsed_text.key))
               << std::endl;
-    print_usage(prog_name);
     return false;
   }
 
@@ -161,13 +187,13 @@ bool parse_core_to_core_sweep_spec(const std::string& spec_text,
     int parsed = 0;
     const std::string option_name =
         (spec.parameter == CoreToCoreSweepParameter::Count) ? OPT_COUNT_LONG : OPT_LATENCY_SAMPLES_LONG;
-    if (!parse_positive_int_option(option_name, raw_value, parsed, prog_name)) {
+    if (!parse_positive_int_option(option_name, raw_value, parsed)) {
       return false;
     }
     spec.values.push_back(CoreToCoreSweepValue{raw_value, parsed});
   }
 
-  out_spec = spec;
+  out_spec = std::move(spec);
   return true;
 }
 
@@ -175,167 +201,81 @@ bool parse_core_to_core_sweep_spec(const std::string& spec_text,
 
 int parse_core_to_core_mode_arguments(int argc, char* argv[], CoreToCoreLatencyConfig& config) {
   // Always start from centralized core-to-core defaults.
-  config.loop_count = Constants::CORE_TO_CORE_DEFAULT_LOOP_COUNT;
-  config.latency_sample_count = Constants::CORE_TO_CORE_DEFAULT_LATENCY_SAMPLE_COUNT;
+  config = CoreToCoreLatencyConfig{};
+
+  const CliParseResult parsed = parse_cli_options(argc, argv, kCoreToCoreOptionSpecs);
+  if (!parsed.ok) {
+    std::cerr << Messages::error_prefix()
+              << format_cli_parse_error(parsed, &Messages::error_analyze_core_to_core_must_be_used_alone())
+              << std::endl;
+    return EXIT_FAILURE;
+  }
 
   bool mode_seen = false;
-  bool output_seen = false;
   bool count_seen = false;
   bool samples_seen = false;
-  bool sweep_max_runs_seen = false;
 
-  for (int i = 1; i < argc; ++i) {
-    const std::string arg = argv[i];
-
-    // Mode flag is required but does not consume a value.
-    if (is_option(arg, OPT_ANALYZE_CORE_TO_CORE_SHORT, OPT_ANALYZE_CORE_TO_CORE_LONG)) {
-      mode_seen = true;
-      continue;
-    }
-
-    // Help is an early-exit path for this standalone parser.
-    if (is_option(arg, OPT_HELP_SHORT, OPT_HELP_LONG)) {
-      print_help(argv[0]);
-      config.help_requested = true;
-      return EXIT_SUCCESS;
-    }
-
-    // Optional JSON output target.
-    if (is_option(arg, OPT_OUTPUT_SHORT, OPT_OUTPUT_LONG)) {
-      if (output_seen) {
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_duplicate_option(OPT_OUTPUT_LONG)
-                  << std::endl;
-        print_usage(argv[0]);
-        return EXIT_FAILURE;
-      }
-      if (++i >= argc) {
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_missing_value(OPT_OUTPUT_LONG)
-                  << std::endl;
-        print_usage(argv[0]);
-        return EXIT_FAILURE;
-      }
-      config.output_file = argv[i];
-      output_seen = true;
-      continue;
-    }
-
-    if (is_option(arg, OPT_SWEEP_SHORT, OPT_SWEEP_LONG)) {
-      if (++i >= argc) {
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_missing_value(OPT_SWEEP_LONG)
-                  << std::endl;
-        print_usage(argv[0]);
-        return EXIT_FAILURE;
-      }
-
-      CoreToCoreSweepSpec spec;
-      if (!parse_core_to_core_sweep_spec(argv[i], spec, argv[0])) {
-        return EXIT_FAILURE;
-      }
-      for (const CoreToCoreSweepSpec& existing_spec : config.sweep_specs) {
-        if (existing_spec.parameter == spec.parameter) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_duplicate_option(
-                           std::string(OPT_SWEEP_LONG) + " " + spec.parameter_name)
-                    << std::endl;
-          print_usage(argv[0]);
+  for (const CliParsedOption& option : parsed.options) {
+    switch (option.id) {
+      case OPT_ID_ANALYZE_CORE_TO_CORE:
+        mode_seen = true;
+        break;
+      case OPT_ID_HELP:
+        config.help_requested = true;
+        break;
+      case OPT_ID_OUTPUT:
+        config.output_file = option.value;
+        break;
+      case OPT_ID_SWEEP: {
+        CoreToCoreSweepSpec spec;
+        if (!parse_core_to_core_sweep_spec(option.value, spec)) {
           return EXIT_FAILURE;
         }
+        for (const CoreToCoreSweepSpec& existing_spec : config.sweep_specs) {
+          if (existing_spec.parameter == spec.parameter) {
+            std::cerr << Messages::error_prefix()
+                      << Messages::error_duplicate_sweep_parameter(spec.parameter_name)
+                      << std::endl;
+            return EXIT_FAILURE;
+          }
+        }
+        config.sweep_specs.push_back(std::move(spec));
+        config.run_sweep = true;
+        break;
       }
-      config.sweep_specs.push_back(std::move(spec));
-      config.run_sweep = true;
-      continue;
+      case OPT_ID_SWEEP_MAX_RUNS: {
+        int parsed_value = 0;
+        if (!parse_positive_int_option(option.canonical_name, option.value, parsed_value)) {
+          return EXIT_FAILURE;
+        }
+        config.sweep_max_runs = static_cast<size_t>(parsed_value);
+        break;
+      }
+      case OPT_ID_COUNT:
+        if (!parse_positive_int_option(option.canonical_name, option.value, config.loop_count)) {
+          return EXIT_FAILURE;
+        }
+        count_seen = true;
+        break;
+      case OPT_ID_LATENCY_SAMPLES:
+        if (!parse_positive_int_option(option.canonical_name, option.value, config.latency_sample_count)) {
+          return EXIT_FAILURE;
+        }
+        samples_seen = true;
+        break;
     }
-
-    if (is_option(arg, OPT_SWEEP_MAX_RUNS_SHORT, OPT_SWEEP_MAX_RUNS_LONG)) {
-      if (sweep_max_runs_seen) {
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_duplicate_option(OPT_SWEEP_MAX_RUNS_LONG)
-                  << std::endl;
-        print_usage(argv[0]);
-        return EXIT_FAILURE;
-      }
-      if (++i >= argc) {
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_missing_value(OPT_SWEEP_MAX_RUNS_LONG)
-                  << std::endl;
-        print_usage(argv[0]);
-        return EXIT_FAILURE;
-      }
-      int parsed = 0;
-      if (!parse_positive_int_option(OPT_SWEEP_MAX_RUNS_LONG, argv[i], parsed, argv[0])) {
-        return EXIT_FAILURE;
-      }
-      config.sweep_max_runs = static_cast<size_t>(parsed);
-      sweep_max_runs_seen = true;
-      continue;
-    }
-
-    // Optional benchmark loop count override.
-    if (is_option(arg, OPT_COUNT_SHORT, OPT_COUNT_LONG)) {
-      if (count_seen) {
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_duplicate_option(OPT_COUNT_LONG)
-                  << std::endl;
-        print_usage(argv[0]);
-        return EXIT_FAILURE;
-      }
-      if (++i >= argc) {
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_missing_value(OPT_COUNT_LONG)
-                  << std::endl;
-        print_usage(argv[0]);
-        return EXIT_FAILURE;
-      }
-      if (!parse_positive_int_option(OPT_COUNT_LONG, argv[i], config.loop_count, argv[0])) {
-        return EXIT_FAILURE;
-      }
-      count_seen = true;
-      continue;
-    }
-
-    // Optional per-loop latency sample count override.
-    if (is_option(arg, OPT_LATENCY_SAMPLES_SHORT, OPT_LATENCY_SAMPLES_LONG)) {
-      if (samples_seen) {
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_duplicate_option(OPT_LATENCY_SAMPLES_LONG)
-                  << std::endl;
-        print_usage(argv[0]);
-        return EXIT_FAILURE;
-      }
-      if (++i >= argc) {
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_missing_value(OPT_LATENCY_SAMPLES_LONG)
-                  << std::endl;
-        print_usage(argv[0]);
-        return EXIT_FAILURE;
-      }
-      if (!parse_positive_int_option(OPT_LATENCY_SAMPLES_LONG,
-                                     argv[i],
-                                     config.latency_sample_count,
-                                     argv[0])) {
-        return EXIT_FAILURE;
-      }
-      samples_seen = true;
-      continue;
-    }
-
-    // Any unknown or standard-mode option is rejected in standalone mode.
-    std::cerr << Messages::error_prefix()
-              << Messages::error_analyze_core_to_core_must_be_used_alone()
-              << std::endl;
-    print_usage(argv[0]);
-    return EXIT_FAILURE;
   }
 
   if (!mode_seen) {
     std::cerr << Messages::error_prefix()
               << Messages::error_analyze_core_to_core_must_be_used_alone()
               << std::endl;
-    print_usage(argv[0]);
     return EXIT_FAILURE;
+  }
+
+  if (config.help_requested) {
+    print_help(cli_program_name(argc, argv));
+    return EXIT_SUCCESS;
   }
 
   if (config.run_sweep) {
@@ -343,14 +283,26 @@ int parse_core_to_core_mode_arguments(int argc, char* argv[], CoreToCoreLatencyC
       std::cerr << Messages::error_prefix()
                 << Messages::error_sweep_requires_parameter()
                 << std::endl;
-      print_usage(argv[0]);
       return EXIT_FAILURE;
+    }
+    for (const CoreToCoreSweepSpec& spec : config.sweep_specs) {
+      if (spec.parameter == CoreToCoreSweepParameter::Count && count_seen) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_sweep_option_conflict(OPT_COUNT_LONG, "count")
+                  << std::endl;
+        return EXIT_FAILURE;
+      }
+      if (spec.parameter == CoreToCoreSweepParameter::LatencySamples && samples_seen) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_sweep_option_conflict(OPT_LATENCY_SAMPLES_LONG, "latency-samples")
+                  << std::endl;
+        return EXIT_FAILURE;
+      }
     }
     if (config.output_file.empty()) {
       std::cerr << Messages::error_prefix()
                 << Messages::error_sweep_requires_output()
                 << std::endl;
-      print_usage(argv[0]);
       return EXIT_FAILURE;
     }
     const size_t run_count = calculate_core_to_core_sweep_run_count(config);
@@ -358,7 +310,6 @@ int parse_core_to_core_mode_arguments(int argc, char* argv[], CoreToCoreLatencyC
       std::cerr << Messages::error_prefix()
                 << Messages::error_sweep_too_many_runs(run_count, config.sweep_max_runs)
                 << std::endl;
-      print_usage(argv[0]);
       return EXIT_FAILURE;
     }
   }
@@ -368,7 +319,16 @@ int parse_core_to_core_mode_arguments(int argc, char* argv[], CoreToCoreLatencyC
 
 int run_core_to_core_latency_mode(int argc, char* argv[]) {
   CoreToCoreLatencyConfig config;
-  const int parse_result = parse_core_to_core_mode_arguments(argc, argv, config);
+  int parse_result = EXIT_FAILURE;
+  try {
+    parse_result = parse_core_to_core_mode_arguments(argc, argv, config);
+  } catch (const std::exception& error) {
+    report_core_to_core_command_exception(error.what());
+    return EXIT_FAILURE;
+  } catch (...) {
+    report_core_to_core_command_exception("");
+    return EXIT_FAILURE;
+  }
   if (parse_result != EXIT_SUCCESS) {
     return EXIT_FAILURE;
   }
@@ -407,15 +367,9 @@ int run_core_to_core_latency_mode(int argc, char* argv[]) {
     BenchmarkSignalMaskGuard signal_guard;
     return run_core_to_core_latency(config, *output_session);
   } catch (const std::exception& error) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_command_execution_exception(
-                     "Core-to-core analysis", error.what())
-              << std::endl;
+    report_core_to_core_command_exception(error.what());
   } catch (...) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_command_execution_exception(
-                     "Core-to-core analysis", "")
-              << std::endl;
+    report_core_to_core_command_exception("");
   }
   return EXIT_FAILURE;
 }

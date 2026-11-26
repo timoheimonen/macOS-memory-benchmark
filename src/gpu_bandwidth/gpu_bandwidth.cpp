@@ -13,6 +13,7 @@
 #include "gpu_bandwidth/gpu_bandwidth.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdlib>
 #include <exception>
@@ -21,6 +22,7 @@
 #include <optional>
 #include <string>
 
+#include "core/config/cli_parser.h"
 #include "core/config/config.h"
 #include "core/config/version.h"
 #include "core/signal/signal_handler.h"
@@ -39,31 +41,32 @@ namespace {
 GpuBandwidthParserTestHooks active_gpu_parser_hooks;
 bool gpu_parser_hooks_active = false;
 
-bool is_option(const std::string& argument, const char* short_option,
-               const char* long_option) {
-  return argument == short_option || argument == long_option;
-}
+enum GpuOptionId {
+  OPT_ID_GPU_BANDWIDTH = 1,
+  OPT_ID_HELP,
+  OPT_ID_BUFFER_SIZE,
+  OPT_ID_ITERATIONS,
+  OPT_ID_COUNT,
+  OPT_ID_OUTPUT,
+  OPT_ID_SEED,
+};
 
-bool report_duplicate(bool& seen, const char* canonical_option) {
-  if (!seen) {
-    seen = true;
-    return false;
-  }
-  std::cerr << Messages::error_prefix()
-            << Messages::error_duplicate_option(canonical_option) << std::endl;
-  return true;
-}
-
-bool take_value(int argc, char* argv[], int& index,
-                const char* canonical_option, std::string& value) {
-  if (++index >= argc) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_missing_value(canonical_option) << std::endl;
-    return false;
-  }
-  value = argv[index];
-  return true;
-}
+constexpr std::array<CliOptionSpec, 7> kGpuOptionSpecs{{
+    {OPT_ID_GPU_BANDWIDTH, "-G", "--gpu-bandwidth", CliOptionValueKind::None,
+     CliOptionArity::Single},
+    {OPT_ID_HELP, "-h", "--help", CliOptionValueKind::None,
+     CliOptionArity::Single},
+    {OPT_ID_BUFFER_SIZE, "-b", "--buffer-size",
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {OPT_ID_ITERATIONS, "-i", "--iterations", CliOptionValueKind::RequiredValue,
+     CliOptionArity::Single},
+    {OPT_ID_COUNT, "-r", "--count", CliOptionValueKind::RequiredValue,
+     CliOptionArity::Single},
+    {OPT_ID_OUTPUT, "-o", "--output", CliOptionValueKind::RequiredValue,
+     CliOptionArity::Single},
+    {OPT_ID_SEED, nullptr, "--seed", CliOptionValueKind::RequiredValue,
+     CliOptionArity::Single},
+}};
 
 bool parse_positive_size(const std::string& option, const std::string& token,
                          size_t& value) {
@@ -155,127 +158,103 @@ void set_gpu_bandwidth_parser_test_hooks(
 int parse_gpu_bandwidth_arguments(int argc, char* argv[],
                                   GpuBandwidthConfig& config) {
   config = GpuBandwidthConfig{};
-  config.argv.reserve(static_cast<size_t>(std::max(argc, 0)));
-  for (int index = 0; index < argc; ++index) {
-    config.argv.emplace_back(argv[index]);
+  if (argc > 0 && argv != nullptr) {
+    config.argv.reserve(static_cast<size_t>(argc));
+    for (int index = 0; index < argc; ++index) {
+      if (argv[index] != nullptr) {
+        config.argv.emplace_back(argv[index]);
+      }
+    }
+  }
+
+  const CliParseResult parsed = parse_cli_options(argc, argv, kGpuOptionSpecs);
+  if (!parsed.ok) {
+    std::cerr << Messages::error_prefix()
+              << format_cli_parse_error(
+                     parsed,
+                     &Messages::error_gpu_bandwidth_must_be_used_alone())
+              << std::endl;
+    return EXIT_FAILURE;
   }
 
   bool mode_seen = false;
-  bool buffer_seen = false;
-  bool iterations_seen = false;
-  bool count_seen = false;
-  bool output_seen = false;
-  bool seed_seen = false;
-  bool help_seen = false;
-
-  for (int index = 1; index < argc; ++index) {
-    const std::string argument = argv[index];
-    if (is_option(argument, "-G", "--gpu-bandwidth")) {
-      if (report_duplicate(mode_seen, "--gpu-bandwidth")) {
-        return EXIT_FAILURE;
+  for (const CliParsedOption& option : parsed.options) {
+    switch (option.id) {
+      case OPT_ID_GPU_BANDWIDTH:
+        mode_seen = true;
+        break;
+      case OPT_ID_HELP:
+        config.help_printed = true;
+        break;
+      case OPT_ID_BUFFER_SIZE: {
+        unsigned long parsed_ulong = 0;
+        long long parsed_negative = 0;
+        const StrictNonNegativeUlongStatus status =
+            parse_strict_nonnegative_ulong(option.value, parsed_ulong,
+                                           parsed_negative);
+        if (status != StrictNonNegativeUlongStatus::Success) {
+          std::string reason;
+          switch (status) {
+            case StrictNonNegativeUlongStatus::Negative:
+              reason = Messages::gpu_reason_nonnegative_unsigned_long();
+              break;
+            case StrictNonNegativeUlongStatus::OutOfRange:
+              reason = Messages::reason_unsigned_integer_out_of_range();
+              break;
+            case StrictNonNegativeUlongStatus::Invalid:
+            case StrictNonNegativeUlongStatus::Success:
+              reason = Messages::reason_signed_integer_invalid();
+              break;
+          }
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(option.matched_name,
+                                                     option.value, reason)
+                    << std::endl;
+          return EXIT_FAILURE;
+        }
+        config.buffer_size_mb = parsed_ulong;
+        break;
       }
-      continue;
+      case OPT_ID_ITERATIONS:
+        if (!parse_positive_size(option.matched_name, option.value,
+                                 config.iterations)) {
+          return EXIT_FAILURE;
+        }
+        config.user_specified_iterations = true;
+        break;
+      case OPT_ID_COUNT:
+        if (!parse_positive_size(option.matched_name, option.value,
+                                 config.loop_count)) {
+          return EXIT_FAILURE;
+        }
+        if (config.loop_count >
+            static_cast<size_t>(std::numeric_limits<int>::max())) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(
+                           option.matched_name, option.value,
+                           Messages::gpu_reason_loop_count_out_of_range())
+                    << std::endl;
+          return EXIT_FAILURE;
+        }
+        break;
+      case OPT_ID_OUTPUT:
+        config.output_file = option.value;
+        break;
+      case OPT_ID_SEED: {
+        const StrictIntegerParseStatus status =
+            parse_strict_unsigned_decimal(option.value, config.seed);
+        if (status != StrictIntegerParseStatus::Success) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(
+                           option.matched_name, option.value,
+                           strict_unsigned_decimal_error_reason(status))
+                    << std::endl;
+          return EXIT_FAILURE;
+        }
+        config.user_specified_seed = true;
+        break;
+      }
     }
-    if (is_option(argument, "-h", "--help")) {
-      if (report_duplicate(help_seen, "--help")) {
-        return EXIT_FAILURE;
-      }
-      config.help_printed = true;
-      continue;
-    }
-    if (is_option(argument, "-b", "--buffer-size")) {
-      if (report_duplicate(buffer_seen, "--buffer-size")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--buffer-size", token)) {
-        return EXIT_FAILURE;
-      }
-      long long parsed = 0;
-      const StrictIntegerParseStatus status =
-          parse_strict_signed_decimal(token, parsed);
-      if (status != StrictIntegerParseStatus::Success || parsed < 0 ||
-          static_cast<unsigned long long>(parsed) >
-              std::numeric_limits<unsigned long>::max()) {
-        const std::string reason =
-            status == StrictIntegerParseStatus::Success
-                ? Messages::gpu_reason_nonnegative_unsigned_long()
-                : strict_signed_decimal_error_reason(status);
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_invalid_value(argument, token, reason)
-                  << std::endl;
-        return EXIT_FAILURE;
-      }
-      config.buffer_size_mb = static_cast<unsigned long>(parsed);
-      continue;
-    }
-    if (is_option(argument, "-i", "--iterations")) {
-      if (report_duplicate(iterations_seen, "--iterations")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--iterations", token) ||
-          !parse_positive_size(argument, token, config.iterations)) {
-        return EXIT_FAILURE;
-      }
-      config.user_specified_iterations = true;
-      continue;
-    }
-    if (is_option(argument, "-r", "--count")) {
-      if (report_duplicate(count_seen, "--count")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--count", token) ||
-          !parse_positive_size(argument, token, config.loop_count)) {
-        return EXIT_FAILURE;
-      }
-      if (config.loop_count >
-          static_cast<size_t>(std::numeric_limits<int>::max())) {
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_invalid_value(
-                         argument, token,
-                         Messages::gpu_reason_loop_count_out_of_range())
-                  << std::endl;
-        return EXIT_FAILURE;
-      }
-      continue;
-    }
-    if (is_option(argument, "-o", "--output")) {
-      if (report_duplicate(output_seen, "--output")) {
-        return EXIT_FAILURE;
-      }
-      if (!take_value(argc, argv, index, "--output", config.output_file)) {
-        return EXIT_FAILURE;
-      }
-      continue;
-    }
-    if (argument == "--seed") {
-      if (report_duplicate(seed_seen, "--seed")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--seed", token)) {
-        return EXIT_FAILURE;
-      }
-      const StrictIntegerParseStatus status =
-          parse_strict_unsigned_decimal(token, config.seed);
-      if (status != StrictIntegerParseStatus::Success) {
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_invalid_value(
-                         argument, token,
-                         strict_unsigned_decimal_error_reason(status))
-                  << std::endl;
-        return EXIT_FAILURE;
-      }
-      config.user_specified_seed = true;
-      continue;
-    }
-
-    std::cerr << Messages::error_prefix()
-              << Messages::error_gpu_bandwidth_must_be_used_alone()
-              << std::endl;
-    return EXIT_FAILURE;
   }
 
   if (!mode_seen) {
@@ -285,7 +264,7 @@ int parse_gpu_bandwidth_arguments(int argc, char* argv[],
     return EXIT_FAILURE;
   }
   if (config.help_printed) {
-    print_gpu_help(argc > 0 ? argv[0] : "memory_benchmark");
+    print_gpu_help(cli_program_name(argc, argv));
     return EXIT_SUCCESS;
   }
   if (config.buffer_size_mb < Constants::GPU_MIN_BUFFER_SIZE_MB) {

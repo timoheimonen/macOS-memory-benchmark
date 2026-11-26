@@ -23,6 +23,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -435,6 +436,20 @@ class LlmBackend {
 
 /** Create the selected backend without probing capabilities or allocating. */
 std::unique_ptr<LlmBackend> create_llm_backend(LlmMemoryBackend backend);
+
+/** Deterministic backend-factory override for command-boundary tests. */
+using LlmBackendFactoryTestHook =
+    std::function<std::unique_ptr<LlmBackend>(LlmMemoryBackend)>;
+
+/**
+ * Install or clear a deterministic backend-factory override for tests.
+ *
+ * @param hook Callback copied immediately, or `nullptr` to restore production
+ *        backend construction.
+ * @warning This process-global test seam is not thread-safe and must not be
+ *          changed concurrently with backend creation.
+ */
+void set_llm_backend_factory_test_hook(const LlmBackendFactoryTestHook* hook);
 
 /** Return CPU preparation evidence when the snapshot carries the CPU tag. */
 const LlmResourcePreparationResult* get_llm_cpu_preparation(const LlmBackendEvidence& evidence) noexcept;

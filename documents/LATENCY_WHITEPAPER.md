@@ -73,6 +73,7 @@ The function returns `EXIT_FAILURE` for invalid setup cases, including:
 
 - `buffer == nullptr`
 - `stride == 0`
+- `stride < sizeof(uintptr_t)` or `stride % sizeof(uintptr_t) != 0` (pointer-size alignment)
 - fewer than 2 pointers fit in the provided buffer (`buffer_size / stride < 2`)
 - a locality-using `LatencyChainMode` is selected explicitly while `tlb_locality_bytes == 0`
   (the mode requires a locality window but none is provided)

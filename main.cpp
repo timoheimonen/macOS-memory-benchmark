@@ -32,9 +32,8 @@
  * - GPU bandwidth: Standalone Metal GPU memory read/write/copy measurements
  * - LLM memory profile: Standalone CPU/Metal synthetic decode/prefill memory workloads with contiguous or paged KV
  *
- * Standard, pattern, TLB, and core-to-core modes also support validated parameter sweeps.
- * GPU bandwidth and the LLM memory profile are intentionally standalone and do
- * not participate in sweeps.
+ * Standard, pattern, TLB, core-to-core, and LLM-memory modes also support validated parameter sweeps.
+ * GPU bandwidth is intentionally standalone and does not participate in sweeps.
  *
  * @author Timo Heimonen
  */
@@ -47,6 +46,7 @@
 #include <string>
 
 #include "utils/benchmark.h"
+#include "core/config/cli_parser.h"
 #include "core/config/config.h"
 #include "core/config/mode_selector.h"
 #include "core/memory/buffer_allocator.h"
@@ -161,8 +161,27 @@ int main(int argc, char *argv[]) {
   // Install signal handlers early (before any benchmark logic)
   install_signal_handlers();
 
-  const PrimaryModeSelection mode_selection =
-      select_primary_benchmark_mode(argc, argv);
+  // Bare invocation with no arguments prints help without starting timers or mode scanners.
+  if (argc <= 1) {
+    print_help(cli_program_name(argc, argv));
+    return EXIT_SUCCESS;
+  }
+
+  PrimaryModeSelection mode_selection;
+  try {
+    mode_selection = select_primary_benchmark_mode(argc, argv);
+  } catch (const std::exception& error) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_command_execution_exception("Argument parsing", error.what())
+              << std::endl;
+    return EXIT_FAILURE;
+  } catch (...) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_command_execution_exception("Argument parsing", "")
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+
   if (mode_selection.mode == PrimaryBenchmarkMode::Conflict) {
     std::cerr << Messages::error_prefix()
               << Messages::error_mutually_exclusive_modes(
@@ -181,39 +200,35 @@ int main(int argc, char *argv[]) {
     return run_core_to_core_latency_mode(argc, argv);
   }
 
-  // Start total execution timer
-  auto timer_opt = HighResTimer::create();
-  if (!timer_opt) {
+  // --- Parse and Validate Configuration ---
+  BenchmarkConfig config;
+  int parse_result = EXIT_FAILURE;
+  try {
+    parse_result = parse_arguments(argc, argv, config);
+  } catch (const std::exception& error) {
     std::cerr << Messages::error_prefix()
-              << Messages::error_timer_creation_failed()
+              << Messages::error_command_execution_exception("Argument parsing", error.what())
+              << std::endl;
+    return EXIT_FAILURE;
+  } catch (...) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_command_execution_exception("Argument parsing", "")
               << std::endl;
     return EXIT_FAILURE;
   }
-  auto& total_execution_timer = *timer_opt;
-  total_execution_timer.start();
-
-  // --- Parse and Validate Configuration ---
-  BenchmarkConfig config;
-  int parse_result = parse_arguments(argc, argv, config);
   if (parse_result != EXIT_SUCCESS) {
     return EXIT_FAILURE;
   }
 
-  // If -h/--help was handled, usage already printed — exit now
+  // If -h/--help was handled, help text was already printed — exit now.
   if (config.help_printed) {
     return EXIT_SUCCESS;
   }
 
-  // If no arguments provided, show help
-  if (argc == 1) {
-    print_help(argv[0]);
-    return EXIT_SUCCESS;
-  }
-
-  // If no mode flag is set (neither --benchmark nor --patterns nor --analyze-tlb), show help
+  // Reject modifier-only invocations without a primary mode before opening any JSON output session.
   if (!config.analyze_tlb && !config.run_benchmark && !config.run_patterns) {
-    print_help(argv[0]);
-    return EXIT_SUCCESS;
+    validate_config(config);
+    return EXIT_FAILURE;
   }
 
   // Every general CPU command shares one target owner. Install stdout routing
@@ -297,6 +312,17 @@ int main(int argc, char *argv[]) {
   if (validate_config(config) != EXIT_SUCCESS) {
     return EXIT_FAILURE;
   }
+
+  // Start total execution timer for standard and pattern benchmark execution.
+  auto timer_opt = HighResTimer::create();
+  if (!timer_opt) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_timer_creation_failed()
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+  auto& total_execution_timer = *timer_opt;
+  total_execution_timer.start();
 
   calculate_buffer_sizes(config);
   calculate_access_counts(config);

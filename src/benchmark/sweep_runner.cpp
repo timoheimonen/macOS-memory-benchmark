@@ -94,6 +94,8 @@ nlohmann::ordered_json build_sweep_parameters_json(const BenchmarkConfig& config
       if (spec.parameter == SweepParameter::LatencyChainMode ||
           spec.parameter == SweepParameter::TlbDensity) {
         values.push_back(value.raw_value);
+      } else if (spec.parameter == SweepParameter::BufferSizeMb) {
+        values.push_back(value.unsigned_value);
       } else {
         values.push_back(value.integer_value);
       }
@@ -111,6 +113,8 @@ nlohmann::ordered_json build_assignment_json(const std::vector<SweepAssignment>&
     if (spec.parameter == SweepParameter::LatencyChainMode ||
         spec.parameter == SweepParameter::TlbDensity) {
       params[spec.parameter_name] = value.raw_value;
+    } else if (spec.parameter == SweepParameter::BufferSizeMb) {
+      params[spec.parameter_name] = value.unsigned_value;
     } else {
       params[spec.parameter_name] = value.integer_value;
     }
@@ -124,7 +128,8 @@ void apply_assignment(BenchmarkConfig& config, const SweepAssignment& assignment
 
   switch (spec.parameter) {
     case SweepParameter::BufferSizeMb:
-      config.buffer_size_mb = static_cast<unsigned long>(value.integer_value);
+      config.buffer_size_mb = value.unsigned_value;
+      config.user_specified_buffer_size = true;
       break;
     case SweepParameter::CacheSizeKb:
       config.custom_cache_size_kb_ll = value.integer_value;
@@ -134,7 +139,10 @@ void apply_assignment(BenchmarkConfig& config, const SweepAssignment& assignment
       break;
     case SweepParameter::Threads: {
       const int requested_threads = static_cast<int>(value.integer_value);
-      const int max_cores = get_total_logical_cores();
+      const ConfigTestHooks* test_hooks = get_config_test_hooks();
+      const int max_cores = (test_hooks != nullptr && test_hooks->use_system_info)
+                                ? test_hooks->total_logical_cores
+                                : get_total_logical_cores();
       config.num_threads = (max_cores > 0) ? std::min(requested_threads, max_cores) : requested_threads;
       config.user_specified_threads = true;
       break;
@@ -146,12 +154,15 @@ void apply_assignment(BenchmarkConfig& config, const SweepAssignment& assignment
       break;
     case SweepParameter::LatencyStrideBytes:
       config.latency_stride_bytes = static_cast<size_t>(value.integer_value);
+      config.user_specified_latency_stride = true;
       break;
     case SweepParameter::LatencyChainMode:
       config.latency_chain_mode = value.latency_chain_mode;
+      config.user_specified_latency_chain_mode = true;
       break;
     case SweepParameter::TlbDensity:
       config.tlb_sweep_density = value.tlb_sweep_density;
+      config.user_specified_tlb_density = true;
       break;
   }
 }
@@ -458,6 +469,72 @@ SweepNestedCompletion classify_pattern_completion(const nlohmann::ordered_json& 
           reason.empty() ? "nested-pattern-result-incomplete" : reason};
 }
 
+/**
+ * Classify nested LLM schema-2 completion from the authoritative API contract.
+ *
+ * Requires `mode == "llm_memory"`, integer `schema_version == 2`, typed
+ * completion/acceptance booleans, and all planned measurements in `"measured"`
+ * state before returning `SweepAttemptStatus::Complete`. Unsupported, failed,
+ * interrupted, and partial runs retain their stable `reason_code`.
+ */
+SweepNestedCompletion classify_llm_memory_completion(const nlohmann::ordered_json& result_json) {
+  if (!result_json.is_object() || !result_json.contains("schema_version") ||
+      !result_json.contains("mode")) {
+    return {SweepAttemptStatus::Partial, "missing-llm-schema-version"};
+  }
+  const nlohmann::ordered_json& schema_version = result_json["schema_version"];
+  if (!schema_version.is_number_integer() || schema_version.is_boolean() ||
+      schema_version != Constants::LLM_JSON_SCHEMA_VERSION) {
+    return {SweepAttemptStatus::Partial, "unsupported-llm-schema-version"};
+  }
+  const bool has_mode = result_json["mode"].is_string() &&
+                        result_json["mode"] == Constants::LLM_JSON_MODE_NAME;
+  const bool has_status =
+      result_json.contains("status") && result_json["status"].is_string();
+  const bool has_results_complete =
+      result_json.contains("results_complete") &&
+      result_json["results_complete"].is_boolean();
+  const bool has_run_accepted = result_json.contains("run_accepted") &&
+                                result_json["run_accepted"].is_boolean();
+  if (!has_mode || !has_status || !has_results_complete || !has_run_accepted) {
+    return {SweepAttemptStatus::Partial, "invalid-llm-schema-contract"};
+  }
+
+  const std::string status = optional_string(result_json, "status");
+  const std::string reason = optional_string(result_json, "reason_code");
+  if (status == "complete" &&
+      result_json["results_complete"].get<bool>() &&
+      result_json["run_accepted"].get<bool>()) {
+    if (!result_json.contains("measurements") ||
+        !result_json["measurements"].is_array() ||
+        result_json["measurements"].empty()) {
+      return {SweepAttemptStatus::Partial, "invalid-llm-schema-contract"};
+    }
+    for (const auto& measurement : result_json["measurements"]) {
+      if (!measurement.is_object() || !measurement.contains("status") ||
+          !measurement["status"].is_string() ||
+          measurement["status"] != "measured") {
+        return {SweepAttemptStatus::Partial, "invalid-llm-schema-contract"};
+      }
+    }
+    return {SweepAttemptStatus::Complete, ""};
+  }
+  if (status == "interrupted") {
+    return {SweepAttemptStatus::Interrupted,
+            reason.empty() ? "nested-llm-run-interrupted" : reason};
+  }
+  if (status == "unsupported") {
+    return {SweepAttemptStatus::Failed,
+            reason.empty() ? "nested-llm-run-unsupported" : reason};
+  }
+  if (status == "failed") {
+    return {SweepAttemptStatus::Failed,
+            reason.empty() ? "nested-llm-run-failed" : reason};
+  }
+  return {SweepAttemptStatus::Partial,
+          reason.empty() ? "nested-llm-result-incomplete" : reason};
+}
+
 const char* sweep_attempt_status_to_string(SweepAttemptStatus status) {
   switch (status) {
     case SweepAttemptStatus::Complete:
@@ -485,6 +562,8 @@ SweepNestedCompletion classify_sweep_nested_completion(SweepNestedMode mode,
       return classify_tlb_completion(result_json);
     case SweepNestedMode::CoreToCore:
       return classify_core_to_core_completion(result_json);
+    case SweepNestedMode::LlmMemory:
+      return classify_llm_memory_completion(result_json);
   }
   return {SweepAttemptStatus::Failed, "unknown-sweep-nested-mode"};
 }
@@ -493,8 +572,8 @@ SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<
                                         nlohmann::ordered_json initial_output, const SweepExecutionHooks& hooks) {
   SweepExecutionResult execution;
   execution.output_json = std::move(initial_output);
-  // General and core-to-core producers converge here before the first
-  // checkpoint, so every persisted envelope has the same schema authority.
+  // General, core-to-core, and LLM sweep producers converge here before the
+  // first checkpoint, so every persisted envelope has the same schema authority.
   nlohmann::ordered_json& configuration = execution.output_json[JsonKeys::CONFIGURATION];
   if (!configuration.is_object()) {
     configuration = nlohmann::ordered_json::object();
@@ -560,7 +639,10 @@ SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<
       outcome.failure_reason = SWEEP_NESTED_RUN_EXCEPTION_REASON;
     }
     SweepNestedCompletion completion;
-    if (!outcome.result_json.empty() || outcome.exit_code == EXIT_SUCCESS) {
+    if (outcome.interrupted && outcome.exit_code == EXIT_SUCCESS && outcome.result_json.empty()) {
+      completion.status = SweepAttemptStatus::Interrupted;
+      completion.reason = outcome.failure_reason.empty() ? "nested-run-interrupted" : outcome.failure_reason;
+    } else if (!outcome.result_json.empty() || outcome.exit_code == EXIT_SUCCESS) {
       completion = classify_sweep_nested_completion(mode, outcome.result_json);
     } else {
       completion.status = SweepAttemptStatus::Failed;

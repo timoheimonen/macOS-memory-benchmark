@@ -340,6 +340,848 @@ class VerifierTests(unittest.TestCase):
                 verifier.verify(doc, binary.name)
             self.assertEqual(caught.exception.reason, "binary-hash-mismatch")
 
+    def make_sweep_envelope(self, fixture_name="cpu-decode-contiguous", param_key="context-tokens"):
+        doc = fixture(fixture_name)
+        doc["configuration"]["output_file"] = ""
+        config_key = verifier.SWEEP_PARAM_CONFIG_KEYS[param_key]
+        value = doc["configuration"][config_key]
+        return dict(
+            configuration=dict(
+                mode="sweep",
+                base_mode="llm_memory",
+                sweep_schema_version=1,
+                run_count=1,
+                sweep_max_runs=16,
+                sweep_parameters={param_key: [value]},
+            ),
+            planned_runs=1,
+            attempted_runs=1,
+            completed_runs=1,
+            status="complete",
+            status_reason=None,
+            conclusions_valid=True,
+            execution_time_sec=0.125,
+            timestamp="2026-01-01T00:00:00Z",
+            version="0.64.1",
+            runs=[
+                dict(
+                    index=0,
+                    parameters={param_key: value},
+                    status="complete",
+                    status_reason=None,
+                    result=doc,
+                )
+            ],
+        )
+
+    def make_two_run_sweep_envelope(self, fixture_name="cpu-decode-contiguous", param_key="context-tokens"):
+        doc0 = fixture(fixture_name)
+        doc0["configuration"]["output_file"] = ""
+        doc1 = copy.deepcopy(doc0)
+        config_key = verifier.SWEEP_PARAM_CONFIG_KEYS[param_key]
+        value = doc0["configuration"][config_key]
+        return dict(
+            configuration=dict(
+                mode="sweep",
+                base_mode="llm_memory",
+                sweep_schema_version=1,
+                run_count=2,
+                sweep_max_runs=16,
+                sweep_parameters={param_key: [value, value]},
+            ),
+            planned_runs=2,
+            attempted_runs=2,
+            completed_runs=2,
+            status="complete",
+            status_reason=None,
+            conclusions_valid=True,
+            execution_time_sec=0.25,
+            timestamp="2026-01-01T00:00:00Z",
+            version="0.64.1",
+            runs=[
+                dict(
+                    index=0,
+                    parameters={param_key: value},
+                    status="complete",
+                    status_reason=None,
+                    result=doc0,
+                ),
+                dict(
+                    index=1,
+                    parameters={param_key: value},
+                    status="complete",
+                    status_reason=None,
+                    result=doc1,
+                ),
+            ],
+        )
+
+    def test_llm_sweep_envelope_verification_and_mutations(self):
+        for fixture_name, param_key in (
+            ("cpu-decode-contiguous", "context-tokens"),
+            ("cpu-decode-paged", "kv-block-tokens"),
+            ("cpu-prefill-contiguous", "prompt-tokens"),
+            ("metal-prefill-paged", "attention-query-tile-tokens"),
+        ):
+            with self.subTest(fixture=fixture_name, key=param_key):
+                envelope = self.make_sweep_envelope(fixture_name, param_key)
+                verdict = verifier.verify(envelope)
+                self.assertTrue(verdict["artifact_consistent"])
+                self.assertTrue(verdict["run_accepted"])
+                self.assertEqual(verdict["artifact_kind"], "llm_sweep")
+                self.assertEqual(verdict["completed_runs"], 1)
+
+        def nested_truncated(status):
+            doc = truncated(status)
+            doc["configuration"]["output_file"] = ""
+            return doc
+
+        failed_envelope = self.make_sweep_envelope()
+        failed_envelope["runs"][0]["status"] = "failed"
+        failed_envelope["runs"][0]["status_reason"] = "runtime-failure"
+        failed_envelope["runs"][0]["result"] = nested_truncated("failed")
+        failed_envelope["completed_runs"] = 0
+        failed_envelope["status"] = "failed"
+        failed_envelope["status_reason"] = "runtime-failure"
+        failed_envelope["conclusions_valid"] = False
+        verdict = verifier.verify(failed_envelope)
+        self.assertTrue(verdict["artifact_consistent"])
+        self.assertFalse(verdict["run_accepted"])
+        self.assertEqual(verdict["reason_code"], "sweep-not-accepted")
+
+        null_failed_envelope = self.make_sweep_envelope()
+        null_failed_envelope["runs"][0]["status"] = "failed"
+        null_failed_envelope["runs"][0]["status_reason"] = "memory-budget-exceeded"
+        null_failed_envelope["runs"][0]["result"] = None
+        null_failed_envelope["completed_runs"] = 0
+        null_failed_envelope["status"] = "failed"
+        null_failed_envelope["status_reason"] = "memory-budget-exceeded"
+        null_failed_envelope["conclusions_valid"] = False
+        verdict = verifier.verify(null_failed_envelope)
+        self.assertTrue(verdict["artifact_consistent"])
+        self.assertFalse(verdict["run_accepted"])
+
+        null_interrupted_envelope = self.make_sweep_envelope()
+        null_interrupted_envelope["runs"][0]["status"] = "interrupted"
+        null_interrupted_envelope["runs"][0]["status_reason"] = "preparation-interrupted"
+        null_interrupted_envelope["runs"][0]["result"] = None
+        null_interrupted_envelope["completed_runs"] = 0
+        null_interrupted_envelope["status"] = "interrupted"
+        null_interrupted_envelope["status_reason"] = "preparation-interrupted"
+        null_interrupted_envelope["conclusions_valid"] = False
+        verdict = verifier.verify(null_interrupted_envelope)
+        self.assertTrue(verdict["artifact_consistent"])
+        self.assertFalse(verdict["run_accepted"])
+
+        mutation_cases = [
+            (
+                "unsupported-sweep-schema",
+                lambda e: e["configuration"].update(sweep_schema_version=2),
+            ),
+            (
+                "sweep-plan-count-mismatch",
+                lambda e: e.update(planned_runs=2),
+            ),
+            (
+                "sweep-plan-count-mismatch",
+                lambda e: e["configuration"].update(
+                    sweep_max_runs=1000,
+                    sweep_parameters={
+                        "context-tokens": list(range(1, 101)),
+                        "kv-block-tokens": list(range(1, 101)),
+                        "prompt-tokens": list(range(1, 101)),
+                        "attention-query-tile-tokens": list(range(1, 101)),
+                    },
+                ),
+            ),
+            (
+                "sweep-attempted-runs-mismatch",
+                lambda e: e.update(attempted_runs=0),
+            ),
+            (
+                "sweep-nested-output-file-mismatch",
+                lambda e: e["runs"][0]["result"]["configuration"].update(output_file="out.json"),
+            ),
+            (
+                "sweep-parameters-mismatch",
+                lambda e: e["runs"][0]["parameters"].update({"context-tokens": 999}),
+            ),
+            (
+                "sweep-nested-parameter-mismatch",
+                lambda e: (
+                    e["configuration"]["sweep_parameters"].update({"context-tokens": [999]}),
+                    e["runs"][0]["parameters"].update({"context-tokens": 999}),
+                ),
+            ),
+            (
+                "sweep-run-status-mismatch",
+                lambda e: e["runs"][0].update(result=nested_truncated("failed")),
+            ),
+            (
+                "sweep-completed-runs-mismatch",
+                lambda e: e.update(completed_runs=0),
+            ),
+            (
+                "sweep-status-mismatch",
+                lambda e: e.update(conclusions_valid=False),
+            ),
+            (
+                "counter-mismatch",
+                lambda e: e["runs"][0]["result"]["counters"].update(completed_work_units="0"),
+            ),
+        ]
+        for reason, mutate in mutation_cases:
+            with self.subTest(reason=reason):
+                envelope = self.make_sweep_envelope()
+                mutate(envelope)
+                self.assert_reason(envelope, reason)
+
+        # Splicing runs from different base configurations or build manifests must fail.
+        for splice_name, mutate in (
+            ("manifest", lambda e: e["runs"][1]["result"]["build_manifest"].update(compiler="other-cc")),
+            ("argv", lambda e: e["runs"][1]["result"]["configuration"].update(argv=["other"])),
+        ):
+            with self.subTest(splice=splice_name):
+                spliced = self.make_two_run_sweep_envelope()
+                mutate(spliced)
+                self.assert_reason(spliced, "sweep-base-config-mismatch")
+
+        # Shared work budget must apply across the entire sweep artifact, not reset per run.
+        single_verdict = verifier.verify(self.make_sweep_envelope())
+        single_work = single_verdict["oracle_work_used"]
+        two_run = self.make_two_run_sweep_envelope()
+        two_verdict = verifier.verify(two_run)
+        self.assertGreater(two_verdict["oracle_work_used"], single_work)
+        with mock.patch.object(verifier, "MAX_WORK", single_work + 1), self.assertRaises(
+            verifier.Rejected
+        ) as caught:
+            verifier.verify(two_run)
+        self.assertEqual(caught.exception.reason, "unsupported-work-limit")
+        self.assertTrue(caught.exception.unsupported)
+
+        with tempfile.TemporaryDirectory(prefix="llm-sweep-verifier-", dir="/tmp") as directory:
+            path = Path(directory) / "sweep.json"
+            for envelope, expected in ((self.make_sweep_envelope(), 0), (failed_envelope, 1)):
+                path.write_text(json.dumps(envelope))
+                result = subprocess.run(
+                    [sys.executable, str(ROOT / "script-examples/verify_llm_result.py"), str(path)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                parsed = json.loads(result.stdout)
+                self.assertEqual(parsed["artifact_kind"], "llm_sweep")
+
+    def test_llm_sweep_order_independent_parameters_and_envelope_invariants(self):
+        # Re-serializing a multi-axis sweep with sorted JSON keys must remain verifiable.
+        doc0 = fixture("cpu-prefill-paged")
+        doc0["configuration"]["output_file"] = ""
+        p0 = doc0["configuration"]["prompt_tokens"]
+        q0 = doc0["configuration"]["attention_query_tile_tokens"]
+        two_dim = dict(
+            configuration=dict(
+                mode="sweep",
+                base_mode="llm_memory",
+                sweep_schema_version=1,
+                run_count=4,
+                sweep_max_runs=16,
+                sweep_parameters={
+                    "prompt-tokens": [p0, p0 * 2],
+                    "attention-query-tile-tokens": [q0, q0 + 1],
+                },
+            ),
+            planned_runs=4,
+            attempted_runs=2,
+            completed_runs=1,
+            status="failed",
+            status_reason="memory-budget-exceeded",
+            conclusions_valid=False,
+            execution_time_sec=0.25,
+            timestamp="2026-01-01T00:00:00Z",
+            version="0.64.1",
+            runs=[
+                dict(
+                    index=0,
+                    parameters={"prompt-tokens": p0, "attention-query-tile-tokens": q0},
+                    status="complete",
+                    status_reason=None,
+                    result=doc0,
+                ),
+                dict(
+                    index=1,
+                    parameters={"prompt-tokens": p0, "attention-query-tile-tokens": q0 + 1},
+                    status="failed",
+                    status_reason="memory-budget-exceeded",
+                    result=None,
+                ),
+            ],
+        )
+        reserialized = json.loads(json.dumps(two_dim, sort_keys=True))
+        self.assertEqual(
+            list(reserialized["configuration"]["sweep_parameters"].keys()),
+            ["attention-query-tile-tokens", "prompt-tokens"],
+        )
+        verdict = verifier.verify(reserialized)
+        self.assertTrue(verdict["artifact_consistent"])
+        self.assertFalse(verdict["run_accepted"])
+
+        # A parameter tuple inconsistent with every Cartesian axis ordering must be rejected.
+        bad_order = copy.deepcopy(reserialized)
+        bad_order["runs"][1]["parameters"] = {
+            "prompt-tokens": p0 * 2,
+            "attention-query-tile-tokens": q0 + 1,
+        }
+        self.assert_reason(bad_order, "sweep-parameters-mismatch")
+
+        # Valid checkpoint-write failure after a completed run and valid zero-run interruption.
+        checkpoint_failed = self.make_sweep_envelope()
+        checkpoint_failed["status"] = "failed"
+        checkpoint_failed["status_reason"] = "checkpoint-write-failed"
+        checkpoint_failed["conclusions_valid"] = False
+        verdict = verifier.verify(checkpoint_failed)
+        self.assertTrue(verdict["artifact_consistent"])
+        self.assertFalse(verdict["run_accepted"])
+
+        zero_run_interrupted = self.make_two_run_sweep_envelope()
+        zero_run_interrupted.update(
+            attempted_runs=0,
+            completed_runs=0,
+            status="interrupted",
+            status_reason="interruption-requested-before-run",
+            conclusions_valid=False,
+            runs=[],
+        )
+        verdict = verifier.verify(zero_run_interrupted)
+        self.assertTrue(verdict["artifact_consistent"])
+        self.assertFalse(verdict["run_accepted"])
+
+        # Forged execution resumption after a failed run must fail.
+        resumed = self.make_two_run_sweep_envelope()
+        resumed["runs"][0].update(status="failed", status_reason="memory-budget-exceeded", result=None)
+        resumed.update(
+            completed_runs=1,
+            status="interrupted",
+            status_reason="interruption-requested",
+            conclusions_valid=False,
+        )
+        self.assert_reason(resumed, "sweep-invalid-execution-prefix")
+
+        # Envelope status, per-run status_reason, and metadata invariants.
+        invariant_cases = [
+            (
+                "failed-run-in-interrupted-envelope",
+                "sweep-status-mismatch",
+                lambda e: (
+                    e["runs"][0].update(status="failed", status_reason="runtime-failure", result=None),
+                    e.update(
+                        completed_runs=0,
+                        status="interrupted",
+                        status_reason="interruption-requested",
+                        conclusions_valid=False,
+                    ),
+                ),
+            ),
+            (
+                "complete-run-in-failed-envelope-without-checkpoint-reason",
+                "sweep-status-mismatch",
+                lambda e: e.update(status="failed", status_reason="runtime-failure", conclusions_valid=False),
+            ),
+            (
+                "zero-run-partial-envelope",
+                "sweep-status-mismatch",
+                lambda e: e.update(
+                    attempted_runs=0,
+                    completed_runs=0,
+                    status="partial",
+                    status_reason="partial-results",
+                    conclusions_valid=False,
+                    runs=[],
+                ),
+            ),
+            (
+                "all-complete-partial-envelope",
+                "sweep-status-mismatch",
+                lambda e: e.update(status="partial", status_reason="partial-results", conclusions_valid=False),
+            ),
+            (
+                "complete-envelope-with-status-reason",
+                "sweep-status-mismatch",
+                lambda e: e.update(status_reason="unexpected"),
+            ),
+            (
+                "complete-run-with-status-reason",
+                "sweep-run-status-mismatch",
+                lambda e: e["runs"][0].update(status_reason="unexpected"),
+            ),
+            (
+                "failed-run-without-status-reason",
+                "sweep-run-status-mismatch",
+                lambda e: (
+                    e["runs"][0].update(status="failed", status_reason=None, result=None),
+                    e.update(
+                        completed_runs=0,
+                        status="failed",
+                        status_reason="runtime-failure",
+                        conclusions_valid=False,
+                    ),
+                ),
+            ),
+            ("negative-execution-time", "sweep-metadata-invalid", lambda e: e.update(execution_time_sec=-0.1)),
+            ("bool-execution-time", "sweep-metadata-invalid", lambda e: e.update(execution_time_sec=True)),
+            ("empty-timestamp", "sweep-metadata-invalid", lambda e: e.update(timestamp="")),
+            ("empty-version", "sweep-metadata-invalid", lambda e: e.update(version="")),
+        ]
+        for label, reason, mutate in invariant_cases:
+            with self.subTest(case=label):
+                envelope = self.make_sweep_envelope()
+                mutate(envelope)
+                self.assert_reason(envelope, reason)
+
+        # Illegal sweep_parameters must be rejected even when nested runs have result=None.
+        null_param_cases = [
+            (
+                "mixed-decode-and-prefill",
+                "sweep-parameters-invalid",
+                dict(
+                    sweep_parameters={"context-tokens": [16], "prompt-tokens": [16]},
+                    run_count=1,
+                ),
+                {"context-tokens": 16, "prompt-tokens": 16},
+                1,
+            ),
+            (
+                "non-power-of-two-kv-block",
+                "sweep-parameter-value-invalid",
+                dict(sweep_parameters={"kv-block-tokens": [24]}, run_count=1),
+                {"kv-block-tokens": 24},
+                1,
+            ),
+            (
+                "kv-block-above-u32",
+                "sweep-parameter-value-invalid",
+                dict(sweep_parameters={"kv-block-tokens": [1 << 32]}, run_count=1),
+                {"kv-block-tokens": 1 << 32},
+                1,
+            ),
+            (
+                "tile-exceeds-prompt",
+                "sweep-parameter-value-invalid",
+                dict(
+                    sweep_parameters={"prompt-tokens": [32, 64], "attention-query-tile-tokens": [16, 48]},
+                    run_count=4,
+                ),
+                {"prompt-tokens": 32, "attention-query-tile-tokens": 16},
+                4,
+            ),
+        ]
+        for label, reason, cfg_patch, run_params, planned in null_param_cases:
+            with self.subTest(null_param_case=label):
+                envelope = self.make_sweep_envelope()
+                envelope["configuration"].update(cfg_patch)
+                envelope.update(
+                    planned_runs=planned,
+                    attempted_runs=1,
+                    completed_runs=0,
+                    status="failed",
+                    status_reason="memory-budget-exceeded",
+                    conclusions_valid=False,
+                )
+                envelope["runs"][0].update(
+                    parameters=run_params,
+                    status="failed",
+                    status_reason="memory-budget-exceeded",
+                    result=None,
+                )
+                self.assert_reason(envelope, reason)
+
+    def test_llm_sweep_hashes_binary_once_across_runs(self):
+        import hashlib
+
+        with tempfile.NamedTemporaryFile(dir="/tmp") as binary:
+            binary.write(b"known sweep binary bytes")
+            binary.flush()
+            digest = hashlib.sha256(b"known sweep binary bytes").hexdigest()
+            two_run = self.make_two_run_sweep_envelope()
+            for run in two_run["runs"]:
+                run["result"]["build_manifest"]["binary_sha256"] = digest
+            with mock.patch.object(verifier, "hash_binary", wraps=verifier.hash_binary) as mock_hash:
+                verdict = verifier.verify(two_run, binary.name)
+            self.assertTrue(verdict["run_accepted"])
+            self.assertEqual(verdict["checks"]["build"], "binary-bound")
+            self.assertEqual(mock_hash.call_count, 1)
+
+    def test_unmaterialized_metal_paged_failure_and_prefill_append_offset(self):
+        # Prefill paged layout requires null decode_append_offset_in_last_block; decode requires decimal string.
+        bad_prefill_layout = fixture("cpu-prefill-paged")
+        bad_prefill_layout["resolved_plan"]["layout"]["decode_append_offset_in_last_block"] = "0"
+        self.assert_reason(bad_prefill_layout, "layout-mismatch")
+        bad_decode_layout = fixture("cpu-decode-paged")
+        bad_decode_layout["resolved_plan"]["layout"]["decode_append_offset_in_last_block"] = None
+        self.assert_reason(bad_decode_layout, "layout-mismatch")
+
+        # Complete Metal paged artifacts must still have materialized permutation fields.
+        bad_complete_metal = fixture("metal-prefill-paged")
+        bad_complete_metal["resolved_plan"]["layout"]["permutation_sha256"] = None
+        self.assert_reason(bad_complete_metal, "permutation-digest-mismatch")
+
+        # Build an unattempted Metal paged unsupported artifact with non-unit P % G (P=6, G=4, record=3).
+        import hashlib
+
+        doc = fixture("metal-prefill-paged")
+        c = doc["configuration"]
+        r = doc["resolved_plan"]
+        g = r["geometry"]
+        layout = r["layout"]
+        c.update(prompt_tokens=6, kv_block_tokens=4)
+        # Recompute exact geometry/resources for P=6, Q=2, G=4, L=2, B=2, R=3, W=1048576.
+        p, q, block, layers, batch, record, weight = 6, 2, 4, 2, 2, 3, 1048576
+        ends = [2, 4, 6]
+        blocks = 2
+        entries = batch * blocks
+        logical = layers * batch * p * record
+        physical = layers * batch * blocks * block * record
+        read = 2 * layers * batch * record * sum(ends)
+        write = 2 * layers * batch * record * p
+        g["prefill"].update(
+            prompt_tokens=p,
+            attention_query_tile_tokens=q,
+            tile_count=str(len(ends)),
+            attention_prefix_token_visits_per_sequence=str(sum(ends)),
+        )
+        g.update(
+            k_or_v_sequence_visible_bytes=str(p * record),
+            k_mapping_bytes=str(physical),
+            v_mapping_bytes=str(physical),
+            kv_capacity_bytes=str(2 * physical),
+            kv_read_bytes_per_work_unit=str(read),
+            kv_write_bytes_per_work_unit=str(write),
+            kv_only_effective_model_payload_bytes_per_work_unit=str(read + write),
+            mixed_effective_model_payload_bytes_per_work_unit=str(weight + read + write),
+            total_data_mapping_bytes=str(weight + 2 * physical),
+        )
+        pairs = p * (p + 1) // 2
+        attn = pairs * layers * batch * g["query_head_count"]
+        r["model_context"]["prefill"].update(
+            causal_token_pairs_per_sequence=str(pairs),
+            logical_attention_pairs=str(attn),
+            logical_attention_fma_terms=str(attn * g["head_dimension"]),
+        )
+        r["resources"].update(
+            k_logical_bytes=str(logical),
+            v_logical_bytes=str(logical),
+            k_physical_length_bytes=str(physical),
+            v_physical_length_bytes=str(physical),
+            k_layout_padding_bytes=str(physical - logical),
+            v_layout_padding_bytes=str(physical - logical),
+        )
+        r["resources"]["metal"]["valid"] = False
+        r["resources"]["metal"]["execution_identity"] = None
+        r["resources"]["metal"]["resource_identity"] = None
+        r["resources"]["metal"]["msl_revision"] = None
+        r["resources"]["metal"]["msl_source_sha256"] = None
+        r["component_identities"].update(msl_revision=None, msl_source_sha256=None)
+        profile_components = dict(verifier.PROFILES["metal-prefill-paged"])
+        profile_components.update(msl_revision=None, msl_source_sha256=None)
+        comp_id = "llm-memory-components-v1" + "".join(
+            "|" + k + "=" + ("null" if v is None else str(len(v)) + ":" + v)
+            for k, v in profile_components.items()
+            if k != "run_policy_version"
+        )
+        r["component_identities"]["identity"] = comp_id
+        prefix_block_visits = sum((t + block - 1) // block for t in ends)
+        lookups_per_ls = blocks + 2 * prefix_block_visits
+        plan_updates = dict(
+            component_identity_size=str(len(comp_id)),
+            component_identity=comp_id,
+            k_or_v_sequence_visible_bytes=str(p * record),
+            kv_block_tokens=str(block),
+            kv_blocks_per_sequence=str(blocks),
+            physical_blocks_per_layer=str(entries),
+            total_physical_blocks=str(layers * entries),
+            kv_block_bytes=str(block * record),
+            last_block_tokens=str(p - (blocks - 1) * block),
+            last_block_valid_bytes=str((p - (blocks - 1) * block) * record),
+            decode_append_offset_in_last_block="0",
+            k_logical_bytes=str(logical),
+            v_logical_bytes=str(logical),
+            k_layout_padding_bytes=str(physical - logical),
+            v_layout_padding_bytes=str(physical - logical),
+            block_table_entries=str(entries),
+            block_table_bytes=str(4 * entries),
+            layout_metadata_lookups_per_layer_sequence_per_work_unit=str(lookups_per_ls),
+            k_mapping_bytes=str(physical),
+            v_mapping_bytes=str(physical),
+            kv_capacity_bytes=str(2 * physical),
+            kv_read_bytes_per_work_unit=str(read),
+            kv_write_bytes_per_work_unit=str(write),
+            kv_only_payload_bytes_per_work_unit=str(read + write),
+            mixed_payload_bytes_per_work_unit=str(weight + read + write),
+            total_data_mapping_bytes=str(weight + 2 * physical),
+            prefill_prompt_tokens=str(p),
+            prefill_tile_count=str(len(ends)),
+            prefill_prefix_token_visits_per_sequence=str(sum(ends)),
+            prefill_causal_token_pairs=str(pairs),
+            prefill_logical_attention_pairs=str(attn),
+            prefill_logical_attention_fma_terms=str(attn * g["head_dimension"]),
+            prefill_prefix_block_visits_per_sequence=str(prefix_block_visits),
+            metal_execution_resolved="0",
+            metal_execution_identity_size="0",
+            metal_execution_identity_sha256="0" * 64,
+        )
+        _, plan_pairs = verifier.identity_fields(r["plan_identity"])
+        r["plan_identity"] = verifier.pipe(
+            "llm-memory-work-plan-v1", [(k, plan_updates.get(k, v)) for k, v in plan_pairs]
+        )
+        r["scenario_plans"] = []
+        r["frozen_plan_refs"] = {s: None for s in verifier.SCENARIOS}
+        doc["calibration"]["attempts"] = {s: [] for s in verifier.SCENARIOS}
+        doc["backend_evidence"]["metal"]["workload_pipelines"] = []
+        doc["backend_evidence"]["metal"]["resources"]["table_permutation"] = None
+        for row in doc["measurements"]:
+            row.update(
+                plan_ref=None,
+                status="not_run",
+                reason_code="not-run",
+                attempted=False,
+                completed_work_units=0,
+                completed_effective_model_payload_bytes="0",
+                completed_layout_metadata_lookup_count="0",
+                completed_layout_metadata_read_bytes="0",
+                completed_task_accounted_bytes="0",
+                completion_derivation=None,
+                elapsed_seconds=None,
+                synthetic_work_unit_latency_seconds=None,
+                synthetic_memory_work_units_per_second=None,
+                effective_model_payload_gb_s=None,
+            )
+            row["execution"].update(status="not_run", valid=None)
+            row["execution"]["timing"] = dict(evaluated=False, valid=None, diagnostic_elapsed_seconds=None, cpu_raw=None)
+            row["execution"].pop("metal", None)
+            for check in row["execution"]["validation"]["checks"]:
+                check["evaluated"] = False if check["applicable"] else None
+                check["valid"] = None
+            row["checksum"].update(
+                status="not_evaluated",
+                checksum_valid=None,
+                actual_worker_checksums=None,
+                actual_run_checksum=None,
+            )
+        for loop in doc["loop_records"]:
+            loop["realized_order"] = []
+            loop["realized_order_count"] = 0
+        doc.update(
+            status="unsupported",
+            reason_code="metal-device-unavailable",
+            results_complete=False,
+            run_accepted=False,
+            scenario_order_balance_complete=False,
+            interruption_requested=False,
+        )
+        for k in (
+            "planned_work_units",
+            "planned_effective_model_payload_bytes",
+            "planned_layout_metadata_lookup_count",
+            "planned_layout_metadata_read_bytes",
+            "planned_task_accounted_bytes",
+        ):
+            doc["counters"][k] = "0"
+        refresh(doc)
+
+        # Subcase A: layout geometry present with non-zero layout decode_append_offset_in_last_block (P=6, G=4 -> 3),
+        # while plan_identity keeps 0, JSON layout field is None, and permutation fields are unmaterialized (None).
+        geom_only = copy.deepcopy(doc)
+        table_bytes = 4 * entries
+        bits = (entries + 7) // 8
+        resident = 2 * physical + table_bytes
+        layout_append = ((p - 1) % block) * record
+        self.assertEqual(layout_append, 3)
+        kv_layout_ver = r["component_identities"]["kv_layout_version"]
+        geom_only["resolved_plan"]["layout"].update(
+            kv_block_tokens=block,
+            blocks_per_sequence=str(blocks),
+            physical_blocks_per_layer=str(entries),
+            total_physical_blocks=str(layers * entries),
+            block_bytes=str(block * record),
+            last_block_tokens=str(p - (blocks - 1) * block),
+            last_block_valid_bytes=str((p - (blocks - 1) * block) * record),
+            decode_append_offset_in_last_block=None,
+            block_table_entries=str(entries),
+            block_table_bytes=str(table_bytes),
+            layout_geometry_identity=verifier.pipe(
+                "llm-kv-layout-geometry-v1",
+                [
+                    ("kv_layout_version", f"{len(kv_layout_ver)}:{kv_layout_ver}"),
+                    ("sequence_tokens", p),
+                    ("kv_block_tokens", block),
+                    ("layer_count", layers),
+                    ("batch_size", batch),
+                    ("k_or_v_record_bytes_per_layer", record),
+                    ("blocks_per_sequence", blocks),
+                    ("physical_blocks_per_layer", entries),
+                    ("total_physical_blocks", layers * entries),
+                    ("block_bytes", block * record),
+                    ("last_block_tokens", p - (blocks - 1) * block),
+                    ("last_block_valid_bytes", (p - (blocks - 1) * block) * record),
+                    ("decode_append_offset_in_last_block", layout_append),
+                    ("k_logical_bytes", logical),
+                    ("v_logical_bytes", logical),
+                    ("k_physical_bytes", physical),
+                    ("v_physical_bytes", physical),
+                    ("k_layout_padding_bytes", physical - logical),
+                    ("v_layout_padding_bytes", physical - logical),
+                    ("block_table_entries", entries),
+                    ("block_table_bytes", table_bytes),
+                    ("validation_bitset_bytes", bits),
+                    ("transient_peak_bytes", table_bytes + bits),
+                    ("resident_layout_bytes", resident),
+                    ("known_owned_peak_bytes", resident + bits),
+                    ("permutation_iterations", entries - 1),
+                    ("validation_entries", entries),
+                    ("hash_entries", entries),
+                    ("upload_bytes", table_bytes),
+                ],
+            ),
+            layout_identity=None,
+            permutation_domain_uint64_hex=None,
+            permutation_seed_uint64_decimal=None,
+            permutation_algorithm_version=None,
+            permutation_entry_count=None,
+            permutation_sha256=None,
+            permutation_identity=None,
+        )
+        verdict = verifier.verify(geom_only)
+        self.assertTrue(verdict["artifact_consistent"])
+        self.assertFalse(verdict["run_accepted"])
+
+        # Replacing layout_geometry_identity's append offset with 0 must fail for P=6, G=4.
+        wrong_geom = copy.deepcopy(geom_only)
+        wrong_geom["resolved_plan"]["layout"]["layout_geometry_identity"] = wrong_geom["resolved_plan"]["layout"][
+            "layout_geometry_identity"
+        ].replace("decode_append_offset_in_last_block=3", "decode_append_offset_in_last_block=0")
+        self.assert_reason(wrong_geom, "layout-identity-mismatch")
+
+        # Subcase B: all paged layout geometry and permutation fields are None on unresolved Metal failure.
+        all_null_layout = copy.deepcopy(geom_only)
+        for key in (
+            "kv_block_tokens",
+            "blocks_per_sequence",
+            "physical_blocks_per_layer",
+            "total_physical_blocks",
+            "block_bytes",
+            "last_block_tokens",
+            "last_block_valid_bytes",
+            "decode_append_offset_in_last_block",
+            "block_table_entries",
+            "block_table_bytes",
+            "layout_geometry_identity",
+        ):
+            all_null_layout["resolved_plan"]["layout"][key] = None
+        verdict = verifier.verify(all_null_layout)
+        self.assertTrue(verdict["artifact_consistent"])
+        self.assertFalse(verdict["run_accepted"])
+        del hashlib
+
+    def test_clamped_workers_distinguish_requested_from_execution_workers(self):
+        # When effective_workers < requested_workers (e.g., clamped by available workers or blocks),
+        # measurement.requested_workers matches configuration.requested_workers while
+        # execution.requested_workers matches effective_workers.
+        doc = fixture("cpu-decode-paged")
+        doc["configuration"]["requested_workers"] = 10
+        doc["configuration"]["available_workers"] = 2
+        doc["resolved_plan"]["model_work_plan"]["requested_workers"] = 10
+        doc["resolved_plan"]["plan_identity"] = doc["resolved_plan"]["plan_identity"].replace(
+            "|requested_workers=2|", "|requested_workers=10|"
+        )
+        for sp in doc["resolved_plan"]["scenario_plans"]:
+            old_id = sp["plan_identity"]
+            prefix, pairs = verifier.identity_fields(old_id)
+            new_model_id = doc["resolved_plan"]["plan_identity"]
+            updated = [
+                ("model_plan_identity_size", str(len(new_model_id)))
+                if k == "model_plan_identity_size"
+                else ("model_plan_identity", new_model_id)
+                if k == "model_plan_identity"
+                else (k, v)
+                for k, v in pairs
+            ]
+            sp["plan_identity"] = verifier.pipe(prefix, updated)
+        for row in doc["measurements"]:
+            row["requested_workers"] = 10
+            self.assertEqual(row["effective_workers"], 2)
+            self.assertEqual(row["execution"]["requested_workers"], 2)
+            self.assertEqual(row["execution"]["created_workers"], 2)
+            self.assertEqual(row["execution"]["completed_workers"], 2)
+        verdict = verifier.verify(doc)
+        self.assertTrue(verdict["artifact_consistent"])
+        self.assertTrue(verdict["run_accepted"])
+
+        for mutate in (
+            lambda d: d["measurements"][0].update(requested_workers=2),
+            lambda d: d["measurements"][0].update(effective_workers=10),
+            lambda d: d["measurements"][0]["execution"].update(requested_workers=10),
+        ):
+            bad = copy.deepcopy(doc)
+            mutate(bad)
+            self.assert_reason(bad, "worker-lifecycle")
+
+    def test_setup_failure_artifact_shape_is_consistent(self):
+        # Verify the schema-2 shape emitted by initialize_llm_setup_failure_result.
+        doc = fixture("cpu-decode-contiguous")
+        doc["resolved_plan"]["scenario_plans"] = []
+        doc["resolved_plan"]["frozen_plan_refs"] = {s: None for s in verifier.SCENARIOS}
+        doc["calibration"]["attempts"] = {s: [] for s in verifier.SCENARIOS}
+        for row in doc["measurements"]:
+            row.update(
+                plan_ref=None,
+                status="failed",
+                reason_code="not-run-after-runtime-failure",
+                attempted=False,
+                completed_work_units=0,
+                completed_effective_model_payload_bytes="0",
+                completed_layout_metadata_lookup_count="0",
+                completed_layout_metadata_read_bytes="0",
+                completed_task_accounted_bytes="0",
+                completion_derivation=None,
+                elapsed_seconds=None,
+                synthetic_work_unit_latency_seconds=None,
+                synthetic_memory_work_units_per_second=None,
+                effective_model_payload_gb_s=None,
+            )
+            row["execution"].update(status="not_run", valid=None)
+            row["execution"]["timing"] = dict(evaluated=False, valid=None, diagnostic_elapsed_seconds=None, cpu_raw=None)
+            for check in row["execution"]["validation"]["checks"]:
+                check["evaluated"] = False if check["applicable"] else None
+                check["valid"] = None
+            row["checksum"].update(
+                status="not_evaluated",
+                checksum_valid=None,
+                actual_worker_checksums=None,
+                actual_run_checksum=None,
+            )
+        for loop in doc["loop_records"]:
+            loop["realized_order"] = []
+            loop["realized_order_count"] = 0
+        doc.update(
+            status="failed",
+            reason_code="auxiliary-budget-insufficient",
+            results_complete=False,
+            run_accepted=False,
+            scenario_order_balance_complete=False,
+            interruption_requested=False,
+        )
+        for k in (
+            "planned_work_units",
+            "planned_effective_model_payload_bytes",
+            "planned_layout_metadata_lookup_count",
+            "planned_layout_metadata_read_bytes",
+            "planned_task_accounted_bytes",
+        ):
+            doc["counters"][k] = "0"
+        refresh(doc)
+        verdict = verifier.verify(doc)
+        self.assertTrue(verdict["artifact_consistent"])
+        self.assertFalse(verdict["run_accepted"])
+
 
 class ArithmeticGoldens(unittest.TestCase):
     def test_published_cpu_golden_and_wrap(self):
@@ -432,6 +1274,38 @@ class ArithmeticGoldens(unittest.TestCase):
                             ),
                             [v & mask for v in expected],
                         )
+
+    def test_partition_clamps_target_when_aligned_boundaries_exhausted(self):
+        # Small spans partitioned across many workers exhaust 32-byte boundaries before all workers
+        # are placed; boundaries must remain strictly increasing with positive active spans.
+        self.assertEqual(
+            oracle.partition(0, 128, 10),
+            [
+                (0, 32),
+                (32, 32),
+                (64, 32),
+                (96, 1),
+                (97, 1),
+                (98, 1),
+                (99, 1),
+                (100, 4),
+                (104, 12),
+                (116, 12),
+            ],
+        )
+        for offset in (0, 17, 64, 128):
+            for size in (1, 10, 64, 96, 128, 192, 256):
+                for workers in (1, 2, 4, 8, 10, 16):
+                    ranges = oracle.partition(offset, size, workers)
+                    self.assertEqual(len(ranges), workers)
+                    active = min(size, workers)
+                    cursor = offset
+                    for start, length in ranges[:active]:
+                        self.assertEqual(start, cursor)
+                        self.assertGreater(length, 0)
+                        cursor += length
+                    self.assertEqual(cursor, offset + size)
+                    self.assertEqual(ranges[active:], [(0, 0)] * (workers - active))
 
 
 class BuildProvenanceTests(unittest.TestCase):

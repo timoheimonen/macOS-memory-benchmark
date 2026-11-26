@@ -20,13 +20,15 @@
 
 #include "core/config/sweep_utils.h"
 
+#include "output/console/messages/messages_api.h"
+
 #include <stdexcept>
 
 ParsedSweepText parse_sweep_text(const std::string& specification) {
   const size_t equals_pos = specification.find('=');
   if (equals_pos == std::string::npos || equals_pos == 0 ||
       equals_pos == specification.size() - 1) {
-    throw std::invalid_argument("sweep must use key=value1,value2 syntax");
+    throw std::invalid_argument(Messages::reason_sweep_syntax());
   }
 
   ParsedSweepText parsed;
@@ -46,7 +48,7 @@ ParsedSweepText parse_sweep_text(const std::string& specification) {
 
   for (const std::string& value : parsed.values) {
     if (value.empty()) {
-      throw std::invalid_argument("sweep value list cannot contain empty values");
+      throw std::invalid_argument(Messages::reason_sweep_empty_value());
     }
   }
 

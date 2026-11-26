@@ -65,6 +65,41 @@ TEST(MessagesErrorTest, ValidationErrorsHaveExactOutput) {
        "latency-tlb-locality-kb must be a multiple of system page size (16 KB), got 10 KB"},
       {"missing iterations", Messages::error_missing_value("--iterations"), "Missing value for --iterations"},
       {"unknown short", Messages::error_unknown_option("-unknown"), "Unknown option: -unknown"},
+      {"option does not take value", Messages::error_option_does_not_take_value("--benchmark"),
+       "Option --benchmark does not take a value"},
+      {"option not allowed in mode",
+       Messages::error_option_not_allowed_in_mode("--threads", Messages::error_gpu_bandwidth_must_be_used_alone()),
+       "Unsupported option '--threads': " + Messages::error_gpu_bandwidth_must_be_used_alone()},
+      {"missing primary mode", Messages::error_missing_primary_mode(),
+       "A primary mode option is required (--benchmark, --patterns, --analyze-tlb, "
+       "--analyze-core2core, --gpu-bandwidth, or --llm-memory)"},
+      {"patterns incompatible", Messages::error_patterns_incompatible_option("--cache-size"),
+       "--patterns cannot be used with --cache-size (pattern benchmarks do not run cache or latency tests)"},
+      {"only bandwidth incompatible", Messages::error_only_bandwidth_incompatible_option("--latency-stride-bytes"),
+       "--only-bandwidth cannot be used with --latency-stride-bytes (option is only relevant for latency tests)"},
+      {"only latency threads", Messages::error_only_latency_with_threads(),
+       "--only-latency cannot be used with --threads (latency tests are single-threaded)"},
+      {"analyze tlb alone", Messages::error_analyze_tlb_must_be_used_alone(),
+       "--analyze-tlb allows only optional -o/--output <target>, -s/--latency-stride-bytes <bytes>, "
+       "-m/--latency-chain-mode <mode>, -D/--tlb-density <low|medium|high>, --seed <uint64>, "
+       "-S/--sweep <key=...>, -X/--sweep-max-runs <count>, and -h/--help (no other options allowed)"},
+      {"signed invalid reason", Messages::reason_signed_integer_invalid(),
+       "must be an integer without whitespace, a plus sign, or trailing characters"},
+      {"signed range reason", Messages::reason_signed_integer_out_of_range(), "out of range"},
+      {"unsigned invalid reason", Messages::reason_unsigned_integer_invalid(),
+       "must be an unsigned 64-bit integer without whitespace, a sign, or trailing characters"},
+      {"unsigned range reason", Messages::reason_unsigned_integer_out_of_range(),
+       "out of range for an unsigned 64-bit integer"},
+      {"positive integer reason", Messages::reason_positive_integer(), "must be a positive integer"},
+      {"positive int range reason", Messages::reason_positive_int_range(2147483647),
+       "must be between 1 and 2147483647"},
+      {"tlb density reason", Messages::reason_tlb_density_invalid(), "must be one of: low, medium, high"},
+      {"sweep syntax reason", Messages::reason_sweep_syntax(), "sweep must use key=value1,value2 syntax"},
+      {"sweep empty reason", Messages::reason_sweep_empty_value(), "sweep value list cannot contain empty values"},
+      {"unsupported sweep parameter", Messages::reason_unsupported_sweep_parameter("foo"),
+       "unsupported sweep parameter: foo"},
+      {"unsupported core2core sweep parameter", Messages::reason_unsupported_core_to_core_sweep_parameter("bar"),
+       "unsupported core-to-core sweep parameter: bar"},
       {"invalid iterations", Messages::error_invalid_value("--iterations", "abc", "must be a number"),
        "Invalid value for --iterations: abc (must be a number)"},
       {"mmap source", Messages::error_mmap_failed("src_buffer"), "mmap failed for src_buffer"},
@@ -79,6 +114,8 @@ TEST(MessagesErrorTest, ValidationErrorsHaveExactOutput) {
        "Sweep would generate 12 runs, exceeding --sweep-max-runs 10"},
       {"parameter not allowed", Messages::error_sweep_parameter_not_allowed("cache-size", "--patterns"),
        "Sweep parameter 'cache-size' is not allowed with --patterns"},
+      {"option conflict", Messages::error_sweep_option_conflict("--context-tokens", "context-tokens"),
+       "Cannot specify both --context-tokens and --sweep context-tokens"},
       {"locality mode", Messages::error_latency_chain_mode_requires_locality("same-random-in-box-increasing-box"),
        "latency-chain-mode 'same-random-in-box-increasing-box' requires --latency-tlb-locality-kb > 0"},
       {"locality minimum", Messages::error_latency_tlb_locality_too_small_for_stride(4096, 4096),
@@ -183,11 +220,21 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
       std::to_string(Constants::LLM_DEFAULT_LOOP_COUNT) +
       ").\n"
       "      --seed <uint64>    Reproducible base seed; generated once when omitted.\n"
-      "  -o, --output <target>  JSON schema 2 target; exact - writes one final document to\n"
-      "                          stdout and routes human output to stderr. Every other non-empty\n"
-      "                          target is a file with bounded loop and terminal atomic snapshots.\n"
-      "                          K=max(1,ceil(count/8)); abrupt loss bound: 3K completed attempts.\n"
-      "                          An empty value disables JSON for this direct command.\n"
+      "  -o, --output <target>  JSON schema 2 target (or schema 1 sweep envelope with --sweep);\n"
+      "                          exact - writes one final document to stdout and routes human\n"
+      "                          output to stderr. Direct file targets snapshot every\n"
+      "                          K=max(1,ceil(count/8)) loops plus terminal (abrupt loss bound:\n"
+      "                          3K completed attempts); sweep files checkpoint after each run.\n"
+      "                          An empty value disables JSON for direct commands and is invalid for sweeps.\n"
+      "  -S, --sweep <key=a,b>  Run a Cartesian sweep over one parameter. Repeat for multiple\n"
+      "                          parameters. Supported keys: context-tokens (decode),\n"
+      "                          prompt-tokens and attention-query-tile-tokens (prefill),\n"
+      "                          and kv-block-tokens (paged KV). Cannot be combined with the\n"
+      "                          matching direct flag; requires --output <target>.\n"
+      "  -X, --sweep-max-runs <count>\n"
+      "                          Maximum generated sweep runs (default: " +
+      std::to_string(Constants::DEFAULT_SWEEP_MAX_RUNS) +
+      ").\n"
       "  -h, --help             Show this LLM-mode help and exit.\n"
       "This profile models CPU or Metal memory traffic only: it performs no Transformer math and\n"
       "does not report inference tokens/s. Effective model payload is not physical DRAM traffic.\n";
@@ -203,13 +250,17 @@ TEST(MessagesTest, LlmMemoryCliMessagesHaveExactOutput) {
        "--kv-element-bytes <1|2|4>, --kv-layout <contiguous|paged>, "
        "--kv-block-tokens <count>, --batch-size <count>, "
        "-t/--threads <count>, -i/--iterations <count>, "
-       "-r/--count <count>, --seed <uint64>, -o/--output <target>, and "
+       "-r/--count <count>, --seed <uint64>, -o/--output <target>, "
+       "-S/--sweep <key=...>, -X/--sweep-max-runs <count>, and "
        "-h/--help (no other options allowed)"},
       {"required option", Messages::error_llm_memory_missing_required_option("--layers"),
        "Missing required --llm-memory option: --layers"},
       {"config reason", Messages::error_llm_memory_config_invalid("query-heads-not-divisible-by-kv-heads"),
        "Invalid --llm-memory configuration "
        "(reason_code=query-heads-not-divisible-by-kv-heads)"},
+      {"sweep combination invalid",
+       Messages::error_llm_memory_sweep_combination_invalid(2, 4, "prompt-tokens=32, attention-query-tile-tokens=48"),
+       "LLM sweep combination 2/4 (prompt-tokens=32, attention-query-tile-tokens=48) failed preflight validation"},
       {"iteration limit", Messages::error_llm_memory_iterations_exceed_limit(5, 4),
        "LLM memory iterations exceed the exact-work guardrail "
        "(requested 5, maximum 4)"},
@@ -520,7 +571,7 @@ TEST(MessagesFormattingTest, UsageOptions) {
            "--output <target>",
            "Exact - writes one final JSON document to stdout",
            "one final",
-           "every result-producing direct mode and CPU sweep",
+           "every result-producing direct mode and supported sweep",
            "routes human output to stderr",
            "an empty value disables JSON for direct commands",
            "invalid for sweeps",
@@ -529,7 +580,10 @@ TEST(MessagesFormattingTest, UsageOptions) {
            "Standard, GPU, and LLM-memory files retain",
            "LLM-memory snapshots every K=max(1,ceil(count/8)) loops",
            "Sweep files checkpoint attempts",
-           "Requires --output <target>",
+           "Cannot be combined with the matching direct flag. Requires --output <target>.",
+           "or cache/latency modifiers (--cache-size, --latency-*).",
+           "--latency-chain-mode, or --latency-tlb-locality-kb.",
+           "--iterations, or --threads.",
            "-h",
            std::to_string(Constants::DEFAULT_ITERATIONS),
            std::to_string(Constants::DEFAULT_BUFFER_SIZE_MB),
@@ -538,6 +592,8 @@ TEST(MessagesFormattingTest, UsageOptions) {
            std::to_string(Constants::MIN_CACHE_SIZE_KB),
            std::to_string(Constants::MAX_CACHE_SIZE_KB),
            "Platform: macOS 26 or later on Apple Silicon (ARM64).",
+           "Long options that take a value accept both --option <value> and --option=<value>.",
+           "and -h/--help only).",
            "-M, --llm-memory",
            "or paged KV on CPU and Metal. Metal is runtime-capability-gated",
            "and never falls back to CPU",

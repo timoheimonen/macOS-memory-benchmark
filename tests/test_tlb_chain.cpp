@@ -85,41 +85,65 @@ TlbChainDiagnostics expected_chain(size_t page_size, size_t node_count, size_t r
 
 }  // namespace
 
-TEST(TlbChainTest, LayoutSeedDerivationMatchesGoldenValues) {
-  EXPECT_EQ(derive_tlb_chain_layout_seed(42, TlbChainLayout::Spread), 0xea98f6ee088b8b6cULL);
-  EXPECT_EQ(derive_tlb_chain_layout_seed(42, TlbChainLayout::Packed), 0x79f604e46045df73ULL);
-  EXPECT_EQ(derive_tlb_chain_layout_seed(42, TlbChainLayout::Spread),
-            derive_tlb_chain_layout_seed(42, TlbChainLayout::Spread));
-  EXPECT_NE(derive_tlb_chain_layout_seed(42, TlbChainLayout::Spread),
-            derive_tlb_chain_layout_seed(42, TlbChainLayout::Packed));
-  EXPECT_NE(derive_tlb_chain_layout_seed(42, TlbChainLayout::Spread),
-            derive_tlb_chain_layout_seed(43, TlbChainLayout::Spread));
-}
+TEST(TlbChainTest, LayoutSeedDerivationAndTraversalDeterminism) {
+  {
+    SCOPED_TRACE("layout seed goldens");
+    EXPECT_EQ(derive_tlb_chain_layout_seed(42, TlbChainLayout::Spread), 0xea98f6ee088b8b6cULL);
+    EXPECT_EQ(derive_tlb_chain_layout_seed(42, TlbChainLayout::Packed), 0x79f604e46045df73ULL);
+    EXPECT_EQ(derive_tlb_chain_layout_seed(42, TlbChainLayout::Spread),
+              derive_tlb_chain_layout_seed(42, TlbChainLayout::Spread));
+    EXPECT_NE(derive_tlb_chain_layout_seed(42, TlbChainLayout::Spread),
+              derive_tlb_chain_layout_seed(42, TlbChainLayout::Packed));
+    EXPECT_NE(derive_tlb_chain_layout_seed(42, TlbChainLayout::Spread),
+              derive_tlb_chain_layout_seed(43, TlbChainLayout::Spread));
+  }
 
-TEST(TlbChainTest, SpreadVisitsExactlyEveryRequestedPage) {
+  SCOPED_TRACE("same seed reproduces traversal and different seed changes it");
   constexpr size_t page_size = kTestPageSizeBytes;
-  constexpr size_t kRequestedPages = 17;
+  constexpr size_t kRequestedPages = 32;
   PageBuffer buffer(kRequestedPages * page_size);
   ASSERT_NE(buffer.get(), nullptr);
 
-  const TlbChainBuildResult result =
-      build_tlb_chain(buffer.get(), buffer.size(), kRequestedPages, page_size, 256, TlbChainLayout::Spread,
-                      TlbChainTraversalPolicy::RandomPagesRandomOffsets, 1234);
+  auto build_offsets = [&](uint64_t seed) {
+    const TlbChainBuildResult result =
+        build_tlb_chain(buffer.get(), buffer.size(), kRequestedPages, page_size, 128, TlbChainLayout::Spread,
+                        TlbChainTraversalPolicy::RandomPagesRandomOffsets, seed);
+    EXPECT_EQ(result.status, TlbChainBuildStatus::Success);
+    return traversal_offsets(buffer.get(), result.chain_head, kRequestedPages);
+  };
 
-  ASSERT_EQ(result.status, TlbChainBuildStatus::Success);
-  EXPECT_NE(result.chain_head, nullptr);
-  EXPECT_TRUE(result.diagnostics.integrity_verified);
-  EXPECT_EQ(result.diagnostics.requested_pages, kRequestedPages);
-  EXPECT_EQ(result.diagnostics.actual_pages, kRequestedPages);
-  EXPECT_EQ(result.diagnostics.node_count, kRequestedPages);
-  EXPECT_EQ(result.diagnostics.unique_cache_lines, kRequestedPages);
-  EXPECT_EQ(result.diagnostics.max_nodes_per_page, 1U);
-  EXPECT_EQ(validate_tlb_chain(buffer.get(), buffer.size(), result.chain_head, result.diagnostics),
-            TlbChainValidationStatus::Valid);
+  const std::vector<size_t> first = build_offsets(9001);
+  const std::vector<size_t> repeated = build_offsets(9001);
+  const std::vector<size_t> different = build_offsets(9002);
+  EXPECT_EQ(first, repeated);
+  EXPECT_NE(first, different);
 }
 
-TEST(TlbChainTest, PackedControlPreservesNodeAndCacheLineCounts) {
+TEST(TlbChainTest, SpreadAndPackedLayoutsPreservePagesNodesAndCacheLines) {
   constexpr size_t page_size = kTestPageSizeBytes;
+  {
+    SCOPED_TRACE("spread visits every requested page");
+    constexpr size_t kRequestedPages = 17;
+    PageBuffer buffer(kRequestedPages * page_size);
+    ASSERT_NE(buffer.get(), nullptr);
+
+    const TlbChainBuildResult result =
+        build_tlb_chain(buffer.get(), buffer.size(), kRequestedPages, page_size, 256, TlbChainLayout::Spread,
+                        TlbChainTraversalPolicy::RandomPagesRandomOffsets, 1234);
+
+    ASSERT_EQ(result.status, TlbChainBuildStatus::Success);
+    EXPECT_NE(result.chain_head, nullptr);
+    EXPECT_TRUE(result.diagnostics.integrity_verified);
+    EXPECT_EQ(result.diagnostics.requested_pages, kRequestedPages);
+    EXPECT_EQ(result.diagnostics.actual_pages, kRequestedPages);
+    EXPECT_EQ(result.diagnostics.node_count, kRequestedPages);
+    EXPECT_EQ(result.diagnostics.unique_cache_lines, kRequestedPages);
+    EXPECT_EQ(result.diagnostics.max_nodes_per_page, 1U);
+    EXPECT_EQ(validate_tlb_chain(buffer.get(), buffer.size(), result.chain_head, result.diagnostics),
+              TlbChainValidationStatus::Valid);
+  }
+
+  SCOPED_TRACE("packed control preserves node and cache line counts");
   constexpr size_t kRequestedPages = 65;
   PageBuffer buffer(kRequestedPages * page_size);
   ASSERT_NE(buffer.get(), nullptr);
@@ -155,61 +179,40 @@ TEST(TlbChainTest, PackedControlPreservesNodeAndCacheLineCounts) {
   EXPECT_EQ(page_stride_packed.diagnostics.effective_node_spacing_bytes, 64U);
 }
 
-TEST(TlbChainTest, SameSeedReproducesTraversalAndDifferentSeedChangesIt) {
-  constexpr size_t page_size = kTestPageSizeBytes;
-  constexpr size_t kRequestedPages = 32;
-  PageBuffer buffer(kRequestedPages * page_size);
-  ASSERT_NE(buffer.get(), nullptr);
+TEST(TlbChainTest, ValidationRejectsInvalidArgumentsOutOfBoundsAndCorruptedChains) {
+  {
+    SCOPED_TRACE("invalid arguments before traversal");
+    PageBuffer buffer(kTestPageSizeBytes);
+    ASSERT_NE(buffer.get(), nullptr);
+    const TlbChainDiagnostics expected = expected_chain(kTestPageSizeBytes, 1, 1);
 
-  auto build_offsets = [&](uint64_t seed) {
+    EXPECT_EQ(validate_tlb_chain(nullptr, buffer.size(), buffer.get(), expected),
+              TlbChainValidationStatus::InvalidArgument);
+    EXPECT_EQ(validate_tlb_chain(buffer.get(), buffer.size(), nullptr, expected),
+              TlbChainValidationStatus::InvalidArgument);
+    TlbChainDiagnostics zero_nodes = expected;
+    zero_nodes.node_count = 0;
+    EXPECT_EQ(validate_tlb_chain(buffer.get(), buffer.size(), buffer.get(), zero_nodes),
+              TlbChainValidationStatus::InvalidArgument);
+  }
+
+  {
+    SCOPED_TRACE("pointer outside buffer");
+    constexpr size_t kRequestedPages = 8;
+    PageBuffer buffer(kRequestedPages * kTestPageSizeBytes);
+    ASSERT_NE(buffer.get(), nullptr);
+
     const TlbChainBuildResult result =
-        build_tlb_chain(buffer.get(), buffer.size(), kRequestedPages, page_size, 128, TlbChainLayout::Spread,
-                        TlbChainTraversalPolicy::RandomPagesRandomOffsets, seed);
-    EXPECT_EQ(result.status, TlbChainBuildStatus::Success);
-    return traversal_offsets(buffer.get(), result.chain_head, kRequestedPages);
-  };
+        build_tlb_chain(buffer.get(), buffer.size(), kRequestedPages, kTestPageSizeBytes, 64, TlbChainLayout::Spread,
+                        TlbChainTraversalPolicy::RandomPagesRandomOffsets, 55);
+    ASSERT_EQ(result.status, TlbChainBuildStatus::Success);
 
-  const std::vector<size_t> first = build_offsets(9001);
-  const std::vector<size_t> repeated = build_offsets(9001);
-  const std::vector<size_t> different = build_offsets(9002);
-  EXPECT_EQ(first, repeated);
-  EXPECT_NE(first, different);
-}
+    const uintptr_t outside = reinterpret_cast<uintptr_t>(buffer.get()) + buffer.size();
+    std::memcpy(result.chain_head, &outside, sizeof(outside));
+    EXPECT_EQ(validate_tlb_chain(buffer.get(), buffer.size(), result.chain_head, result.diagnostics),
+              TlbChainValidationStatus::NodeOutOfBounds);
+  }
 
-TEST(TlbChainTest, ValidationRejectsPointerOutsideBuffer) {
-  constexpr size_t page_size = kTestPageSizeBytes;
-  constexpr size_t kRequestedPages = 8;
-  PageBuffer buffer(kRequestedPages * page_size);
-  ASSERT_NE(buffer.get(), nullptr);
-
-  const TlbChainBuildResult result =
-      build_tlb_chain(buffer.get(), buffer.size(), kRequestedPages, page_size, 64, TlbChainLayout::Spread,
-                      TlbChainTraversalPolicy::RandomPagesRandomOffsets, 55);
-  ASSERT_EQ(result.status, TlbChainBuildStatus::Success);
-
-  const uintptr_t outside = reinterpret_cast<uintptr_t>(buffer.get()) + buffer.size();
-  std::memcpy(result.chain_head, &outside, sizeof(outside));
-  EXPECT_EQ(validate_tlb_chain(buffer.get(), buffer.size(), result.chain_head, result.diagnostics),
-            TlbChainValidationStatus::NodeOutOfBounds);
-}
-
-TEST(TlbChainTest, ValidationReportsInvalidArgumentBeforeTraversal) {
-  constexpr size_t page_size = kTestPageSizeBytes;
-  PageBuffer buffer(page_size);
-  ASSERT_NE(buffer.get(), nullptr);
-  const TlbChainDiagnostics expected = expected_chain(page_size, 1, 1);
-
-  EXPECT_EQ(validate_tlb_chain(nullptr, buffer.size(), buffer.get(), expected),
-            TlbChainValidationStatus::InvalidArgument);
-  EXPECT_EQ(validate_tlb_chain(buffer.get(), buffer.size(), nullptr, expected),
-            TlbChainValidationStatus::InvalidArgument);
-  TlbChainDiagnostics zero_nodes = expected;
-  zero_nodes.node_count = 0;
-  EXPECT_EQ(validate_tlb_chain(buffer.get(), buffer.size(), buffer.get(), zero_nodes),
-            TlbChainValidationStatus::InvalidArgument);
-}
-
-TEST(TlbChainTest, ValidationReportsExactCorruptionReasons) {
   struct CorruptionCase {
     const char* name;
     size_t allocation_pages;
@@ -269,27 +272,27 @@ TEST(TlbChainTest, ValidationReportsExactCorruptionReasons) {
   }
 }
 
-TEST(TlbChainTest, RejectsInvalidStrideAndInsufficientSpreadBuffer) {
+TEST(TlbChainTest, StrideValidationAcceptsAlignedNonDivisorAndRejectsInvalidInputs) {
   constexpr size_t page_size = kTestPageSizeBytes;
-  PageBuffer buffer(4 * page_size);
-  ASSERT_NE(buffer.get(), nullptr);
+  {
+    PageBuffer buffer(4 * page_size);
+    ASSERT_NE(buffer.get(), nullptr);
+    const struct { const char* name; size_t pages; size_t stride; TlbChainLayout layout; TlbChainBuildStatus status; }
+    invalid_cases[] = {
+        {"unaligned stride", 4, 10, TlbChainLayout::Spread, TlbChainBuildStatus::InvalidArgument},
+        {"unknown layout", 4, 64, static_cast<TlbChainLayout>(99), TlbChainBuildStatus::InvalidArgument},
+        {"insufficient spread buffer", 5, 64, TlbChainLayout::Spread, TlbChainBuildStatus::InsufficientBuffer},
+    };
+    for (const auto& entry : invalid_cases) {
+      SCOPED_TRACE(entry.name);
+      EXPECT_EQ(build_tlb_chain(buffer.get(), buffer.size(), entry.pages, page_size, entry.stride, entry.layout,
+                                TlbChainTraversalPolicy::RandomPagesRandomOffsets, 1)
+                    .status,
+                entry.status);
+    }
+  }
 
-  EXPECT_EQ(build_tlb_chain(buffer.get(), buffer.size(), 4, page_size, 10, TlbChainLayout::Spread,
-                            TlbChainTraversalPolicy::RandomPagesRandomOffsets, 1)
-                .status,
-            TlbChainBuildStatus::InvalidArgument);
-  EXPECT_EQ(build_tlb_chain(buffer.get(), buffer.size(), 4, page_size, 64, static_cast<TlbChainLayout>(99),
-                            TlbChainTraversalPolicy::RandomPagesRandomOffsets, 1)
-                .status,
-            TlbChainBuildStatus::InvalidArgument);
-  EXPECT_EQ(build_tlb_chain(buffer.get(), buffer.size(), 5, page_size, 64, TlbChainLayout::Spread,
-                            TlbChainTraversalPolicy::RandomPagesRandomOffsets, 1)
-                .status,
-            TlbChainBuildStatus::InsufficientBuffer);
-}
-
-TEST(TlbChainTest, AcceptsAlignedStrideThatDoesNotDividePage) {
-  constexpr size_t page_size = kTestPageSizeBytes;
+  SCOPED_TRACE("aligned stride not dividing page");
   PageBuffer buffer(8 * page_size);
   ASSERT_NE(buffer.get(), nullptr);
   ASSERT_EQ(136U % alignof(uintptr_t), 0U);

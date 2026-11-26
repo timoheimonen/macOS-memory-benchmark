@@ -58,54 +58,37 @@ TEST(PatternValidationTest, RandomIndicesAcceptEveryAlignedExactlyFittingAccess)
   EXPECT_TRUE(validate_random_indices({0, kAccess, 2 * kAccess}, 3 * kAccess));
 }
 
-TEST(PatternValidationTest, RandomIndicesRejectEmptyInputWithCentralizedReason) {
-  bool result = true;
-  const std::string output = capture_stderr([&] {
-    result = validate_random_indices({}, 1024);
-  });
+TEST(PatternValidationTest, RandomIndicesRejectEmptyMisalignedOutOfBoundsAndLateErrors) {
+  constexpr size_t kSmallBuffer = 64;
+  constexpr size_t kFormerSamplingLimit = 100;
+  constexpr size_t kSizeMax = std::numeric_limits<size_t>::max();
+  std::vector<size_t> late_invalid(kFormerSamplingLimit + 1, 0);
+  late_invalid.back() = kSizeMax;
 
-  EXPECT_FALSE(result);
-  EXPECT_EQ(output, Messages::error_prefix() + Messages::error_indices_empty() + "\n");
-}
+  struct RejectionCase {
+    const char* name;
+    std::vector<size_t> indices;
+    size_t buffer_size;
+    std::string expected_message;
+  };
+  const std::vector<RejectionCase> cases = {
+      {"empty input", {}, 1024, Messages::error_indices_empty()},
+      {"misaligned offset", {0, 1}, 1024, Messages::error_index_not_aligned(1, 1)},
+      {"exactly past end", {kSmallBuffer}, kSmallBuffer,
+       Messages::error_index_out_of_bounds(0, kSmallBuffer, kSmallBuffer)},
+      {"size_t max overflow", {kSizeMax}, kSmallBuffer, Messages::error_index_out_of_bounds(0, kSizeMax, kSmallBuffer)},
+      {"beyond former sampling limit", late_invalid, 1024,
+       Messages::error_index_out_of_bounds(late_invalid.size() - 1, kSizeMax, 1024)},
+  };
 
-TEST(PatternValidationTest, RandomIndicesRejectMisalignedOffsetWithExactIndex) {
-  bool result = true;
-  const std::string output = capture_stderr([&] {
-    result = validate_random_indices({0, 1}, 1024);
-  });
-
-  EXPECT_FALSE(result);
-  EXPECT_EQ(output, Messages::error_prefix() + Messages::error_index_not_aligned(1, 1) + "\n");
-}
-
-TEST(PatternValidationTest, RandomIndicesRejectExactlyPastEndAndSizeMaxWithoutOverflow) {
-  constexpr size_t kBufferSize = 64;
-  for (const size_t offset : {kBufferSize, std::numeric_limits<size_t>::max()}) {
+  for (const RejectionCase& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
     bool result = true;
     const std::string output = capture_stderr([&] {
-      result = validate_random_indices({offset}, kBufferSize);
+      result = validate_random_indices(test_case.indices, test_case.buffer_size);
     });
 
     EXPECT_FALSE(result);
-    EXPECT_EQ(output, Messages::error_prefix() +
-                          Messages::error_index_out_of_bounds(0, offset, kBufferSize) + "\n");
+    EXPECT_EQ(output, Messages::error_prefix() + test_case.expected_message + "\n");
   }
-}
-
-TEST(PatternValidationTest, RandomIndicesValidateItemsBeyondFormerSamplingLimit) {
-  constexpr size_t kFormerSamplingLimit = 100;
-  std::vector<size_t> indices(kFormerSamplingLimit + 1, 0);
-  indices.back() = std::numeric_limits<size_t>::max();
-
-  bool result = true;
-  const std::string output = capture_stderr([&] {
-    result = validate_random_indices(indices, 1024);
-  });
-
-  EXPECT_FALSE(result);
-  const size_t invalid_index = indices.size() - 1;
-  EXPECT_EQ(output, Messages::error_prefix() +
-                        Messages::error_index_out_of_bounds(
-                            invalid_index, indices.back(), 1024) +
-                        "\n");
 }

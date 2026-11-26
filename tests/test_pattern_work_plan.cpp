@@ -32,48 +32,53 @@ PatternWorkPlan build_plan(size_t buffer_size, size_t stride, int threads, int b
 
 }  // namespace
 
-TEST(PatternWorkPlanTest, RejectsInvalidParameters) {
-  EXPECT_EQ(build_plan(4096, 0, 1).status, PatternMeasurementStatus::Invalid);
-  EXPECT_EQ(build_plan(4096, 64, 0).status, PatternMeasurementStatus::Invalid);
-  EXPECT_EQ(build_plan(4096, 64, 1, 0).status, PatternMeasurementStatus::Invalid);
-}
-
-TEST(PatternWorkPlanTest, IncludesLastExactlyFittingAccess) {
-  const size_t buffer_size = Constants::PATTERN_STRIDE_PAGE + Constants::PATTERN_ACCESS_SIZE_BYTES;
-  const PatternWorkPlan plan = build_plan(buffer_size, Constants::PATTERN_STRIDE_PAGE, 1);
-
-  ASSERT_EQ(plan.status, PatternMeasurementStatus::Measured);
-  ASSERT_EQ(plan.workers.size(), 1u);
-  EXPECT_EQ(plan.workers[0].span_bytes, buffer_size);
-  EXPECT_EQ(plan.workers[0].accesses_per_pass, 2u);
-  EXPECT_EQ(plan.accesses_per_pass, 2u);
-  EXPECT_EQ(plan.min_accesses_per_pass, 2u);
-  EXPECT_EQ(plan.max_accesses_per_pass, 2u);
-  EXPECT_EQ(plan.payload_bytes_per_pass, 2u * Constants::PATTERN_ACCESS_SIZE_BYTES);
-}
-
-TEST(PatternWorkPlanTest, PartitionsUnevenBuffersAndReducesThreadsUntilEveryWorkerHasTransition) {
-  struct SplitCase {
-    size_t bytes;
-    size_t stride;
-    int requested;
-    int effective;
+TEST(PatternWorkPlanTest, RejectsInvalidParametersAndPassCountBeyondExecutorLimit) {
+  const struct {
+    const char* name; size_t buffer_size; size_t stride; int threads; int base_passes; size_t min_payload;
+  } cases[] = {
+      {"zero stride", 4096, 0, 1, 1, 0},
+      {"zero threads", 4096, 64, 0, 1, 0},
+      {"zero passes", 4096, 64, 1, 0, 0},
+      {"pass count beyond executor limit", Constants::PATTERN_STRIDE_CACHE_LINE + Constants::PATTERN_ACCESS_SIZE_BYTES,
+       Constants::PATTERN_STRIDE_CACHE_LINE, 1, 1, std::numeric_limits<size_t>::max()},
   };
-  for (const SplitCase& entry :
-       {SplitCase{8 * Constants::BYTES_PER_MB, Constants::PATTERN_STRIDE_SUPERPAGE_2MB, 10, 3},
-        SplitCase{7 * Constants::BYTES_PER_MB + 123, Constants::PATTERN_STRIDE_PAGE_16K, 4, 4}}) {
-    SCOPED_TRACE(entry.bytes);
-    const size_t buffer_size = entry.bytes;
-    const PatternWorkPlan plan = build_plan(buffer_size, entry.stride, entry.requested);
+  for (const auto& entry : cases) {
+    SCOPED_TRACE(entry.name);
+    const PatternWorkPlan plan =
+        build_plan(entry.buffer_size, entry.stride, entry.threads, entry.base_passes, entry.min_payload);
+    EXPECT_EQ(plan.status, PatternMeasurementStatus::Invalid);
+    EXPECT_TRUE(plan.workers.empty());
+  }
+}
 
+TEST(PatternWorkPlanTest, BuildsStridedPlansWithExactTailPartitioningAndPayloadAccounting) {
+  {
+    SCOPED_TRACE("includes last exactly fitting access");
+    const size_t buffer_size = Constants::PATTERN_STRIDE_PAGE + Constants::PATTERN_ACCESS_SIZE_BYTES;
+    const PatternWorkPlan plan = build_plan(buffer_size, Constants::PATTERN_STRIDE_PAGE, 1);
+    ASSERT_EQ(plan.status, PatternMeasurementStatus::Measured);
+    ASSERT_EQ(plan.workers.size(), 1u);
+    EXPECT_EQ(plan.workers[0].span_bytes, buffer_size);
+    EXPECT_EQ(plan.workers[0].accesses_per_pass, 2u);
+    EXPECT_EQ(plan.accesses_per_pass, 2u);
+    EXPECT_EQ(plan.min_accesses_per_pass, 2u);
+    EXPECT_EQ(plan.max_accesses_per_pass, 2u);
+    EXPECT_EQ(plan.payload_bytes_per_pass, 2u * Constants::PATTERN_ACCESS_SIZE_BYTES);
+  }
+
+  const struct { size_t bytes; size_t stride; int requested; int effective; } splits[] = {
+      {8 * Constants::BYTES_PER_MB, Constants::PATTERN_STRIDE_SUPERPAGE_2MB, 10, 3},
+      {7 * Constants::BYTES_PER_MB + 123, Constants::PATTERN_STRIDE_PAGE_16K, 4, 4},
+  };
+  for (const auto& entry : splits) {
+    SCOPED_TRACE(entry.bytes);
+    const PatternWorkPlan plan = build_plan(entry.bytes, entry.stride, entry.requested);
     ASSERT_EQ(plan.status, PatternMeasurementStatus::Measured);
     EXPECT_EQ(plan.requested_threads, entry.requested);
     EXPECT_EQ(plan.effective_threads, entry.effective);
     ASSERT_EQ(plan.workers.size(), static_cast<size_t>(entry.effective));
 
-    size_t next_offset = 0;
-    size_t summed_accesses = 0;
-    size_t summed_payload = 0;
+    size_t next_offset = 0, summed_accesses = 0, summed_payload = 0;
     for (const PatternWorkerRange& worker : plan.workers) {
       EXPECT_EQ(worker.offset_bytes, next_offset);
       EXPECT_GE(worker.accesses_per_pass, 2u);
@@ -81,18 +86,16 @@ TEST(PatternWorkPlanTest, PartitionsUnevenBuffersAndReducesThreadsUntilEveryWork
       summed_accesses += worker.accesses_per_pass;
       summed_payload += worker.payload_bytes_per_pass;
     }
-    EXPECT_EQ(next_offset, buffer_size);
+    EXPECT_EQ(next_offset, entry.bytes);
     EXPECT_EQ(summed_accesses, plan.accesses_per_pass);
     EXPECT_EQ(summed_payload, plan.payload_bytes_per_pass);
     if (entry.requested == 10) EXPECT_EQ(plan.accesses_per_pass, 6u);
   }
-}
 
-TEST(PatternWorkPlanTest, UsesFinalWorkerCountsForPayloadAccounting) {
+  SCOPED_TRACE("uses final worker counts for payload accounting");
   const size_t minimum_payload = 256 * Constants::BYTES_PER_MB;
   const PatternWorkPlan plan = build_plan(512 * Constants::BYTES_PER_MB, Constants::PATTERN_STRIDE_SUPERPAGE_2MB, 10,
                                           Constants::DEFAULT_ITERATIONS, minimum_payload);
-
   ASSERT_EQ(plan.status, PatternMeasurementStatus::Measured);
   EXPECT_EQ(plan.effective_threads, 10);
   EXPECT_EQ(plan.accesses_per_pass, 260u);
@@ -102,15 +105,11 @@ TEST(PatternWorkPlanTest, UsesFinalWorkerCountsForPayloadAccounting) {
   ASSERT_GT(plan.passes, 1u);
   ASSERT_TRUE(set_strided_pattern_passes(previous, plan.passes - 1));
   EXPECT_LT(previous.total_payload_bytes, minimum_payload);
-}
 
-TEST(PatternWorkPlanTest, RejectsPassCountBeyondExecutorLimit) {
-  const PatternWorkPlan plan =
-      build_plan(Constants::PATTERN_STRIDE_CACHE_LINE + Constants::PATTERN_ACCESS_SIZE_BYTES,
-                 Constants::PATTERN_STRIDE_CACHE_LINE, 1, 1, std::numeric_limits<size_t>::max());
-
-  EXPECT_EQ(plan.status, PatternMeasurementStatus::Invalid);
-  EXPECT_TRUE(plan.workers.empty());
+  EXPECT_EQ(calculate_pattern_pilot_passes(1024, 4096, 100), 4u);
+  EXPECT_EQ(calculate_pattern_pilot_passes(0, 4096, 100), 0u);
+  EXPECT_EQ(calculate_pattern_calibrated_passes(0.05, 4, 0.20, 1, 100), 16u);
+  EXPECT_EQ(calculate_pattern_calibrated_passes(0.0, 4, 0.20, 1, 100), 0u);
 }
 
 TEST(PatternWorkPlanTest, SerializesMeasurementStatus) {
@@ -120,43 +119,51 @@ TEST(PatternWorkPlanTest, SerializesMeasurementStatus) {
   EXPECT_STREQ(pattern_measurement_status_to_string(PatternMeasurementStatus::Invalid), "invalid");
 }
 
-TEST(PatternWorkPlanTest, PartitionsRandomIndicesBeforeMeasurement) {
-  const std::vector<size_t> global_indices = {0, 96, 128, 224, 225, 256};
-  const std::vector<PatternRandomWorkerIndices> workers =
-      build_random_worker_indices(256, Constants::PATTERN_ACCESS_SIZE_BYTES, 2, global_indices);
+TEST(PatternWorkPlanTest, PartitionsRandomIndicesAndRejectsInvalidParameters) {
+  {
+    SCOPED_TRACE("valid two-worker partition");
+    const std::vector<size_t> global_indices = {0, 96, 128, 224, 225, 256};
+    const std::vector<PatternRandomWorkerIndices> workers =
+        build_random_worker_indices(256, Constants::PATTERN_ACCESS_SIZE_BYTES, 2, global_indices);
+    ASSERT_EQ(workers.size(), 2u);
+    EXPECT_EQ(workers[0].offset_bytes, 0u);
+    EXPECT_EQ(workers[0].span_bytes, 128u);
+    EXPECT_EQ(workers[0].indices, (std::vector<size_t>{0, 96}));
+    EXPECT_EQ(workers[1].offset_bytes, 128u);
+    EXPECT_EQ(workers[1].span_bytes, 128u);
+    EXPECT_EQ(workers[1].indices, (std::vector<size_t>{0, 96}));
+  }
 
-  ASSERT_EQ(workers.size(), 2u);
-  EXPECT_EQ(workers[0].offset_bytes, 0u);
-  EXPECT_EQ(workers[0].span_bytes, 128u);
-  EXPECT_EQ(workers[0].indices, (std::vector<size_t>{0, 96}));
-  EXPECT_EQ(workers[1].offset_bytes, 128u);
-  EXPECT_EQ(workers[1].span_bytes, 128u);
-  EXPECT_EQ(workers[1].indices, (std::vector<size_t>{0, 96}));
-}
-
-TEST(PatternWorkPlanTest, RejectsInvalidRandomPartitionParameters) {
   const std::vector<size_t> indices = {0, 32};
-  EXPECT_TRUE(build_random_worker_indices(64, 0, 1, indices).empty());
-  EXPECT_TRUE(build_random_worker_indices(64, 32, 0, indices).empty());
-  EXPECT_TRUE(build_random_worker_indices(16, 32, 1, indices).empty());
+  const struct { const char* name; size_t buffer_size; size_t access_size; int threads; } invalid_cases[] = {
+      {"zero access size", 64, 0, 1},
+      {"zero threads", 64, 32, 0},
+      {"buffer smaller than access size", 16, 32, 1},
+  };
+  for (const auto& entry : invalid_cases) {
+    SCOPED_TRACE(entry.name);
+    EXPECT_TRUE(build_random_worker_indices(entry.buffer_size, entry.access_size, entry.threads, indices).empty());
+  }
 }
 
-TEST(PatternWorkPlanTest, RotatesPhaseAndCountsEveryAccessExactly) {
-  PatternWorkPlan plan = build_plan(Constants::PATTERN_STRIDE_CACHE_LINE + Constants::PATTERN_ACCESS_SIZE_BYTES,
-                                    Constants::PATTERN_STRIDE_CACHE_LINE, 1);
-  ASSERT_TRUE(set_strided_pattern_passes(plan, 3));
+TEST(PatternWorkPlanTest, PhaseRotationCountsAccessesAndCoversFullSparseCycle) {
+  {
+    SCOPED_TRACE("partial phase rotation");
+    PatternWorkPlan plan = build_plan(Constants::PATTERN_STRIDE_CACHE_LINE + Constants::PATTERN_ACCESS_SIZE_BYTES,
+                                      Constants::PATTERN_STRIDE_CACHE_LINE, 1);
+    ASSERT_TRUE(set_strided_pattern_passes(plan, 3));
 
-  EXPECT_EQ(plan.phase_period_passes, 2u);
-  EXPECT_EQ(plan.total_accesses, 5u);
-  EXPECT_EQ(plan.total_payload_bytes, 5u * Constants::PATTERN_ACCESS_SIZE_BYTES);
-  EXPECT_EQ(plan.distinct_address_count, 3u);
-  EXPECT_EQ(plan.logical_working_set_bytes, 96u);
-  EXPECT_EQ(plan.completed_phase_cycles, 1u);
-  EXPECT_EQ(plan.min_accesses_per_pass, 1u);
-  EXPECT_EQ(plan.max_accesses_per_pass, 2u);
-}
+    EXPECT_EQ(plan.phase_period_passes, 2u);
+    EXPECT_EQ(plan.total_accesses, 5u);
+    EXPECT_EQ(plan.total_payload_bytes, 5u * Constants::PATTERN_ACCESS_SIZE_BYTES);
+    EXPECT_EQ(plan.distinct_address_count, 3u);
+    EXPECT_EQ(plan.logical_working_set_bytes, 96u);
+    EXPECT_EQ(plan.completed_phase_cycles, 1u);
+    EXPECT_EQ(plan.min_accesses_per_pass, 1u);
+    EXPECT_EQ(plan.max_accesses_per_pass, 2u);
+  }
 
-TEST(PatternWorkPlanTest, FullSparsePhaseCycleCoversAlignedBufferSlots) {
+  SCOPED_TRACE("full sparse phase cycle");
   const size_t buffer_size = 8 * Constants::BYTES_PER_MB;
   PatternWorkPlan plan = build_plan(buffer_size, Constants::PATTERN_STRIDE_SUPERPAGE_2MB, 10);
   const size_t phase_period = Constants::PATTERN_STRIDE_SUPERPAGE_2MB / Constants::PATTERN_ACCESS_SIZE_BYTES;

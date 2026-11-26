@@ -72,22 +72,30 @@ Recommendation:
 
 Main orchestration (`main.cpp`) follows this pipeline:
 
-`select_primary_benchmark_mode` scans all mode flags before mode-specific parsing, so a command containing multiple
-primary modes
-fails deterministically instead of being routed by the first token. Core-to-core uses `CoreToCoreLatencyConfig`; GPU uses
-`GpuBandwidthConfig`; LLM-memory uses `LlmMemoryConfig`; TLB uses a dedicated branch that populates `BenchmarkConfig`.
-GPU and LLM-memory are dispatched before the general timer/parser pipeline and never call general CPU config validation
-or buffer/access derivation. The numbered pipeline below
+`select_primary_benchmark_mode` scans all mode flags before mode-specific parsing, skipping one opaque value token for
+every known space-separated value-taking option across all six modes and recognizing `--mode=value`, so a command
+containing multiple primary modes fails deterministically instead of being routed by the first token and flag-shaped
+option values (such as `--benchmark --buffer-size -G` or `--benchmark --sweep -T`) do not trigger false mode conflicts.
+Core-to-core uses `CoreToCoreLatencyConfig`; GPU uses `GpuBandwidthConfig`; LLM-memory uses `LlmMemoryConfig`; TLB uses
+a dedicated branch that populates `BenchmarkConfig`. All six modes share the descriptor-driven CLI option scanner in
+`src/core/config/cli_parser.h` / `.cpp`.
+Running with no arguments (`argc <= 1`) prints help to stdout and exits `0` before timer creation or mode selection.
+`main.cpp` wraps mode selection and argument parsing to contain unexpected exceptions, dispatches GPU and LLM-memory
+before the general pipeline (never calling general CPU config validation or buffer/access derivation), and dispatches
+core-to-core to its dedicated command boundary. The numbered pipeline below
 applies to standard/pattern execution; TLB and general sweeps share its parse, output-session, validation, and
 final-output boundaries before entering their dedicated collectors/coordinators.
 
-1. Create high-resolution total-execution timer.
-2. Parse CLI arguments into `BenchmarkConfig` (`parse_arguments`) and finish human-facing help/no-mode handling.
+1. Parse CLI arguments into `BenchmarkConfig` (`parse_arguments`, single-pass via `parse_cli_options`) and finish
+   human-facing `-h`/`--help` handling before OS sysctl queries, cache detection, seed generation, or timer creation.
+2. Reject modifier-only invocations with no primary mode flag (`validate_config`) before creating `JsonOutputSession`,
+   returning `EXIT_FAILURE` with empty stdout and a centralized stderr error.
 3. Classify the raw output target. Standard/pattern/TLB commands and sweeps using `-` create a command-scoped
    `JsonOutputSession` that routes subsequent human `std::cout` output to stderr while retaining the original stdout
    buffer for final JSON.
-4. Validate configuration (`validate_config`) while the supported machine-output routing is active.
-5. Calculate derived sizes and counts:
+4. Validate configuration (`validate_config`) while the supported machine-output routing is active (including
+   incompatible-option checks, direct-vs-`--sweep` conflict checks, thread capping, and memory limits).
+5. Create high-resolution total-execution timer (when needed for execution) and calculate derived sizes and counts:
    - `calculate_buffer_sizes`
    - `calculate_access_counts` (fallback latency access counts)
    - `calculate_total_allocation_bytes`
@@ -132,26 +140,39 @@ or deterministic paged KV:
 
 1. Scan the complete standalone whitelist, parsing supplied values and rejecting unknown, duplicate, or missing-value
    input even when help is present. Human help returns after that scan but before required/default/platform work.
-2. Require the five common model inputs plus phase-specific decode context or prefill prompt/tile geometry; resolve
-   CPU-by-default, decode-by-default, contiguous-by-default or explicitly paged layout, CPU requested/detected
-   workers when applicable, explicit or automatic work, and one user/generated base seed; run checked geometry and per-scenario
-   work-limit preflight. Paged layout requires exactly one valid block-token size, while contiguous rejects it.
+2. Require the five common model inputs plus phase-specific decode context or prefill prompt/tile geometry (either via
+   direct flags or via compatible repeatable `--sweep` axes); resolve CPU-by-default, decode-by-default,
+   contiguous-by-default or explicitly paged layout, CPU requested/detected workers when applicable, explicit or
+   automatic work, and one user/generated base seed; enforce IEEE-754 `2^53 - 1` JSON safe-integer bounds; and run
+   checked geometry and per-scenario work-limit preflight (for every expanded Cartesian combination when `--sweep` is
+   set). Paged layout requires exactly one valid block-token size (direct or swept), while contiguous rejects it.
    Metal rejects explicit workers; both backends support both phases and layouts.
-3. Classify the raw output target and install one command-scoped `JsonOutputSession` before the runtime banner.
+3. Classify the raw output target (resolving relative file targets against the current working directory via
+   `JsonFilePathPolicy::ResolveAgainstCurrentDirectory`) and install one command-scoped `JsonOutputSession` before the
+   runtime banner. When `--sweep` is active, dispatch `run_llm_memory_sweep`, which prints one runtime banner, enters
+   one command-scoped `BenchmarkSignalMaskGuard`, creates one `HighResTimer`, and delegates to
+   `execute_sweep_plan(SweepNestedMode::LlmMemory, ...)`. Each nested sweep point runs `run_llm_memory_collect` with
+   sweep fields and `output_file` cleared and `collect_json_for_sweep = true`, creating and releasing its own backend
+   and resources within the point, and checkpoints the schema-1 sweep envelope atomically after each attempted run (or
+   emits one terminal envelope to stdout). Direct commands continue through steps 4–8 below.
 4. Request best-effort main-thread QoS, enter `BenchmarkSignalMaskGuard`, and capture CPU/OS/page/cache/available-memory
    plus initial thermal/Low Power Mode evidence.
-5. Create the selected pure-C++ `LlmBackend` factory product. Build a preliminary pointer-free logical work plan and ask
-   the backend and runner for their exact auxiliary backing, then add the conservative JSON DOM/serialization peak for a
-   non-empty output target. Its checked variable-string term includes component/layout identities and all prefill
-   execution/scenario/scope identities. Canonical scenario identities and expected checksums are retained once per
-   distinct plan; runtime evidence scales with planned measurements. Admission includes canonical-plan storage, expected reconstruction transients, accepted-ID
-   maps, exact-statistics workspaces, and the simultaneous DOM/serialization peak. Bounded snapshot frequency does not
-   reduce the single-snapshot peak allowance. Preliminary and finalized plans use the
-   same canonical identity-size formula. Rebuild and admit
-   the final plan with the full page-rounded weight/physical-K/physical-V
-   mappings, paged table and validation transient when applicable, descriptor/planner storage, checksum storage, and
-   orchestration storage included in one peak budget.
-6. Initialize the backend, resolve the plan's exactly one tagged backend execution-plan variant, and prepare resources.
+5. Create the selected pure-C++ `LlmBackend` factory product. Build a preliminary pointer-free logical work plan
+   (`prepare_llm_memory_work_plan`). For Metal, initialize the backend here so runtime `maxBufferLength` and Tier-2
+   argument-encoder sizing feed preflight execution-plan construction before auxiliary estimation. Ask the backend and
+   runner for their exact auxiliary backing, then add the conservative JSON DOM/serialization peak whenever
+   `!output_file.empty() || collect_json_for_sweep`. Its checked variable-string term includes component/layout
+   identities and all prefill execution/scenario/scope identities. Canonical scenario identities and expected checksums
+   are retained once per distinct plan; runtime evidence scales with planned measurements. Admission includes
+   canonical-plan storage, expected reconstruction transients, accepted-ID maps, exact-statistics workspaces, and the
+   simultaneous DOM/serialization peak. Bounded snapshot frequency does not reduce the single-snapshot peak allowance.
+   Preliminary and finalized plans use the same canonical identity-size formula. Rebuild and admit the final plan (for
+   Metal, rebuilding the runtime execution plan with `additional_owned_bytes` covering planner, checksum, and
+   orchestration storage) with the full page-rounded weight/physical-K/physical-V mappings, paged table and validation
+   transient when applicable, descriptor/planner storage, checksum storage, and orchestration storage included in one
+   peak budget.
+6. Initialize the backend (already performed in step 5 for Metal), resolve the plan's exactly one tagged backend
+   execution-plan variant, and prepare resources.
    The CPU adapter creates `HighResTimer`, atomically allocates and initializes/pre-touches the layout-specific mappings,
    materializes and validates the paged table when applicable, materializes the worker-major layout-specific descriptor
    ABI, and binds the matching production ARM64 executor. The Metal adapter probes Apple7/unified-memory/Tier-2/
@@ -194,8 +215,9 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   explicit passes, loop count, raw output target, base seed/source, help state, and exact argv.
 - `--llm-memory` is pre-routed in `main.cpp` and uses separate `LlmMemoryConfig`: resolved backend/phase/layout enums,
   required common and phase-specific model geometry, KV width/batch defaults, nullable requested/detected worker counts,
-  optional exact scenario work
-  units, loop count, raw output target, base seed/source, help state, and exact argv. The immutable
+  optional exact scenario work units, loop count, raw output target, sweep controls (`run_sweep`, `sweep_max_runs`,
+  `sweep_specs`, and internal `collect_json_for_sweep` for nested sweep collection), base seed/source, help state, and
+  exact argv. The immutable
   `LlmMemoryWorkPlan` separately records common phase-applicable geometry, exact model payload/accounted work, memory
   admission, layout metadata, domain seeds, methodology, exact component identities, and exactly one tagged
   backend-execution-plan variant. The CPU alternative owns requested/available/effective workers plus its descriptor
@@ -220,26 +242,72 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 
 ## 6. CLI Parsing and Validation
 
-### 6.1 Parsing behavior (`argument_parser.cpp`)
+### 6.1 Parsing behavior (`cli_parser.cpp`, `mode_selector.cpp`, `argument_parser.cpp`)
 
-- Two-pass parse:
-  - First pass extracts `--cache-size` early.
-  - Second pass parses remaining options.
-- Strict integer parsing uses `std::from_chars`; parser validation may throw internally, but the function boundary
-  converts those failures to return codes.
-- Help (`-h`, `--help`) prints usage and exits successfully.
-- Standard/pattern/TLB output-target classification occurs only after successful parsing and help/no-mode handling.
-  Core-to-core classifies its target after its dedicated combined parse/preflight and help handling; GPU and LLM do the
-  same after their dedicated parser and help handling. For every result-producing direct command and supported CPU
+- Shared descriptor-driven parsing (`src/core/config/cli_parser.h` / `.cpp`):
+  - All six primary modes (`--benchmark`, `--patterns`, `--analyze-tlb`, `--analyze-core2core`, `--gpu-bandwidth`, and
+    `--llm-memory`) share `parse_cli_options` over declarative `CliOptionSpec` tables.
+  - Long options that take values accept both space-separated (`--buffer-size 512`, `--output -`) and inline
+    `--option=value` forms (`--buffer-size=512`, `--output=-`, `--output=`, `--sweep=buffer-size=128,256`). Passing an
+    inline value to a boolean or mode flag (such as `--benchmark=1` or `--help=1`) is rejected as `UnexpectedValue`
+    (`Option --... does not take a value`). Single-dash short options remain space-separated one-character flags; legacy
+    single-dash long names (`-buffersize`) and single-dash inline forms (`-b=512`) are rejected as unknown options.
+  - All single-occurrence options (including primary mode selectors `-B`, `-P`, `-T`, `-C`, `-G`, `-M` and boolean flags
+    `-W`, `-L`, `-u`, `-h`) are uniformly rejected when duplicated across all six modes. Only `-S`/`--sweep` is
+    repeatable (once per distinct parameter key; duplicate keys fail with
+    `Messages::error_duplicate_sweep_parameter`, i.e., `sweep parameter specified more than once: <key>`).
+  - Mode pre-scan (`mode_selector.cpp`) uses `is_known_cli_value_option` and `extract_long_option_name` to skip one
+    opaque following value token for every known space-separated value-taking option across all six modes (so
+    flag-shaped values such as `--benchmark --buffer-size -G` or `--benchmark --sweep -T` route to the active mode and
+    report a value error rather than a false primary-mode conflict) and to route `--mode=value` to that mode for a clean
+    unexpected-value diagnostic.
+  - Every mode parser resets its config struct on entry, guards `argc == 0` and null `argv` entries via
+    `cli_program_name`, emits concise single-line `Error: ...` diagnostics on `stderr` through centralized `Messages::`
+    helpers without dumping full usage text on parse errors, and contains exceptions at parser/command boundaries.
+    Standalone whitelist modes (`--analyze-tlb`, `--analyze-core2core`, `--gpu-bandwidth`, `--llm-memory`) name the
+    offending option explicitly (`Unsupported option '<token>': ...`).
+- Single-pass general/TLB parse (`argument_parser.cpp`):
+  - The redundant `--cache-size` pre-scan pass is removed; options are scanned once via `parse_cli_options`.
+  - Strict integer parsing uses `std::from_chars` with centralized `Messages::reason_*` helpers; `--buffer-size` uses
+    LP64-safe `parse_strict_nonnegative_ulong` covering `[0, ULONG_MAX]` without `long long` truncation.
+  - OS `sysctl` queries, cache detection, seed generation, and thread capping are deferred until after syntactic parsing
+    and `-h`/`--help` handling; thread capping (`warning_threads_capped`) executes in `validate_config`. Standalone TLB
+    parsing honors `ConfigTestHooks` for system information just like the general branch.
+- Uniform `-h`/`--help` and no-mode behavior:
+  - All six modes (including `--analyze-tlb --help`) accept `-h`/`--help`. Across every mode, `--help` still runs full
+    syntactic, whitelist, duplicate, missing-value, and value-parse checks first, and once valid prints human-facing
+    help to stdout and exits `0` before required-option checks, semantic validation, OS queries, timer creation, seed
+    generation, or output-session setup (`--output - --help` and `--help --output -` remain human-facing help to stdout
+    across all six modes).
+  - Running with no arguments (`argc <= 1`) prints help to stdout and exits `0`. Running with modifier options but no
+    primary mode flag fails in validation before output-session setup with `EXIT_FAILURE`, empty stdout, and a
+    centralized stderr error (`error_only_flags_require_benchmark`, `error_seed_requires_supported_mode`, or
+    `error_missing_primary_mode`).
+- Standard/pattern/TLB output-target classification occurs only after successful parsing, `--help`, and primary-mode
+  checks. Core-to-core classifies its target after its dedicated combined parse/preflight and help handling; GPU and LLM
+  do the same after their dedicated parser and help handling. For every result-producing direct command and supported
   sweep, exact `-` is reserved for final stdout JSON. An empty value disables JSON for a direct command and is
-  missing/invalid for a sweep. Every
-  other non-empty value is a file target, including `./-` and flag-shaped names such as `-G`.
+  missing/invalid for a sweep. Every other non-empty value is a file target, including `./-` and flag-shaped names such
+  as `-G`.
 - `--latency-chain-mode` accepts string values and resolves to `LatencyChainMode` enum.
-- `--analyze-tlb` uses an early dedicated parse branch in `argument_parser.cpp`. It only allows optional `--output`, `--latency-stride-bytes`, `--latency-chain-mode`, `--tlb-density`, `--seed`, `--sweep`, and `--sweep-max-runs`. TLB sweep supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`; its default run guard is `16`, and `global-random` chain mode is rejected. One generated or user-provided seed drives the pure sweep planner, seeded cyclic Latin round scheduler, derived task seeds, layout-specific page-native chain permutations, and deterministic convergence bootstrap. Each task measures a verified one-node-per-page spread chain and an equal-cache-line packed control in the same round. A pilot calibrates whole-chain accesses toward the quick/standard/exhaustive target duration; rounds stop at the per-point CI-width target or profile maximum. Candidate buffers are admitted only when their predicted buffer-plus-scratch peak fits the available-memory budget. Full methodology and JSON contract: [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md).
-- `--analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `--output`,
-  `--count`, `--latency-samples`, `--sweep`, `--sweep-max-runs`, and `--help`. Its mode-specific loop default is `3`;
-  the general loop default remains `1`. Core-to-core sweep supports `count` and `latency-samples`, rejects duplicate
-  sweep keys, and atomically checkpoints a real-file combined output after every attempted run; an empty run plan or a
+- `--analyze-tlb` uses a dedicated descriptor-driven parse branch in `argument_parser.cpp`. It only allows optional
+  `--output`, `--latency-stride-bytes`, `--latency-chain-mode`, `--tlb-density`, `--seed`, `--sweep`,
+  `--sweep-max-runs`, and `-h`/`--help`. TLB sweep supports `latency-stride-bytes`, `latency-chain-mode`, and
+  `tlb-density`, rejects combining a direct option with `--sweep` for the same parameter, uses default run guard `16`,
+  and rejects `global-random` chain mode. One generated or user-provided seed drives the pure sweep planner, seeded
+  cyclic Latin round scheduler, derived task seeds, layout-specific page-native chain permutations, and deterministic
+  convergence bootstrap. Each task measures a verified one-node-per-page spread chain and an equal-cache-line packed
+  control in the same round. A pilot calibrates whole-chain accesses toward the quick/standard/exhaustive target
+  duration; rounds stop at the per-point CI-width target or profile maximum. Candidate buffers are admitted only when
+  their predicted buffer-plus-scratch peak fits the available-memory budget. Full methodology and JSON contract:
+  [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md).
+- `--analyze-core2core` uses dedicated mode parsing built on `cli_parser.h` (outside `argument_parser.cpp`) and only
+  allows optional `--output`, `--count`, `--latency-samples`, `--sweep`, `--sweep-max-runs`, and `-h`/`--help`. Its
+  mode-specific loop default is `3`; the general loop default remains `1`. Core-to-core sweep supports `count` and
+  `latency-samples`, rejects duplicate sweep keys via `Messages::error_duplicate_sweep_parameter`, rejects combining a
+  direct option (`--count` or `--latency-samples`) with `--sweep` for the same key via
+  `Messages::error_sweep_option_conflict`, wraps parser execution in exception containment at the command boundary, and
+  atomically checkpoints a real-file combined output after every attempted run; an empty run plan or a
   stop observed before a run checkpoints a terminal zero-attempt envelope. Stdout keeps the same state transitions but
   emits only the terminal envelope. Only a nested `status: "complete"` result with `measurements_complete: true`
   increments `completed_runs`.
@@ -249,44 +317,66 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   measured loops, and participates in a cyclic Latin-square scenario schedule. The result is effective acquire/release
   token-protocol round-trip time, not an isolated physical cache-line migration or coherence-fabric latency. Full
   methodology and JSON schema 2 contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md).
-- `--gpu-bandwidth` uses a dedicated parser outside `argument_parser.cpp`. It accepts only `-G`/`--gpu-bandwidth`,
-  `-b`/`--buffer-size`, `-i`/`--iterations`, `-r`/`--count`, `--seed`, `-o`/`--output`, and
-  `-h`/`--help`. Duplicates, unknown/incompatible options, missing values, partial numeric tokens, non-positive
-  iterations/count, and signed seeds fail before Metal work. Defaults are 512 MB per buffer, three loops, generated
-  seed, and automatic passes. Buffer size must be at least 64 MB; checked MB→bytes overflow and explicit work guardrails
-  are resolved before backend creation. Copy's 2× payload makes its pass limit the strict CLI ceiling shared by all three
-  operations. GPU schema 1 rejects sweep options.
-- `--llm-memory` uses a dedicated parser outside `argument_parser.cpp`. It accepts only `-M`/`--llm-memory`, optional
-  `--llm-memory-backend <cpu|metal>`, the five
+- `--gpu-bandwidth` uses a dedicated parser built on `cli_parser.h` (outside `argument_parser.cpp`). It accepts only
+  `-G`/`--gpu-bandwidth`, `-b`/`--buffer-size`, `-i`/`--iterations`, `-r`/`--count`, `--seed`, `-o`/`--output`, and
+  `-h`/`--help`. Duplicates, unknown/incompatible options (named explicitly), unexpected inline values, missing values,
+  partial numeric tokens, non-positive iterations/count, and signed seeds fail before Metal work. Defaults are 512 MB
+  per buffer, three loops, generated seed, and automatic passes. `--buffer-size` uses LP64-safe `[0, ULONG_MAX]` range
+  parsing before enforcing the 64 MB minimum, checked MB→bytes overflow, and explicit work guardrails before backend
+  creation. Copy's 2× payload makes its pass limit the strict CLI ceiling shared by all three operations. GPU schema 1
+  rejects sweep options.
+- `--llm-memory` uses a dedicated parser built on `cli_parser.h` (outside `argument_parser.cpp`). It accepts only
+  `-M`/`--llm-memory`, optional `--llm-memory-backend <cpu|metal>`, the five
   required weight/layer/head inputs, phase and its context or prompt/tile geometry, optional KV width, batch,
-  `--kv-layout`, `--kv-block-tokens`, threads, iterations, count, seed, output, and help.
-  Duplicate/unknown/incompatible options, missing values, non-complete decimal tokens, zero size/count values, invalid
-  KV widths, invalid query/KV sharing, checked geometry overflow, impossible one-step payloads, and explicit scenario
-  work above the strictest limit fail before output-session creation. Output consumes exactly one opaque raw token.
-  Help still completes the whitelist pass but returns before required/default/preparation work. LLM rejects sweeps and
-  all cache, latency, TLB, pattern, GPU, and non-cacheable modifiers. Defaults are two-byte KV elements, batch one,
-  three loops, automatic per-scenario calibration, one generated nonzero seed, CPU, decode, and
-  contiguous KV. Decode requires positive `--context-tokens` and rejects prefill geometry. Prefill requires positive
-  `--prompt-tokens P` and `--attention-query-tile-tokens Q`, requires `Q <= P`, and rejects decode context.
-  `--kv-layout` accepts `contiguous|paged`. Paged requires exactly one `--kv-block-tokens <G>`; contiguous rejects that
-  option. `G` must be a positive power of two no greater than `UINT32_MAX`, and it may exceed the phase length. The
-  cross-option rules are order-independent. All eight backend/phase/layout combinations are public. CPU and Metal
-  each support decode and prefill with contiguous or paged KV. Metal skips CPU worker
-  detection, rejects explicit threads, and never receives fallback execution.
+  `--kv-layout`, `--kv-block-tokens`, threads, iterations, count, seed, output, `-S`/`--sweep`, `-X`/`--sweep-max-runs`,
+  and help.
+  Duplicate/unknown/incompatible options (named explicitly), unexpected inline values, missing values, non-complete
+  decimal tokens, zero size/count values, invalid KV widths, invalid query/KV sharing, checked geometry overflow,
+  impossible one-step payloads, and explicit scenario work above the strictest limit fail before output-session
+  creation. Output consumes exactly one opaque raw token (space-separated or inline `--output=...`).
+  Help still completes the whitelist pass but returns before required/default/preparation work. All JSON integer
+  configuration fields (`weight_size_mb`, `layer_count`, `query_head_count`, `kv_head_count`, `head_dimension`,
+  `visible_context_tokens`, `prompt_tokens`, `attention_query_tile_tokens`, `kv_block_tokens`, `batch_size`,
+  `requested_workers`, `available_workers`, `iterations`, `loop_count`, and `sweep_max_runs` when sweeping) must fit
+  within IEEE-754 exact safe integers (`<= 2^53 - 1`), and `loop_count <= (2^53 - 1) / 3`. LLM supports repeatable
+  Cartesian sweeps over `context-tokens` (decode), `prompt-tokens` and `attention-query-tile-tokens` (prefill), and
+  `kv-block-tokens` (paged KV), rejecting duplicate sweep keys and direct-flag/sweep conflicts (a swept required
+  parameter satisfies that requirement while forbidding its matching direct flag), requiring non-empty `--output`,
+  enforcing `1 <= run_count <= sweep_max_runs` (default `256`), and preflight-validating every generated run
+  configuration before execution. LLM rejects all cache, latency, TLB, pattern, GPU, and non-cacheable modifiers.
+  Defaults are two-byte KV elements, batch one, three loops, automatic per-scenario calibration, one generated nonzero
+  seed, CPU, decode, and contiguous KV. Decode requires positive `--context-tokens` (or swept `context-tokens`) and
+  rejects prefill geometry. Prefill requires positive `--prompt-tokens P` and `--attention-query-tile-tokens Q` (direct
+  or swept), requires `Q <= P`, and rejects decode context. `--kv-layout` accepts `contiguous|paged`. Paged requires
+  exactly one `--kv-block-tokens <G>` (or swept `kv-block-tokens`); contiguous rejects that option. `G` must be a
+  positive power of two no greater than `UINT32_MAX`, and it may exceed the phase length. The cross-option rules are
+  order-independent. All eight backend/phase/layout combinations are public. CPU and Metal each support decode and
+  prefill with contiguous or paged KV. Metal skips CPU worker detection, rejects explicit threads, and never receives
+  fallback execution.
   Explicit work must fit both the common task guardrails and Metal's 65,536-work-unit dispatch cap for all three
-  scenarios when Metal is selected. Metal prefill additionally rejects an overflowing lane-local serial range-helper
-  count or a count above 1,048,576 before checksum-oracle enumeration or GPU dispatch: contiguous scenarios count all
-  applicable ranges, while paged `weights_only` counts its weight-layer ranges and paged KV-bearing owner kernels report
-  zero serial range visits.
+  scenarios when Metal is selected. Metal paged KV-bearing scenarios (`kv_only`, `mixed`) additionally enforce the
+  268,435,456 semantic-lookup-per-task cap (`LLM_METAL_MAX_PAGED_SEMANTIC_LOOKUPS_PER_TASK`). Metal prefill additionally
+  rejects an overflowing lane-local serial range-helper count or a count above 1,048,576 before checksum-oracle
+  enumeration or GPU dispatch: contiguous scenarios count all applicable ranges, while paged `weights_only` counts its
+  weight-layer ranges and paged KV-bearing owner kernels report zero serial range visits.
 
 ### 6.2 Validation behavior (`config_validator.cpp`)
 
-Validation rejects incompatible flag combinations and invalid value states:
+Validation rejects missing primary modes, incompatible flag combinations, direct-vs-sweep conflicts, and invalid value states:
 
+- Missing primary mode (modifier options without `--benchmark`, `--patterns`, `--analyze-tlb`, `--analyze-core2core`,
+  `--gpu-bandwidth`, or `--llm-memory`): fails with `--seed` mode requirement, `--only-bandwidth`/`--only-latency`
+  benchmark requirement, or `A primary mode option is required (...)`.
 - `--only-bandwidth` and `--only-latency` are mutually exclusive.
-- `--patterns` cannot be combined with `--only-bandwidth` or `--only-latency`.
-- `--only-bandwidth` cannot be combined with `--cache-size` and cannot use latency-sample overrides.
-- `--only-latency` cannot be combined with `--iterations` override.
+- `--patterns` cannot be combined with `--only-bandwidth`, `--only-latency`, `--cache-size`, `--latency-samples`,
+  `--latency-stride-bytes`, `--latency-chain-mode`, or `--latency-tlb-locality-kb`.
+- `--only-bandwidth` cannot be combined with `--cache-size`, `--latency-samples`, `--latency-stride-bytes`,
+  `--latency-chain-mode`, or `--latency-tlb-locality-kb`.
+- `--only-latency` cannot be combined with `--iterations` or `--threads`.
+- Direct option + `--sweep` for the same parameter is rejected uniformly across general (`--benchmark`, `--patterns`)
+  and `--analyze-tlb` sweeps via `Cannot specify both --<opt> and --sweep <key>` (matching core-to-core and LLM modes).
+- Requested thread counts above detected cores are capped here (`warning_threads_capped`, honoring `ConfigTestHooks`)
+  after incompatibility checks pass, avoiding spurious warnings on rejected or `--help` invocations.
 
 Zero-disabling semantics (supported only in `--only-latency`):
 
@@ -381,21 +471,23 @@ metadata. On Apple Silicon, private resources remain allocations in unified syst
 separate VRAM. Partial allocation is released, and `currentAllocatedSize` is captured before allocation, at suite peak,
 and after release.
 
-LLM mode allocates suite-lifetime anonymous private `mmap` regions through its executor: active weights and either
+CPU LLM mode allocates suite-lifetime anonymous private `mmap` regions through its executor: active weights and either
 logical contiguous K/V or full physical paged K/V pools. Paged execution also owns one shared row-major `uint32_t`
 block table. Each mapping is rounded separately to native page granularity for committed-byte accounting, while hot
 descriptors cover exact requested physical lengths. Logical bytes, layout padding, page rounding, table bytes, and
 transient preparation storage remain separate accounting classes. The mappings are regular cacheable memory; the
-standalone whitelist rejects `--non-cacheable`.
+standalone whitelist rejects `--non-cacheable`. Metal LLM mode instead allocates private/shared tracked `MTLBuffer`
+segments as described in Section 13.7. In LLM sweeps, each nested run creates and releases its own backend and
+resources within `run_llm_memory_collect` so consecutive points do not accumulate mappings or Metal buffers.
 
 Allocation is atomic from the caller's perspective. The finalized pointer-free layout is revalidated and the exact
 executor/runner auxiliary backing is re-admitted before the first mapping. Any partial candidate is released and the
 command emits no new result payload on failure. The budget includes mappings, descriptor arrays, retained planner
 templates, paged table plus its bounded bijection-validation bitset, static-reference and expected/actual checksum
 arrays, thread/worker state, result/calibration records, statistics, and orchestration storage. The bitset and other
-preparation transients are released before timed work. With non-empty file/stdout output, orchestration storage includes
-a conservative estimate for one live schema DOM plus serialized transport text; disabled output contributes a valid
-zero estimate.
+preparation transients are released before timed work. With non-empty file/stdout output or nested sweep collection
+(`collect_json_for_sweep`), orchestration storage includes a conservative estimate for one live schema DOM plus
+serialized transport text; disabled direct output contributes a valid zero estimate.
 Workload sizes are rejected rather than silently reduced.
 
 ### 8.2 Best-effort non-cacheable mode
@@ -457,8 +549,8 @@ The `LatencyChainMode` enum (from `src/core/memory/memory_utils.h`) defines four
 - Uses stride-spaced pointer slots across buffer.
 - Requires at least two pointers.
 - Produces a circular linked structure.
-- Supports optional chain diagnostics (pointer count, unique pages touched, page size, stride)
-  when a caller supplies an output object; production benchmark setup does not request them.
+- Exposes both an unseeded overload (using `std::random_device` or a deterministic unit-test hook) and an explicitly
+  seeded overload for reproducible benchmark and analysis chains.
 
 ### 9.3 Randomization Behavior
 
@@ -786,8 +878,12 @@ Contiguous prefill uses a lane-local vector-stripe schedule with no grid-wide ba
 `T * ((weight_active ? L : 0) + (kv_active ? 2 * L * B * (P + C) : 0))` serial range-helper visits. Paged prefill
 `weights_only` executes `T * L`; paged KV-bearing owner kernels report zero serial range visits. The grid evidence
 publishes this checked count as `serial_range_visits_per_lane`; overflow and values above 1,048,576 fail with stable
-planner reasons before the independent CPU oracle or timed command is started. Both Metal prefill methodologies publish the cap, and
-scenario limits divide it by the exact per-operation count before explicit-work validation or automatic calibration.
+planner reasons before the independent CPU oracle or timed command is started. Both Metal prefill methodologies publish
+the cap, and scenario limits divide it by the exact per-operation count before explicit-work validation or automatic
+calibration. Metal paged KV-bearing scenarios (`kv_only`, `mixed`) additionally enforce the 268,435,456 semantic-lookup
+per-task cap (`LLM_METAL_MAX_PAGED_SEMANTIC_LOOKUPS_PER_TASK`), and Metal grid planning enforces the 65,536
+owner-ordinals-per-threadgroup cap (`LLM_METAL_MAX_OWNER_ORDINALS_PER_THREADGROUP`) and 1,048,576
+vector-iterations-per-lane-per-visit cap (`LLM_METAL_MAX_VECTOR_ITERATIONS_PER_LANE_PER_VISIT`).
 
 For paged decode, each logical layer/batch/block owner belongs to exactly one threadgroup under a cyclic grid-stride
 schedule. At each semantic visit one named lane loads the table through `device const volatile uint*`, publishes the
@@ -852,12 +948,13 @@ Valid results publish a versioned canonical identity binding the prefill geometr
 weight shards, assignment boundaries, per-worker costs, and min/max/imbalance evidence. Any validation, overflow, or
 allocation failure publishes no partial assignments, worker vectors, totals, or identity.
 
-Contiguous prefill materializes scenario-specific cost-balanced token ownership, a dedicated descriptor ABI, full-size
-K/V resources, and the `llm_prefill_memory_asm` executor. Paged prefill materializes block-exclusive weighted
-ownership, full physical K/V pools, a read-only uint32 block table and seeded permutation, a distinct descriptor ABI,
-with 48-byte layer and 112-byte block-assignment records, and the `llm_prefill_memory_paged_asm` executor. Both retain
-exact per-scenario worker-cost minimum, maximum, imbalance,
-scope, and execution identities.
+Contiguous prefill materializes scenario-specific cost-balanced token ownership, a dedicated descriptor ABI (48-byte
+layer and 80-byte sequence records), full-size K/V resources, and the `llm_prefill_memory_asm` executor. Paged prefill
+materializes block-exclusive weighted ownership, full physical K/V pools, a read-only uint32 block table and seeded
+permutation, a distinct descriptor ABI with 48-byte layer and 112-byte block-assignment records, and the
+`llm_prefill_memory_paged_asm` executor. (Decode similarly uses 48-byte layer records with 80-byte contiguous sequence
+records or 96-byte paged block-assignment records.) Both prefill profiles retain exact per-scenario worker-cost
+minimum, maximum, imbalance, scope, and execution identities.
 
 For active weights `W`, layers `L`, KV heads `h_kv`, head dimension `d_h`, element bytes `s_kv`, batch `B`, and visible
 context `A` including the current token, define one K or V token record as `R = h_kv*d_h*s_kv`, one layer's paired
@@ -971,7 +1068,10 @@ interpretation contract.
 
 ## 14. Assembly Kernel Layer
 
-Assembly entrypoints are declared in `src/asm/asm_functions.h` and used by benchmark/warmup code:
+Standard, cache, latency, pattern, and core-to-core assembly entrypoints are declared in `src/asm/asm_functions.h` and
+used by benchmark/warmup code, while the four LLM assembly entrypoints (`llm_decode_memory_asm`,
+`llm_decode_memory_paged_asm`, `llm_prefill_memory_asm`, and `llm_prefill_memory_paged_asm`) are declared with
+`extern "C"` in `src/llm_memory/llm_executor.h`:
 
 - Main-memory kernels: read, write, copy (non-temporal stores).
 - Cache kernels: read, write, copy (cache-focused variants).
@@ -1092,8 +1192,9 @@ Console rendering is centralized in `src/output/console` and message helpers in 
 Contract highlights:
 
 - Every successfully started direct mode and parameter sweep emits one shared version, copyright, and GPL banner
-  before mode-specific configuration or status output. Nested sweep runs do not repeat it. Help output and usage
-  diagnostics retain the separate usage preamble; preflight failures do not emit the runtime banner.
+  before mode-specific configuration or status output. Nested sweep runs do not repeat it. Help output retains the
+  separate usage preamble; parse and preflight failures emit concise single-line `Error: ...` diagnostics on stderr
+  without dumping full usage text or the runtime banner.
 - Result-producing CPU benchmark paths print applicable configuration and cache information before execution.
 - Per-loop results are printed in standard mode.
 - Pattern mode prints pattern table-style sections and derived efficiency indicators.
@@ -1111,7 +1212,7 @@ Contract highlights:
 - Aggregate statistics printed when loop count > 1.
 - Errors and warnings use `Messages::error_prefix()` / `Messages::warning_prefix()` conventions.
 - Live progress uses the shared spinner on `stderr` only when it is a TTY; redirected standard and pattern output contains no carriage-return control sequences.
-- For every result-producing direct command or CPU sweep using `--output -`, the output session is installed before
+- For every result-producing direct command or supported sweep using `--output -`, the output session is installed before
   runtime console
   rendering and worker-thread creation. The general standard/pattern/TLB branch installs it before sweep/direct
   validation; core-to-core installs it after its combined parse/preflight; GPU installs it after its dedicated parser
@@ -1124,7 +1225,7 @@ Contract highlights:
 
 JSON writer API (`src/output/json/json_output/json_output.cpp`):
 
-Every result-producing direct mode and the CPU modes' supported sweeps can send their existing payload either to an
+Every result-producing direct mode and supported sweep can send its existing payload either to an
 atomic file target or, for exact raw `-`, to one final stdout document. This transport does not wrap or change the
 measurement schema. [API.md](API.md) is the process-integration contract and support matrix.
 
@@ -1144,22 +1245,27 @@ measurement schema. [API.md](API.md) is the process-integration contract and sup
   `backend_evidence`, memory-budget/calibration evidence, status-bearing generic work-unit measurements, measured-only
   aggregates, and interpretation, plus additive exact traffic, checksum, loop/checkpoint, environment, and warning
   evidence.
-- Sweep envelope schema 1: general and core-to-core producers record `configuration.mode = "sweep"`,
-  `configuration.sweep_schema_version = 1`, `configuration.base_mode`, `configuration.sweep_parameters`, top-level
-  `status`, `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`, plus per-entry
-  `runs[].status`, `status_reason`, and `result`. Every attempted run is retained and
+- Sweep envelope schema 1: general, core-to-core, and LLM-memory producers record `configuration.mode = "sweep"`,
+  `configuration.sweep_schema_version = 1`, `configuration.base_mode`, `configuration.run_count`,
+  `configuration.sweep_max_runs`, `configuration.sweep_parameters`, top-level `status`, `status_reason`,
+  `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`, plus per-entry `runs[].index`,
+  `parameters`, `status`, `status_reason`, and `result`. Every attempted run is retained and
   `attempted_runs == runs.size()`; a file target checkpoints each attempt and also checkpoints a terminal envelope when
   the run plan is empty or a stop is observed before a run, without incrementing `attempted_runs`. Stdout preserves that
   logical cadence but defers serialization until the terminal envelope. `completed_runs` requires current standard
   schema 3 to have nested `configuration.mode: "benchmark"`, `status: "complete"`, `results_complete: true`,
   `conclusions_valid: true`, and a string `configuration.output_file`. Nested standard schema 2 and every other
-  standard schema version are unsupported. Pattern requires nested
-  `status: "complete"` and `results_complete: true` for pattern; `tlb_analysis.status: "complete"` and
-  `tlb_analysis.conclusions_valid: true` for TLB; or
-  `core_to_core_latency.status: "complete"` and `measurements_complete: true` for core-to-core. Partial, interrupted,
-  and failed attempts remain as evidence without incrementing the completed count. TLB's native `status: "error"` maps
-  to a failed attempt while its schema-4 payload is retained without a fabricated nested `status_reason`. The
-  authoritative schema-1 sweep acceptance predicate is exactly
+  standard schema version are unsupported. Pattern requires nested `status: "complete"` and `results_complete: true`;
+  TLB requires `tlb_analysis.status: "complete"` and `tlb_analysis.conclusions_valid: true`; core-to-core requires
+  `core_to_core_latency.status: "complete"` and `measurements_complete: true`; and LLM-memory requires nested
+  `mode: "llm_memory"`, integer `schema_version: 2`, `status: "complete"`, `results_complete: true`,
+  `run_accepted: true`, and a non-empty `measurements` array in which every entry has `status: "measured"`. Partial,
+  interrupted, and failed attempts remain as evidence without incrementing the completed count. TLB's native
+  `status: "error"` and LLM's native `status: "unsupported"` both map to a failed attempt (with LLM preserving its
+  `reason_code`, and TLB retaining its schema-4 payload without a fabricated nested `status_reason`). For LLM sweeps,
+  a pre-initialization `preparation-interrupted` stop records an interrupted attempt with `result: null` and
+  `EXIT_SUCCESS`, while a pre-initialization setup failure records a failed attempt with `result: null` and its stable
+  failure reason. The authoritative schema-1 sweep acceptance predicate is exactly
   `status == "complete" && conclusions_valid == true`. Producers maintain `completed_runs == planned_runs` for an
   envelope satisfying that predicate; consumers may check the equality separately as a defensive consistency check,
   but it is not an additional completeness condition.
@@ -1275,10 +1381,10 @@ an exact software version; schema 2 and unversioned historical standard JSON are
 
 - Schema 2 replaces the unpublished schema-1 contract without compatibility aliases or fallback reading.
 - Required top-level fields are `schema_version`, `mode`, `backend`, `phase`, `kv_layout`, `methodology_version`,
-  `software`, `configuration`, `resolved_plan`, `backend_evidence`, `memory_budget`, `calibration`, `measurements`,
-  `aggregates`, `status`, `reason_code`, `results_complete`, `run_accepted`, `interpretation`, `diagnostic`,
-  `interruption_requested`, `scenario_order_balance_complete`, `seeds`, `counters`, `checkpoint_lifecycle`,
-  `loop_records`, `environment`, `quality_warnings`, and `build_manifest`.
+  `software`, `build_manifest`, `configuration`, `resolved_plan`, `backend_evidence`, `memory_budget`, `calibration`,
+  `measurements`, `aggregates`, `status`, `reason_code`, `results_complete`, `run_accepted`, `interpretation`,
+  `diagnostic`, `interruption_requested`, `scenario_order_balance_complete`, `seeds`, `counters`,
+  `checkpoint_lifecycle`, `loop_records`, `environment`, and `quality_warnings`.
 - Methodology is exactly `llm-memory-v2-<backend>-<phase>-<layout>`. Active identities are
   `llm-memory-v2-cpu-decode-contiguous`, `llm-memory-v2-cpu-decode-paged`,
   `llm-memory-v2-cpu-prefill-contiguous`, `llm-memory-v2-cpu-prefill-paged`,
@@ -1290,7 +1396,10 @@ an exact software version; schema 2 and unversioned historical standard JSON are
   C/prefix-visit counts. Theoretical causal-pair/logical-attention/FMA counts live in `model_context.prefill` as
   decimal strings with individual `*_reason_code: "valid"`, or null with `arithmetic-overflow`. That object is null
   for decode; decode-only crossover and weight/KV-read ratio fields are null for prefill. Admitted paged plans populate
-  block geometry; runtime permutation and combined layout-identity fields remain null when Metal terminates before table preparation. Complete paged results populate them. Contiguous results use
+  block geometry, with `layout.decode_append_offset_in_last_block` serialized as a decimal string for paged decode and
+  `null` for paged prefill (while `resolved_plan.plan_identity` encodes `0` for prefill and `((A - 1) % G) * R` for
+  decode); runtime permutation and combined layout-identity fields remain null when Metal terminates before table
+  preparation. Complete paged results populate them. Contiguous results use
   null for paged-only values. Component identities include logical profile, KV layout, optional permutation, backend
   executor, resource ABI, schedule, timer, buffer, write, checksum, and nullable MSL identities under the canonical
   `llm-memory-components-v1` fixed-order serialization.
@@ -1366,9 +1475,10 @@ an exact software version; schema 2 and unversioned historical standard JSON are
 
 The cold-path `JsonOutputSession` classifies the raw output value before path handling. Exact `-` selects final stdout
 JSON. An empty value disables JSON for a direct command and is missing/invalid for a sweep. Every other non-empty value
-is a file target, including `./-` and flag-shaped names such as `-G`. CPU adapters can resolve relative file targets
-against the current working directory, while modes whose schemas retain the original spelling can preserve the raw
-path. The shared atomic file writer remains sentinel-agnostic.
+is a file target, including `./-` and flag-shaped names such as `-G`. General CPU modes, core-to-core, and LLM resolve
+relative file targets against the current working directory (`JsonFilePathPolicy::ResolveAgainstCurrentDirectory`),
+while GPU retains the raw path (`JsonFilePathPolicy::PreserveRaw`). The shared atomic file writer remains
+sentinel-agnostic.
 
 For a stdout target, the single-owner session retains the original `std::cout` buffer and routes ordinary command output
 to `std::cerr`. Final JSON uses a separate stream backed by the retained buffer, so benchmark formatting state cannot
@@ -1381,10 +1491,11 @@ already-computed measurement state.
 Standard, pattern, and TLB command boundaries select this infrastructure after successful parse/help handling and before
 direct or sweep validation. Core-to-core selects it after its dedicated combined parse/preflight and help handling, but
 before sweep execution, the runtime banner, and worker creation. GPU selects it after its dedicated parser/help path and
-before its banner, QoS, signal scope, and backend factory. LLM selects it before banner, QoS, signal scope, work-plan
-admission, mappings, and workers. Direct pattern, TLB, and core-to-core files receive one atomic final write; standard
-and sweep files retain their existing intermediate checkpoints. GPU files retain terminal-measurement/failure
-checkpoints and their post-release replacement. LLM files snapshot every Kth fully completed loop,
+before its banner, QoS, signal scope, and backend factory. LLM selects it before banner, QoS, signal scope, sweep
+dispatch or direct work-plan admission, mappings, and workers. Direct pattern, TLB, and core-to-core files receive one
+atomic final write; standard and all sweep files (general, core-to-core, and LLM) retain per-attempt atomic checkpoints
+(LLM sweeps do not write intra-run LLM file snapshots). GPU files retain terminal-measurement/failure
+checkpoints and their post-release replacement. Direct LLM files snapshot every Kth fully completed loop,
 where `K=max(1,ceil(planned_loops/8))`, at most eight progress writes plus one post-release command terminal. An abrupt
 exit can lose up to `3K` completed attempts, including while replacement is in progress; no file may exist before the
 first successful snapshot. Graceful interruption retains the finished prefix when terminal persistence succeeds.
@@ -1397,16 +1508,21 @@ The supported process contract, including help and pre-result-failure exceptions
 
 ### 18.8 Path behavior
 
-- Relative file `--output` paths are resolved against current working directory by CPU-mode adapters.
-- GPU and LLM preserve the raw output spelling in `configuration.output_file` and captured `argv`. Exact `-` therefore remains
-  `"-"` in a stdout payload, while `./-`, `-G`, and every other non-empty non-sentinel value are real file targets.
+- Relative file `--output` paths are resolved against the current working directory
+  (`JsonFilePathPolicy::ResolveAgainstCurrentDirectory`) by standard, pattern, TLB, core-to-core, and LLM command
+  boundaries; standalone GPU uses `JsonFilePathPolicy::PreserveRaw`.
+- Standard schema 3, GPU, and LLM preserve the raw output spelling in `configuration.output_file` (with GPU serializing
+  `null` when empty, and standard/LLM serializing `""` for disabled direct output or nested sweep runs); GPU and LLM
+  also retain exact captured `argv`. Exact `-` therefore remains `"-"` in a stdout payload, while `./-`, `-G`, and every
+  other non-empty non-sentinel value are real file targets.
 
 ## 19. Error-Handling Model
 
 This codebase uses boundary-aware mixed error handling:
 
 - Program orchestration and most modules: return codes (`EXIT_SUCCESS`/`EXIT_FAILURE`).
-- Argument parsing internals: exceptions for parsing/validation, converted to return codes at API boundary.
+- Argument parsing internals: shared descriptor-driven syntax parsing returns structured `CliParseResult` errors, and
+  value-validation exceptions are converted to return codes at parser and command boundaries.
 - Allocation internals: null smart-pointer returns for allocation failure.
 - Parse/preflight failures, the general pipeline's early timer failure, and TLB setup/allocation failures before result
   initialization have no schema-valid payload. A stdout target remains empty and the diagnostic/process failure are
@@ -1430,7 +1546,7 @@ Principle: no uncaught exceptions should escape to `main()` control flow.
 
 ## 20. Concurrency Model
 
-- Bandwidth and pattern bandwidth paths are parallelized by thread--count configuration.
+- Bandwidth and pattern bandwidth paths are parallelized by thread-count configuration.
 - Latency tests are intentionally single-threaded pointer-chase measurements.
 - Cache bandwidth tests default to one worker unless the user explicitly overrides `--threads`. Cache and
   main-memory latency tests remain single-threaded dependent pointer chases regardless of the bandwidth worker count.
@@ -1442,7 +1558,9 @@ Principle: no uncaught exceptions should escape to `main()` control flow.
   after it. The active CPU adapter creates one worker team per excluded or measured scenario task. Workers read immutable
   worker-major descriptors after an all-or-cancel ready gate; partial startup cancels before any kernel call. One
   synchronized timer spans gate release through last-worker completion. Worker-local layers are ordered without a
-  per-layer global barrier, and neither the runner nor CPU adapter polls signal state inside the ARM64 hot loop.
+  per-layer global barrier, and neither the runner nor CPU adapter polls signal state inside the ARM64 hot loop. The
+  active Metal LLM adapter uses one Metal command queue and serial compute encoders with synchronous per-task reset,
+  timed workload, and post-validation command buffers, and rejects CPU `--threads`.
 
 ## 21. Measurement Caveats and Interpretation Under Load
 
@@ -1475,24 +1593,26 @@ Recommended validation commands:
 - Build: `make`
 - Unit tests (non-integration): `make test`
 - Script-example JSON entry paths: `make test-script-examples`
-- Independent LLM schema-2 artifact contract and mutation tests: `make test-llm-verifier`
+- Independent LLM schema-2 artifact and schema-1 sweep envelope contract and mutation tests: `make test-llm-verifier`
 - Integration-only: `make test-integration`
 - Full test set: `make test-all`
-- CLI help smoke check: `./memory_benchmark -h`
+- CLI help smoke checks: `./memory_benchmark -h`, `./memory_benchmark --analyze-tlb --help`
 - GPU help smoke check: `./memory_benchmark --gpu-bandwidth --help`
 - LLM help smoke check: `./memory_benchmark --llm-memory --help`
+- Deterministic CLI parser tests:
+  `./test_runner '--gtest_filter=CliParserTest.*:ModeSelectorTest.*:ConfigTest.*:CoreToCoreCliTest.*:GpuBandwidthParserTest.*:LlmMemoryConfigTest.*:Messages*Test.*'`
 - Deterministic LLM tests:
-  `./test_runner '--gtest_filter=ModeSelectorTest.*:LlmMemoryConfigTest.*:LlmMemoryWorkPlanTest.*:LlmMemoryExecutorTest.*:LlmMemoryRunnerTest.*:LlmMemoryJsonTest.*:LlmMemoryOutputTest.*:Messages*Test.*'`
+  `./test_runner '--gtest_filter=CliParserTest.*:ModeSelectorTest.*:LlmMemoryConfigTest.*:LlmMemoryWorkPlan*.*:LlmMemoryExecutorTest.*:LlmMemoryRunnerTest.*:LlmMemoryJsonTest.*:LlmMemoryOutputTest.*:SweepRunnerTest.*:Messages*Test.*'`
 - Real LLM ARM64 and bounded executable transport contracts:
   `./test_runner '--gtest_filter=*LlmMemory*Integration*:*ExecutableCliIntegration*'`
 - LLM Metal decode and prefill for contiguous and paged KV:
   `./test_runner '--gtest_filter=*LlmMetalBackend*:*LlmMemoryRunner*:*LlmMemoryJson*:*ExecutableCli*'`; real-device
   cases compile each selected profile and cover all scenarios, GPU timestamps, exact tails or partial paged blocks,
   paged-prefill `N+2*M` lookups, cyclic block-owner threadgroups and their exact accounted-byte evidence, full-prompt
-  writes, Q=1/Q=P/remainder tiled-prefix scans, source-hash-bound loop ordering, permutation-sensitive lookups,
+  writes, Q=1/Q=P/remainder tiled-prefix scans, source-hash provenance, permutation-sensitive lookups,
   K/V-write and padding validation, multi-threadgroup work, and a bounded run crossing the 256 MiB segment boundary.
 - Deterministic GPU-focused tests:
-  `./test_runner --gtest_filter='GpuBandwidthParserTest.*:GpuMemoryBudgetTest.*:GpuRunnerTest.*:GpuJsonTest.*:GpuWorkPlanTest.*:GpuTimedAccumulatorOracleTest.*:ModeSelectorTest.*:HashUtilsTest.*'`
+  `./test_runner --gtest_filter='CliParserTest.*:GpuBandwidthParserTest.*:GpuMemoryBudgetTest.*:GpuRunnerTest.*:GpuJsonTest.*:GpuWorkPlanTest.*:GpuTimedAccumulatorOracleTest.*:ModeSelectorTest.*:HashUtilsTest.*'`
 - Real Metal contract: `./test_runner '--gtest_filter=GpuMetalBackendIntegrationTest.*'`; unsupported hardware may skip
   this integration suite but does not replace deterministic unsupported-path coverage. On a supported host, sandbox
   `metal-device-unavailable` skips require narrowly scoped unsandboxed probes and applicable real-device gates, as
@@ -1503,12 +1623,19 @@ For narrow changes, prefer targeted `gtest` filters via `./test_runner --gtest_f
 The aggregate `make test-all` gate requires Python 3; after all GTest cases pass, it runs the focused script-example
 entry test and independent LLM verifier tests. `jq` is not required by this gate.
 
-`python3 script-examples/verify_llm_result.py result.json` independently reconstructs the eight supported profiles
-without invoking producer helpers. It checks geometry, plan/checksum identities, timing, named validation, accepted
-populations, and exact statistics. Verdicts separate `artifact_consistent` from `run_accepted`: exit 0 means consistent
-and accepted, exit 1 means inconsistent or consistently unaccepted, and exit 2 means unsupported or bounded evidence
-is unavailable. `--require-raw-timing` requires original CPU timing; `--binary PATH` checks the manifest hash without
-running that file. Verification does not prove original process success, physical traffic, or runtime authenticity.
+`python3 script-examples/verify_llm_result.py result.json` independently verifies either a single schema-2 LLM artifact
+across the eight supported profiles or a schema-1 LLM sweep envelope (`configuration.mode == "sweep"`,
+`configuration.base_mode == "llm_memory"`, `configuration.sweep_schema_version == 1`) without invoking producer
+helpers. For single artifacts it reconstructs geometry, plan/checksum identities, timing, named validation, accepted
+populations, and exact statistics. For LLM sweeps it additionally verifies Cartesian parameter progression (independent
+of JSON key order in `sweep_parameters`), base-configuration and build-manifest invariance across nested runs, empty
+nested `output_file`, per-run status/result consistency, envelope completion counters, and every non-null nested
+schema-2 payload under one shared bounded work budget (hashing `--binary` once across the sweep), adding
+`artifact_kind: "llm_sweep"`, `planned_runs`, `completed_runs`, `verified_runs`, and `run_verdicts` to the verdict.
+Verdicts separate `artifact_consistent` from `run_accepted`: exit 0 means consistent and accepted, exit 1 means
+inconsistent or consistently unaccepted, and exit 2 means unsupported or bounded evidence is unavailable.
+`--require-raw-timing` requires original CPU timing; `--binary PATH` checks the manifest hash without running that
+file. Verification does not prove original process success, physical traffic, or runtime authenticity.
 
 ## 23. Source Map (Primary Entry Points)
 
@@ -1518,8 +1645,10 @@ running that file. Verification does not prove original process success, physica
   and `script-examples/llm_verify_oracles.py`.
 - LLM memory profile with all four CPU and all four Metal phase/layout profiles:
   - `src/llm_memory/llm_memory.cpp`
+  - `src/llm_memory/llm_sweep_runner.cpp`
   - `src/llm_memory/llm_work_plan.cpp`
   - `src/llm_memory/llm_kv_layout.cpp`
+  - `src/llm_memory/llm_prefill.cpp`
   - `src/llm_memory/llm_backend.cpp`
   - `src/llm_memory/llm_cpu_backend.cpp`
   - `src/llm_memory/llm_metal_backend.h`
@@ -1531,10 +1660,13 @@ running that file. Verification does not prove original process success, physica
   - `src/llm_memory/llm_output.cpp`
   - `src/llm_memory/llm_environment.mm`
 - Config parse/validate/derive:
+  - `src/core/config/cli_parser.h`
+  - `src/core/config/cli_parser.cpp`
   - `src/core/config/mode_selector.cpp`
   - `src/core/config/argument_parser.cpp`
   - `src/core/config/config_validator.cpp`
   - `src/core/config/buffer_calculator.cpp`
+  - `src/core/config/sweep_utils.cpp`
 - Memory allocation/init:
   - `src/core/memory/buffer_allocator.cpp`
   - `src/core/memory/buffer_initializer.cpp`

@@ -134,49 +134,56 @@ TEST(BenchmarkQosTest, RequestPreservesResultAndHonorsWarningPolicy) {
   }
 }
 
-TEST(SystemInfoTest, CoreQueriesUseValidTopologyValuesAndRejectInvalidOnes) {
-  FakeSystemInfoProvider provider;
-  provider.set_sysctl_value<int>("hw.perflevel0.logicalcpu_max", 6);
-  provider.set_sysctl_value<int>("hw.perflevel1.logicalcpu_max", 4);
+TEST(SystemInfoTest, CoreQueriesUseTopologyValuesAndOrderedFallbacks) {
+  {
+    SCOPED_TRACE("valid-and-invalid-topology");
+    FakeSystemInfoProvider provider;
+    provider.set_sysctl_value<int>("hw.perflevel0.logicalcpu_max", 6);
+    provider.set_sysctl_value<int>("hw.perflevel1.logicalcpu_max", 4);
+    EXPECT_EQ(get_performance_cores(provider), 6);
+    EXPECT_EQ(get_efficiency_cores(provider), 4);
+    EXPECT_EQ(get_total_logical_cores(provider), 10);
 
-  EXPECT_EQ(get_performance_cores(provider), 6);
-  EXPECT_EQ(get_efficiency_cores(provider), 4);
-  EXPECT_EQ(get_total_logical_cores(provider), 10);
-
-  FakeSystemInfoProvider invalid_provider;
-  invalid_provider.set_sysctl_value<int>("hw.perflevel0.logicalcpu_max", 0);
-  invalid_provider.set_sysctl_value<int>("hw.perflevel1.logicalcpu_max", -1);
-  EXPECT_EQ(get_performance_cores(invalid_provider), 0);
-  EXPECT_EQ(get_efficiency_cores(invalid_provider), 0);
+    FakeSystemInfoProvider invalid;
+    invalid.set_sysctl_value<int>("hw.perflevel0.logicalcpu_max", 0);
+    invalid.set_sysctl_value<int>("hw.perflevel1.logicalcpu_max", -1);
+    EXPECT_EQ(get_performance_cores(invalid), 0);
+    EXPECT_EQ(get_efficiency_cores(invalid), 0);
+  }
+  struct FallbackCase {
+    const char* name;
+    int logical_sysctl;
+    unsigned int concurrency;
+    int expected_total;
+    bool expect_warning;
+  };
+  for (const FallbackCase& entry : {FallbackCase{"generic-sysctl", 12, 99, 12, false},
+                                    FallbackCase{"hardware-concurrency", 0, 8, 8, false},
+                                    FallbackCase{"exhausted", 0, 0, 1, true}}) {
+    SCOPED_TRACE(entry.name);
+    FakeSystemInfoProvider provider;
+    if (entry.logical_sysctl > 0) provider.set_sysctl_value<int>("hw.logicalcpu_max", entry.logical_sysctl);
+    provider.hardware_concurrency_value = entry.concurrency;
+    testing::internal::CaptureStderr();
+    EXPECT_EQ(get_total_logical_cores(provider), entry.expected_total);
+    const std::string stderr_output = testing::internal::GetCapturedStderr();
+    if (entry.expect_warning) {
+      EXPECT_NE(stderr_output.find(expected_warning(Messages::warning_core_count_detection_failed())),
+                std::string::npos);
+    }
+  }
 }
 
-TEST(SystemInfoTest, TotalCoreCountUsesOrderedFallbacks) {
-  FakeSystemInfoProvider generic_provider;
-  generic_provider.set_sysctl_value<int>("hw.logicalcpu_max", 12);
-  generic_provider.hardware_concurrency_value = 99;
-  EXPECT_EQ(get_total_logical_cores(generic_provider), 12);
+TEST(SystemInfoTest, StringQueriesReturnValuesAndReportFailures) {
+  {
+    SCOPED_TRACE("complete-values");
+    FakeSystemInfoProvider provider;
+    provider.set_sysctl_string("machdep.cpu.brand_string", "Apple M4 Pro");
+    provider.set_sysctl_string("kern.osproductversion", "15.5.1");
+    EXPECT_EQ(get_processor_name(provider), "Apple M4 Pro");
+    EXPECT_EQ(get_macos_version(provider), "15.5.1");
+  }
 
-  FakeSystemInfoProvider concurrency_provider;
-  concurrency_provider.hardware_concurrency_value = 8;
-  EXPECT_EQ(get_total_logical_cores(concurrency_provider), 8);
-
-  FakeSystemInfoProvider exhausted_provider;
-  testing::internal::CaptureStderr();
-  EXPECT_EQ(get_total_logical_cores(exhausted_provider), 1);
-  const std::string stderr_output = testing::internal::GetCapturedStderr();
-  EXPECT_NE(stderr_output.find(expected_warning(Messages::warning_core_count_detection_failed())), std::string::npos);
-}
-
-TEST(SystemInfoTest, StringQueriesReturnCompleteValues) {
-  FakeSystemInfoProvider provider;
-  provider.set_sysctl_string("machdep.cpu.brand_string", "Apple M4 Pro");
-  provider.set_sysctl_string("kern.osproductversion", "15.5.1");
-
-  EXPECT_EQ(get_processor_name(provider), "Apple M4 Pro");
-  EXPECT_EQ(get_macos_version(provider), "15.5.1");
-}
-
-TEST(SystemInfoTest, StringQueriesReportSizeAndDataFailures) {
   struct FailureCase {
     const char* key;
     bool processor_name;
@@ -212,27 +219,25 @@ TEST(SystemInfoTest, StringQueriesReportSizeAndDataFailures) {
   }
 }
 
-TEST(SystemInfoTest, CacheQueriesUseDetectedValues) {
-  FakeSystemInfoProvider provider;
-  provider.set_sysctl_value<size_t>("hw.perflevel0.l1dcachesize", 192 * 1024);
-  provider.set_sysctl_value<size_t>("hw.perflevel0.l2cachesize", 24 * 1024 * 1024);
+TEST(SystemInfoTest, CacheQueriesUseDetectedValuesAndCentralizedFallbacks) {
+  {
+    SCOPED_TRACE("detected-values");
+    FakeSystemInfoProvider provider;
+    provider.set_sysctl_value<size_t>("hw.perflevel0.l1dcachesize", 192 * 1024);
+    provider.set_sysctl_value<size_t>("hw.perflevel0.l2cachesize", 24 * 1024 * 1024);
+    EXPECT_EQ(get_l1_cache_size(provider), static_cast<size_t>(192 * 1024));
+    EXPECT_EQ(get_l2_cache_size(provider), static_cast<size_t>(24 * 1024 * 1024));
+  }
+  {
+    SCOPED_TRACE("l1-fallback");
+    FakeSystemInfoProvider provider;
+    testing::internal::CaptureStderr();
+    EXPECT_EQ(get_l1_cache_size(provider), Constants::L1_CACHE_FALLBACK_SIZE_BYTES);
+    const std::string stderr_output = testing::internal::GetCapturedStderr();
+    EXPECT_NE(stderr_output.find(expected_warning(Messages::warning_l1_cache_size_detection_failed())),
+              std::string::npos);
+  }
 
-  EXPECT_EQ(get_l1_cache_size(provider), static_cast<size_t>(192 * 1024));
-  EXPECT_EQ(get_l2_cache_size(provider), static_cast<size_t>(24 * 1024 * 1024));
-}
-
-TEST(SystemInfoTest, L1CacheUsesCentralizedFallback) {
-  FakeSystemInfoProvider provider;
-
-  testing::internal::CaptureStderr();
-  EXPECT_EQ(get_l1_cache_size(provider), Constants::L1_CACHE_FALLBACK_SIZE_BYTES);
-  const std::string stderr_output = testing::internal::GetCapturedStderr();
-
-  EXPECT_NE(stderr_output.find(expected_warning(Messages::warning_l1_cache_size_detection_failed())),
-            std::string::npos);
-}
-
-TEST(SystemInfoTest, L2CacheUsesModelSpecificAndGenericFallbacks) {
   struct FallbackCase {
     const char* processor_name;
     size_t expected_size;
@@ -261,23 +266,22 @@ TEST(SystemInfoTest, L2CacheUsesModelSpecificAndGenericFallbacks) {
     testing::internal::CaptureStderr();
     EXPECT_EQ(get_l2_cache_size(provider), test_case.expected_size);
     const std::string stderr_output = testing::internal::GetCapturedStderr();
-
     EXPECT_NE(stderr_output.find(expected_warning(test_case.expected_message)), std::string::npos);
   }
 }
 
-TEST(SystemInfoTest, AvailableMemoryUsesProviderBytes) {
-  FakeSystemInfoProvider provider;
-  provider.memory_result = {
-      SystemMemoryQueryStatus::Success,
-      17 * static_cast<uint64_t>(Constants::BYTES_PER_MB) + 123,
-      {},
-  };
+TEST(SystemInfoTest, AvailableMemoryUsesProviderBytesAndReportsFailures) {
+  {
+    SCOPED_TRACE("success");
+    FakeSystemInfoProvider provider;
+    provider.memory_result = {
+        SystemMemoryQueryStatus::Success,
+        17 * static_cast<uint64_t>(Constants::BYTES_PER_MB) + 123,
+        {},
+    };
+    EXPECT_EQ(get_available_memory_mb(provider), 17UL);
+  }
 
-  EXPECT_EQ(get_available_memory_mb(provider), 17UL);
-}
-
-TEST(SystemInfoTest, AvailableMemoryReportsProviderFailures) {
   struct FailureCase {
     SystemMemoryQueryStatus status;
     const char* details;
@@ -299,7 +303,6 @@ TEST(SystemInfoTest, AvailableMemoryReportsProviderFailures) {
     testing::internal::CaptureStderr();
     EXPECT_EQ(get_available_memory_mb(provider), 0UL);
     const std::string stderr_output = testing::internal::GetCapturedStderr();
-
     EXPECT_NE(stderr_output.find(expected_warning(test_case.expected_message)), std::string::npos);
   }
 }
