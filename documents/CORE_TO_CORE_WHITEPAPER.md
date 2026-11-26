@@ -437,9 +437,17 @@ Options:
   -h, --help                  Print help
 ```
 
-Standard benchmark options are rejected in this standalone mode. Sweep mode requires `--output`, supports only `count`
-and `latency-samples`, and forms their Cartesian product. Each sweep parameter key may appear only once; for example, two
-`--sweep count=...` specifications are rejected before execution.
+Standard benchmark options are rejected in this standalone mode with a concise single-line stderr diagnostic naming the
+offending option (`Unsupported option '<token>': ...`) without dumping the full usage text. Built on the shared
+descriptor-driven CLI parser (`src/core/config/cli_parser.h` / `.cpp`), long value-taking options accept both
+space-separated (`--count 5`, `--output -`) and inline (`--count=5`, `--output=-`, `--sweep=count=1,2`) forms, while
+inline values on boolean/mode flags (`--analyze-core2core=1`, `--help=1`), single-dash inline forms (`-r=5`), and
+duplicate single-occurrence flags (including `-C` and `-h`) are rejected. `-h`/`--help` runs full syntactic, whitelist,
+duplicate, missing-value, and value-parse checks before printing human-facing help to stdout and exiting `0` (including
+with `--output -`). Sweep mode requires `--output`, supports only `count` and `latency-samples`, and forms their
+Cartesian product. Each sweep parameter key may appear only once (duplicates fail with
+`sweep parameter specified more than once: <key>`), and combining a direct flag (`--count` or `--latency-samples`) with
+`--sweep` for the same key is rejected as a conflict (`Cannot specify both --<opt> and --sweep <key>`).
 
 The general benchmark loop default remains one; only core-to-core mode defaults to three. At the default 1,000 sample
 windows per scenario and loop, the 1 ms target represents about 9 seconds of sampling across three scenarios and three
@@ -503,7 +511,7 @@ Relevant deterministic coverage includes:
 - responder-work overflow rejection before thread startup;
 - scenario-order rotation;
 - loop-record sample ranges that count only samples appended to the pooled population;
-- CLI short/long options, supported sweeps, duplicate sweep-key rejection, and run-count guards;
+- CLI short/long options, `--option=value` syntax, duplicate flag rejection, supported sweeps, duplicate sweep-key and direct-vs-sweep conflict rejection, and run-count guards;
 - calibrated console/audit messages;
 - schema-2 work plans, loop records, completion fields, nullable values, and affinity interpretability.
 
@@ -571,16 +579,18 @@ For manual validation, prefer several loops and inspect:
 | `src/benchmark/core_to_core_latency.h` | Public configuration, status, work-plan, loop-record, and result types |
 | `src/benchmark/core_to_core_latency_internal.h` | Planner/scheduler/runner testable interface |
 | `src/benchmark/core_to_core_latency_runner.cpp` | Calibration, worker execution, schedule, statistics, and console report |
-| `src/benchmark/core_to_core_latency_cli.cpp` | Standalone parsing, sweep validation, command output-session ownership, and signal-mask setup |
+| `src/benchmark/core_to_core_latency_cli.cpp` | Descriptor-driven standalone parsing (`cli_parser.h`), sweep/conflict validation, exception containment, command output-session ownership, and signal-mask setup |
 | `src/benchmark/core_to_core_latency_json.cpp` | Schema 2 serialization and affinity interpretability |
 | `src/benchmark/core_to_core_sweep_runner.cpp` | Cartesian sweep execution, logical checkpoints, and final-envelope retention |
+| `src/core/config/cli_parser.cpp` | Shared descriptor-driven CLI option parser and error formatter |
 | `src/core/config/constants.h` | Shared-state isolation and core-to-core methodology constants |
 | `src/core/config/sweep_utils.cpp` | Shared sweep-value parsing and Cartesian run-count validation |
 | `src/asm/core_to_core_latency.s` | ARM64 initiator/responder hot loops |
 | `src/output/console/messages/core_to_core_messages.cpp` | User-facing core-to-core messages |
 | `src/output/json/json_output/file_writer.cpp` | Shared atomic temporary-file-and-rename writer |
 | `src/output/json/json_output/json_output_session.cpp` | File/stdout target ownership, lazy checkpoint dispatch, and human-stream routing |
-| `tests/test_core_to_core_cli.cpp` | CLI and sweep validation coverage |
+| `tests/test_cli_parser.cpp` | Shared CLI option parser and `--option=value` coverage |
+| `tests/test_core_to_core_cli.cpp` | CLI and sweep/conflict validation coverage |
 | `tests/test_core_to_core_messages.cpp` | Console message contract coverage |
 | `tests/test_core_to_core_runner.cpp` | Calibration, schedule, and hardware integration coverage |
 | `tests/test_json_schema.cpp` | Core-to-core schema and audit-trail coverage |

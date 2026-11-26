@@ -38,6 +38,7 @@ enum class SweepNestedMode {
   Patterns,
   TlbAnalysis,
   CoreToCore,
+  LlmMemory,
 };
 
 /** Auditable terminal state of one attempted nested sweep run. */
@@ -58,6 +59,7 @@ struct SweepRunOutcome {
   int exit_code = EXIT_FAILURE;
   nlohmann::ordered_json result_json;
   std::string failure_reason;
+  bool interrupted = false;
 };
 
 /** Side-effect seams used by the deterministic sweep coordinator. */
@@ -82,7 +84,7 @@ SweepNestedCompletion classify_sweep_nested_completion(SweepNestedMode mode, con
  *
  * Every attempted run is appended before its checkpoint. `completed_runs`
  * counts only nested results classified as complete for the selected mode.
- * Both sweep producers receive `configuration.sweep_schema_version` here
+ * All sweep producers receive `configuration.sweep_schema_version` here
  * before the first checkpoint; a missing or non-object configuration member
  * is normalized to an object.
  *

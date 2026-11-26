@@ -21,71 +21,69 @@
 
 #include "utils/descriptive_statistics.h"
 
-TEST(DescriptiveStatisticsTest, SingleNonzeroSampleHasDefinedZeroVariation) {
-  const DescriptiveStatistics statistics = calculate_descriptive_statistics({42.0});
+TEST(DescriptiveStatisticsTest, ComputesPercentilesDeviationAndMadAcrossPopulations) {
+  struct PopulationCase {
+    const char* name;
+    std::vector<double> values;
+    double average;
+    double min;
+    double max;
+    double median;
+    double p90;
+    double p95;
+    double p99;
+    double stddev;
+    double cv_pct;
+    double mad;
+    bool check_full_percentiles;
+  };
+  const std::vector<PopulationCase> cases = {
+      {"single nonzero sample", {42.0}, 42.0, 42.0, 42.0, 42.0, 42.0, 42.0, 42.0, 0.0, 0.0, 0.0, true},
+      {"even linear population", {10.0, 20.0, 30.0, 40.0}, 25.0, 10.0, 40.0, 25.0, 37.0, 38.5, 39.7,
+       12.909944487358056, 51.63977794943222, 10.0, true},
+      {"unsorted odd population", {5.0, 1.0, 4.0, 2.0, 3.0}, 3.0, 1.0, 5.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false},
+  };
 
-  EXPECT_EQ(statistics.sample_count, 1U);
-  EXPECT_DOUBLE_EQ(statistics.average, 42.0);
-  EXPECT_DOUBLE_EQ(statistics.min, 42.0);
-  EXPECT_DOUBLE_EQ(statistics.max, 42.0);
-  EXPECT_DOUBLE_EQ(statistics.median, 42.0);
-  EXPECT_DOUBLE_EQ(statistics.p90, 42.0);
-  EXPECT_DOUBLE_EQ(statistics.p95, 42.0);
-  EXPECT_DOUBLE_EQ(statistics.p99, 42.0);
-  EXPECT_DOUBLE_EQ(statistics.stddev, 0.0);
-  EXPECT_TRUE(statistics.coefficient_of_variation_defined);
-  EXPECT_DOUBLE_EQ(statistics.coefficient_of_variation_pct, 0.0);
-  EXPECT_DOUBLE_EQ(statistics.median_absolute_deviation, 0.0);
+  for (const PopulationCase& entry : cases) {
+    SCOPED_TRACE(entry.name);
+    const DescriptiveStatistics statistics = calculate_descriptive_statistics(entry.values);
+
+    EXPECT_EQ(statistics.sample_count, entry.values.size());
+    EXPECT_DOUBLE_EQ(statistics.average, entry.average);
+    EXPECT_DOUBLE_EQ(statistics.min, entry.min);
+    EXPECT_DOUBLE_EQ(statistics.max, entry.max);
+    EXPECT_DOUBLE_EQ(statistics.median, entry.median);
+    EXPECT_DOUBLE_EQ(statistics.median_absolute_deviation, entry.mad);
+    if (entry.check_full_percentiles) {
+      EXPECT_DOUBLE_EQ(statistics.p90, entry.p90);
+      EXPECT_DOUBLE_EQ(statistics.p95, entry.p95);
+      EXPECT_NEAR(statistics.p99, entry.p99, 1e-12);
+      EXPECT_NEAR(statistics.stddev, entry.stddev, 1e-12);
+      EXPECT_TRUE(statistics.coefficient_of_variation_defined);
+      EXPECT_NEAR(statistics.coefficient_of_variation_pct, entry.cv_pct, 1e-12);
+    }
+  }
 }
 
-TEST(DescriptiveStatisticsTest, UsesLinearPercentilesSampleDeviationAndMedianAbsoluteDeviation) {
-  const DescriptiveStatistics statistics = calculate_descriptive_statistics({10.0, 20.0, 30.0, 40.0});
-
-  EXPECT_EQ(statistics.sample_count, 4U);
-  EXPECT_DOUBLE_EQ(statistics.average, 25.0);
-  EXPECT_DOUBLE_EQ(statistics.min, 10.0);
-  EXPECT_DOUBLE_EQ(statistics.max, 40.0);
-  EXPECT_DOUBLE_EQ(statistics.median, 25.0);
-  EXPECT_DOUBLE_EQ(statistics.p90, 37.0);
-  EXPECT_DOUBLE_EQ(statistics.p95, 38.5);
-  EXPECT_NEAR(statistics.p99, 39.7, 1e-12);
-  EXPECT_NEAR(statistics.stddev, 12.909944487358056, 1e-12);
-  EXPECT_TRUE(statistics.coefficient_of_variation_defined);
-  EXPECT_NEAR(statistics.coefficient_of_variation_pct, 51.63977794943222, 1e-12);
-  EXPECT_DOUBLE_EQ(statistics.median_absolute_deviation, 10.0);
-}
-
-TEST(DescriptiveStatisticsTest, CoefficientOfVariationUsesAbsoluteMean) {
-  const DescriptiveStatistics statistics = calculate_descriptive_statistics({-10.0, -20.0, -30.0});
-
-  EXPECT_DOUBLE_EQ(statistics.average, -20.0);
-  EXPECT_DOUBLE_EQ(statistics.stddev, 10.0);
-  EXPECT_TRUE(statistics.coefficient_of_variation_defined);
-  EXPECT_DOUBLE_EQ(statistics.coefficient_of_variation_pct, 50.0);
-}
-
-TEST(DescriptiveStatisticsTest, UnsortedOddPopulationUsesOddMedianDeviation) {
-  const std::vector<double> values = {5.0, 1.0, 4.0, 2.0, 3.0};
-
-  const DescriptiveStatistics statistics = calculate_descriptive_statistics(values);
-
-  EXPECT_DOUBLE_EQ(statistics.average, 3.0);
-  EXPECT_DOUBLE_EQ(statistics.median, 3.0);
-  EXPECT_DOUBLE_EQ(statistics.median_absolute_deviation, 1.0);
-}
-
-TEST(DescriptiveStatisticsTest, CoefficientOfVariationZeroAndConstantEdgeCases) {
+TEST(DescriptiveStatisticsTest, CoefficientOfVariationHandlesSignedZeroConstantAndNonFiniteCases) {
+  const double maximum = std::numeric_limits<double>::max();
   struct VariationCase {
     const char* name;
     std::vector<double> values;
+    bool check_exact_average;
     double expected_average;
-    bool expects_zero_deviation;
+    bool check_exact_stddev;
+    double expected_stddev;
+    bool expect_infinite_stddev;
     bool expected_defined;
+    double expected_cv_pct;
   };
   const std::vector<VariationCase> cases = {
-      {"single zero", {0.0}, 0.0, true, false},
-      {"constant nonzero population", {7.0, 7.0, 7.0}, 7.0, true, true},
-      {"zero mean population", {-1.0, 1.0}, 0.0, false, false},
+      {"negative mean uses absolute mean", {-10.0, -20.0, -30.0}, true, -20.0, true, 10.0, false, true, 50.0},
+      {"single zero", {0.0}, true, 0.0, true, 0.0, false, false, 0.0},
+      {"constant nonzero population", {7.0, 7.0, 7.0}, true, 7.0, true, 0.0, false, true, 0.0},
+      {"zero mean population", {-1.0, 1.0}, true, 0.0, false, 0.0, false, false, 0.0},
+      {"non-finite derived deviation", {maximum, -maximum, maximum}, false, 0.0, false, 0.0, true, false, 0.0},
   };
 
   for (const VariationCase& test_case : cases) {
@@ -93,23 +91,19 @@ TEST(DescriptiveStatisticsTest, CoefficientOfVariationZeroAndConstantEdgeCases) 
     const DescriptiveStatistics statistics = calculate_descriptive_statistics(test_case.values);
 
     EXPECT_EQ(statistics.sample_count, test_case.values.size());
-    EXPECT_DOUBLE_EQ(statistics.average, test_case.expected_average);
-    if (test_case.expects_zero_deviation) {
-      EXPECT_DOUBLE_EQ(statistics.stddev, 0.0);
+    EXPECT_TRUE(std::isfinite(statistics.average));
+    if (test_case.check_exact_average) {
+      EXPECT_DOUBLE_EQ(statistics.average, test_case.expected_average);
+    }
+    if (test_case.check_exact_stddev) {
+      EXPECT_DOUBLE_EQ(statistics.stddev, test_case.expected_stddev);
+    }
+    if (test_case.expect_infinite_stddev) {
+      EXPECT_TRUE(std::isinf(statistics.stddev));
     }
     EXPECT_EQ(statistics.coefficient_of_variation_defined, test_case.expected_defined);
-    EXPECT_DOUBLE_EQ(statistics.coefficient_of_variation_pct, 0.0);
+    EXPECT_DOUBLE_EQ(statistics.coefficient_of_variation_pct, test_case.expected_cv_pct);
   }
-}
-
-TEST(DescriptiveStatisticsTest, NonFiniteDerivedDeviationLeavesCoefficientOfVariationUndefined) {
-  const double maximum = std::numeric_limits<double>::max();
-  const DescriptiveStatistics statistics = calculate_descriptive_statistics({maximum, -maximum, maximum});
-
-  EXPECT_TRUE(std::isfinite(statistics.average));
-  EXPECT_TRUE(std::isinf(statistics.stddev));
-  EXPECT_FALSE(statistics.coefficient_of_variation_defined);
-  EXPECT_DOUBLE_EQ(statistics.coefficient_of_variation_pct, 0.0);
 }
 
 TEST(DescriptiveStatisticsTest, ReusableWorkspaceMatchesLegacyPathWithoutCapacityGrowth) {

@@ -25,7 +25,7 @@ expose calibration, workload, completion, and repeatability metadata so results 
 - **Synthetic LLM memory profile:** CPU and capability-gated Metal measurements of fixed-context decode and full-prompt
   prefill with contiguous or deterministic paged KV.
 - **Reproducible experiments:** explicit seeds, repeated loops, built-in Cartesian parameter sweeps, recoverable JSON
-  file checkpoints, and final machine-readable stdout for every result-producing direct mode and CPU sweep.
+  file checkpoints, and final machine-readable stdout for every result-producing direct mode and supported sweep.
 
 See [Measurement Capabilities](documents/CAPABILITIES.md) for the full measurement scope and interpretation guidance.
 
@@ -157,7 +157,7 @@ For longer runs, prevent system sleep and collect repeated measurements:
 caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024 --output baseline.json
 ```
 
-For automation, every result-producing direct mode and the CPU modes' supported sweeps accept the exact output target
+For automation, every result-producing direct mode and supported sweep accepts the exact output target
 `-`. JSON is written once to stdout and the human-readable transcript is written to stderr:
 
 ```bash
@@ -179,9 +179,14 @@ checkpoints are required; see the [Machine-Readable CLI API](documents/API.md) s
 | `--analyze-core2core` | Calibrated two-thread acquire/release token-protocol round-trip latency under best-effort macOS scheduler hints. |
 | `--gpu-bandwidth` | Standalone Metal GPU read/write/copy effective compute-payload bandwidth. |
 | `--llm-memory` | Standalone synthetic LLM memory profile: CPU or Metal decode/prefill with contiguous or paged KV. |
-| `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, and core-to-core modes; requires `--output`. GPU schema 1 and LLM schema 2 do not support sweeps. |
+| `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, core-to-core, and LLM-memory modes; requires `--output`. GPU schema 1 does not support sweeps. |
 
-Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](documents/MANUAL.md) for defaults, valid combinations, and the complete option reference.
+Primary modes are intentionally separate and accept different option sets. All six primary modes share one
+descriptor-driven CLI parser: long value-taking options accept both space-separated (`--buffer-size 512`, `--output -`)
+and inline (`--buffer-size=512`, `--output=-`, `--sweep=buffer-size=128,256`) syntax, all six modes accept `-h`/`--help`,
+running `memory_benchmark` with no arguments shows help and exits `0`, and passing modifier options without a primary
+mode flag fails with a non-zero exit status. Use `memory_benchmark -h` or the [User Manual](documents/MANUAL.md) for
+defaults, valid combinations, and the complete option reference.
 
 LLM-memory requires explicit model and phase geometry. CPU and capability-gated Metal backends support decode and
 prefill with contiguous or deterministic paged KV; Metal rejects explicit `--threads` and never falls back to CPU.
@@ -277,6 +282,16 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
   >llm_memory.json 2>llm_memory.log
 ```
 
+Cartesian LLM-memory sweep across context lengths and paged block sizes (schema 1 sweep envelope embedding schema 2
+per-run payloads):
+
+```bash
+memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
+  --query-heads 8 --kv-heads 2 --head-dim 64 --kv-layout paged \
+  --sweep context-tokens=512,2048 --sweep kv-block-tokens=16,64 \
+  --iterations 1 --count 3 --seed 42 --output llm_sweep.json
+```
+
 More workflows, including custom cache targets, latency-chain controls, density profiles, and sweep keys, are documented in the [User Manual](documents/MANUAL.md).
 
 ## Interpreting Results
@@ -324,10 +339,11 @@ accept compatible producer releases by checking the standard mode, schema 3, the
 They retain the top-level `version` as provenance but do not require a particular software release. They do not
 translate released standard schema 2, unversioned historical standard JSON layouts, or other methodology identities.
 Consumers making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields.
-Every result-producing direct command or CPU sweep using `--output -` reserves stdout for one final JSON document and
-routes its post-parse human transcript to stderr; file output is atomic. LLM files receive a progress snapshot every
+Every result-producing direct command or supported sweep using `--output -` reserves stdout for one final JSON document and
+routes its post-parse human transcript to stderr; file output is atomic. Direct LLM files receive a progress snapshot every
 `K=max(1,ceil(count/8))` completed loops plus a terminal snapshot: at most eight progress writes, with up to `3K`
-completed attempts potentially missing after abrupt termination. Stdout emits one final document. A correct complete
+completed attempts potentially missing after abrupt termination. Sweep files (including LLM sweeps) checkpoint the schema-1
+envelope after each attempted run without intra-run snapshots. Stdout emits one final document. A correct complete
 one-loop LLM run can have `run_accepted: true` while position balance is incomplete and quality is insufficient for a
 comparison. Inspect sample count, observed CV, duration and environment separately. Exact process acceptance rules are in the
 [Machine-Readable CLI API](documents/API.md), with schema and checkpoint details in the
@@ -369,6 +385,7 @@ recognizes the current console labels only and is neither JSON-schema nor histor
 - [Measurement Capabilities](documents/CAPABILITIES.md): what the tool measures and how those measurements should be interpreted.
 - [Machine-Readable CLI API](documents/API.md): supported output targets, stdout/stderr contract, current schemas, and result acceptance.
 - [User Manual](documents/MANUAL.md): complete option reference, mode compatibility, workflows, output examples, and troubleshooting.
+- [Parameter Compatibility Matrix](documents/PARAMETER_MATRIX.md): complete flag list, mode-by-mode option compatibility, numeric limits, and sweep rules.
 - [Technical Specification](documents/TECHNICAL_SPECIFICATION.md): architecture, execution flow, memory model, and output contracts.
 - [Latency Whitepaper](documents/LATENCY_WHITEPAPER.md): dependent pointer-chase and sampling methodology.
 - [TLB Analysis Whitepaper](documents/TLB_ANALYSIS_WHITEPAPER.md): paired analysis, boundary rules, confidence model, and JSON verification contract.
@@ -417,7 +434,7 @@ executable once before tasks. These fields bind available artifacts and do not c
 execution attestation. See the [LLM process contract](documents/API.md) for availability and numeric rules.
 Python 3 is required to generate build provenance.
 
-Verify a saved LLM schema-2 result independently (standard library only):
+Verify a saved LLM schema-2 result or schema-1 LLM sweep envelope independently (standard library only):
 
 ```bash
 python3 script-examples/verify_llm_result.py llm-result.json --binary ./memory_benchmark --require-raw-timing

@@ -135,115 +135,114 @@ nlohmann::ordered_json read_ordered_json_file(
 
 }  // namespace
 
-TEST(BenchmarkStatisticsCollectorTest, CollectLoopResultsAggregatesMainAndDetectedCacheMetrics) {
-  BenchmarkConfig config = make_collector_config();
-  BenchmarkStatistics stats;
-  stats.status = BenchmarkRunStatus::Failed;
-  stats.status_reason = "stale";
-  stats.planned_loops = 99;
-  stats.completed_loops = 98;
-  stats.planned_measurements = 97;
-  stats.completed_measurements = 96;
-  stats.loop_results.push_back(BenchmarkResults{});
-  stats.all_read_bw_gb_s = {999.0};
-  stats.all_l1_latency_ns = {998.0};
-  stats.all_main_mem_latency_samples = {997.0};
-  initialize_statistics(stats, config);
+TEST(BenchmarkStatisticsCollectorTest, CollectLoopResultsRespectsModeCacheAndStatusFilters) {
+  {
+    SCOPED_TRACE("detected-caches-and-reset");
+    BenchmarkConfig config = make_collector_config();
+    BenchmarkStatistics stats;
+    stats.status = BenchmarkRunStatus::Failed;
+    stats.status_reason = "stale";
+    stats.planned_loops = 99;
+    stats.completed_loops = 98;
+    stats.planned_measurements = 97;
+    stats.completed_measurements = 96;
+    stats.loop_results.push_back(BenchmarkResults{});
+    stats.all_read_bw_gb_s = {999.0};
+    stats.all_l1_latency_ns = {998.0};
+    stats.all_main_mem_latency_samples = {997.0};
+    initialize_statistics(stats, config);
 
-  EXPECT_EQ(stats.status, BenchmarkRunStatus::NotStarted);
-  EXPECT_TRUE(stats.status_reason.empty());
-  EXPECT_EQ(stats.planned_loops, 2u);
-  EXPECT_EQ(stats.completed_loops, 0u);
-  EXPECT_EQ(stats.planned_measurements, 0u);
-  EXPECT_EQ(stats.completed_measurements, 0u);
-  EXPECT_TRUE(stats.loop_results.empty());
+    EXPECT_EQ(stats.status, BenchmarkRunStatus::NotStarted);
+    EXPECT_TRUE(stats.status_reason.empty());
+    EXPECT_EQ(stats.planned_loops, 2u);
+    EXPECT_EQ(stats.completed_loops, 0u);
+    EXPECT_EQ(stats.planned_measurements, 0u);
+    EXPECT_EQ(stats.completed_measurements, 0u);
+    EXPECT_TRUE(stats.loop_results.empty());
 
-  collect_loop_results(stats, make_collector_results(), config);
+    collect_loop_results(stats, make_collector_results(), config);
 
-  expect_double_vector_eq(stats.all_read_bw_gb_s, {10.0});
-  expect_double_vector_eq(stats.all_write_bw_gb_s, {20.0});
-  expect_double_vector_eq(stats.all_copy_bw_gb_s, {30.0});
-  expect_double_vector_eq(stats.all_average_latency_ns, {40.0});
-  expect_double_vector_eq(stats.all_tlb_hit_latency_ns, {41.0});
-  expect_double_vector_eq(stats.all_tlb_miss_latency_ns, {90.0});
-  expect_double_vector_eq(stats.all_page_walk_penalty_ns, {49.0});
-  expect_double_vector_eq(stats.all_main_mem_latency_samples, {40.1, 40.2});
+    expect_double_vector_eq(stats.all_read_bw_gb_s, {10.0});
+    expect_double_vector_eq(stats.all_write_bw_gb_s, {20.0});
+    expect_double_vector_eq(stats.all_copy_bw_gb_s, {30.0});
+    expect_double_vector_eq(stats.all_average_latency_ns, {40.0});
+    expect_double_vector_eq(stats.all_tlb_hit_latency_ns, {41.0});
+    expect_double_vector_eq(stats.all_tlb_miss_latency_ns, {90.0});
+    expect_double_vector_eq(stats.all_page_walk_penalty_ns, {49.0});
+    expect_double_vector_eq(stats.all_main_mem_latency_samples, {40.1, 40.2});
 
-  expect_double_vector_eq(stats.all_l1_latency_ns, {5.0});
-  expect_double_vector_eq(stats.all_l1_read_bw_gb_s, {50.0});
-  expect_double_vector_eq(stats.all_l1_write_bw_gb_s, {60.0});
-  expect_double_vector_eq(stats.all_l1_copy_bw_gb_s, {70.0});
-  expect_double_vector_eq(stats.all_l1_latency_samples, {5.1, 5.2});
+    expect_double_vector_eq(stats.all_l1_latency_ns, {5.0});
+    expect_double_vector_eq(stats.all_l1_read_bw_gb_s, {50.0});
+    expect_double_vector_eq(stats.all_l1_write_bw_gb_s, {60.0});
+    expect_double_vector_eq(stats.all_l1_copy_bw_gb_s, {70.0});
+    expect_double_vector_eq(stats.all_l1_latency_samples, {5.1, 5.2});
 
-  expect_double_vector_eq(stats.all_l2_latency_ns, {8.0});
-  expect_double_vector_eq(stats.all_l2_read_bw_gb_s, {80.0});
-  expect_double_vector_eq(stats.all_l2_write_bw_gb_s, {90.0});
-  expect_double_vector_eq(stats.all_l2_copy_bw_gb_s, {100.0});
-  expect_double_vector_eq(stats.all_l2_latency_samples, {8.1, 8.2});
-}
+    expect_double_vector_eq(stats.all_l2_latency_ns, {8.0});
+    expect_double_vector_eq(stats.all_l2_read_bw_gb_s, {80.0});
+    expect_double_vector_eq(stats.all_l2_write_bw_gb_s, {90.0});
+    expect_double_vector_eq(stats.all_l2_copy_bw_gb_s, {100.0});
+    expect_double_vector_eq(stats.all_l2_latency_samples, {8.1, 8.2});
+  }
 
-TEST(BenchmarkStatisticsCollectorTest, CollectLoopResultsUsesCustomCacheInsteadOfDetectedCaches) {
-  BenchmarkConfig config = make_collector_config();
-  config.use_custom_cache_size = true;
-  config.custom_buffer_size = 4096;
+  {
+    SCOPED_TRACE("custom-cache");
+    BenchmarkConfig config = make_collector_config();
+    config.use_custom_cache_size = true;
+    config.custom_buffer_size = 4096;
+    BenchmarkStatistics stats;
+    initialize_statistics(stats, config);
+    collect_loop_results(stats, make_collector_results(), config);
 
-  BenchmarkStatistics stats;
-  initialize_statistics(stats, config);
+    expect_double_vector_eq(stats.all_custom_latency_ns, {12.0});
+    expect_double_vector_eq(stats.all_custom_read_bw_gb_s, {110.0});
+    expect_double_vector_eq(stats.all_custom_write_bw_gb_s, {120.0});
+    expect_double_vector_eq(stats.all_custom_copy_bw_gb_s, {130.0});
+    expect_double_vector_eq(stats.all_custom_latency_samples, {12.1, 12.2});
+    EXPECT_TRUE(stats.all_l1_latency_ns.empty());
+    EXPECT_TRUE(stats.all_l1_read_bw_gb_s.empty());
+    EXPECT_TRUE(stats.all_l2_latency_ns.empty());
+    EXPECT_TRUE(stats.all_l2_read_bw_gb_s.empty());
+  }
 
-  collect_loop_results(stats, make_collector_results(), config);
+  {
+    SCOPED_TRACE("only-bandwidth");
+    BenchmarkConfig config = make_collector_config();
+    config.only_bandwidth = true;
+    BenchmarkStatistics stats;
+    initialize_statistics(stats, config);
+    collect_loop_results(stats, make_collector_results(), config);
 
-  expect_double_vector_eq(stats.all_custom_latency_ns, {12.0});
-  expect_double_vector_eq(stats.all_custom_read_bw_gb_s, {110.0});
-  expect_double_vector_eq(stats.all_custom_write_bw_gb_s, {120.0});
-  expect_double_vector_eq(stats.all_custom_copy_bw_gb_s, {130.0});
-  expect_double_vector_eq(stats.all_custom_latency_samples, {12.1, 12.2});
+    expect_double_vector_eq(stats.all_read_bw_gb_s, {10.0});
+    EXPECT_TRUE(stats.all_average_latency_ns.empty());
+    EXPECT_TRUE(stats.all_tlb_hit_latency_ns.empty());
+    EXPECT_TRUE(stats.all_tlb_miss_latency_ns.empty());
+    EXPECT_TRUE(stats.all_page_walk_penalty_ns.empty());
+    EXPECT_TRUE(stats.all_main_mem_latency_samples.empty());
+  }
 
-  EXPECT_TRUE(stats.all_l1_latency_ns.empty());
-  EXPECT_TRUE(stats.all_l1_read_bw_gb_s.empty());
-  EXPECT_TRUE(stats.all_l2_latency_ns.empty());
-  EXPECT_TRUE(stats.all_l2_read_bw_gb_s.empty());
-}
+  {
+    SCOPED_TRACE("interrupted-and-invalid-excluded");
+    BenchmarkConfig config = make_collector_config();
+    BenchmarkStatistics stats;
+    initialize_statistics(stats, config);
+    BenchmarkResults results = make_collector_results();
+    results.status = BenchmarkRunStatus::Interrupted;
+    results.planned_measurements = 12;
+    results.completed_measurements = 10;
+    set_measurement_unavailable(results.main_write_bandwidth, BenchmarkMeasurementStatus::Interrupted,
+                                "interrupted during measured operation");
+    set_measurement_unavailable(results.main_latency, BenchmarkMeasurementStatus::Invalid, "invalid latency duration");
+    collect_loop_results(stats, results, config);
 
-TEST(BenchmarkStatisticsCollectorTest, CollectLoopResultsSkipsMainLatencyWhenDisabled) {
-  BenchmarkConfig config = make_collector_config();
-  config.only_bandwidth = true;
-
-  BenchmarkStatistics stats;
-  initialize_statistics(stats, config);
-
-  collect_loop_results(stats, make_collector_results(), config);
-
-  expect_double_vector_eq(stats.all_read_bw_gb_s, {10.0});
-  EXPECT_TRUE(stats.all_average_latency_ns.empty());
-  EXPECT_TRUE(stats.all_tlb_hit_latency_ns.empty());
-  EXPECT_TRUE(stats.all_tlb_miss_latency_ns.empty());
-  EXPECT_TRUE(stats.all_page_walk_penalty_ns.empty());
-  EXPECT_TRUE(stats.all_main_mem_latency_samples.empty());
-}
-
-TEST(BenchmarkStatisticsCollectorTest, InterruptedMeasurementsNeverEnterAggregates) {
-  BenchmarkConfig config = make_collector_config();
-  BenchmarkStatistics stats;
-  initialize_statistics(stats, config);
-
-  BenchmarkResults results = make_collector_results();
-  results.status = BenchmarkRunStatus::Interrupted;
-  results.planned_measurements = 12;
-  results.completed_measurements = 10;
-  set_measurement_unavailable(results.main_write_bandwidth, BenchmarkMeasurementStatus::Interrupted,
-                              "interrupted during measured operation");
-  set_measurement_unavailable(results.main_latency, BenchmarkMeasurementStatus::Invalid, "invalid latency duration");
-
-  collect_loop_results(stats, results, config);
-
-  expect_double_vector_eq(stats.all_read_bw_gb_s, {10.0});
-  EXPECT_TRUE(stats.all_write_bw_gb_s.empty());
-  EXPECT_TRUE(stats.all_average_latency_ns.empty());
-  EXPECT_TRUE(stats.all_main_mem_latency_samples.empty());
-  EXPECT_EQ(stats.completed_measurements, 10u);
-  ASSERT_EQ(stats.loop_results.size(), 1u);
-  EXPECT_EQ(stats.loop_results[0].main_write_bandwidth.status, BenchmarkMeasurementStatus::Interrupted);
-  EXPECT_FALSE(stats.loop_results[0].main_write_bandwidth.value.has_value());
+    expect_double_vector_eq(stats.all_read_bw_gb_s, {10.0});
+    EXPECT_TRUE(stats.all_write_bw_gb_s.empty());
+    EXPECT_TRUE(stats.all_average_latency_ns.empty());
+    EXPECT_TRUE(stats.all_main_mem_latency_samples.empty());
+    EXPECT_EQ(stats.completed_measurements, 10u);
+    ASSERT_EQ(stats.loop_results.size(), 1u);
+    EXPECT_EQ(stats.loop_results[0].main_write_bandwidth.status, BenchmarkMeasurementStatus::Interrupted);
+    EXPECT_FALSE(stats.loop_results[0].main_write_bandwidth.value.has_value());
+  }
 }
 
 TEST(BenchmarkRunnerTest, InjectedTimerCreationFailureIsReportedAndCheckpointed) {
@@ -310,96 +309,83 @@ TEST(BenchmarkRunnerTest, TypedAndUnknownLoopExceptionsAreContainedAndCheckpoint
   }
 }
 
-TEST(BenchmarkRunnerTest, StopHookExceptionIsContainedAtCoordinatorBoundary) {
+TEST(BenchmarkRunnerTest, CoordinatorExceptionsCheckpointFailuresAndFinalizationPolicy) {
   const ScopedDeterministicTimerSystemCalls timer_system_calls;
-  BenchmarkConfig config;
-  config.loop_count = 1;
-  BenchmarkStatistics stats;
-  BenchmarkRunnerTestHooks hooks;
-  hooks.stop_requested = []() -> bool { throw std::runtime_error("injected stop failure"); };
-
-  testing::internal::CaptureStderr();
-  int result = EXIT_SUCCESS;
-  EXPECT_NO_THROW(result = run_all_benchmarks(config, stats, &hooks));
-  const std::string error = testing::internal::GetCapturedStderr();
-
-  EXPECT_EQ(result, EXIT_FAILURE);
-  EXPECT_EQ(stats.status, BenchmarkRunStatus::Failed);
-  EXPECT_EQ(stats.status_reason, Messages::benchmark_reason_coordinator_exception("injected stop failure"));
-  EXPECT_EQ(error, Messages::error_prefix() + stats.status_reason + "\n");
-}
-
-TEST(BenchmarkRunnerTest, UnknownCheckpointExceptionPreservesLoopAtCoordinatorBoundary) {
-  const ScopedDeterministicTimerSystemCalls timer_system_calls;
-  BenchmarkConfig config;
-  config.loop_count = 1;
-  config.output_file = "/tmp/benchmark-runner-hook-unused.json";
-  config.only_bandwidth = true;
-  BenchmarkStatistics stats;
-  BenchmarkRunnerTestHooks hooks;
-  inject_deterministic_elapsed(hooks);
-  hooks.execute_loop = [](BenchmarkConfig&, int loop, HighResTimer&, BenchmarkExecutionState*) {
-    BenchmarkResults results;
-    results.status = BenchmarkRunStatus::Complete;
-    results.loop_index = static_cast<size_t>(loop);
-    return results;
+  enum class FailureKind { StopHookException, UnknownCheckpointException, CheckpointReturnFailure };
+  struct FailureCase {
+    const char* name;
+    FailureKind kind;
+    std::string expected_reason;
+    size_t expected_completed_loops;
+    bool expect_error_line;
   };
-  hooks.checkpoint = [](const BenchmarkConfig&, const BenchmarkStatistics&, double, bool) -> int { throw 11; };
-
-  testing::internal::CaptureStdout();
-  testing::internal::CaptureStderr();
-  int result = EXIT_SUCCESS;
-  EXPECT_NO_THROW(result = run_all_benchmarks(config, stats, &hooks));
-  const std::string error = testing::internal::GetCapturedStderr();
-  static_cast<void>(testing::internal::GetCapturedStdout());
-
-  EXPECT_EQ(result, EXIT_FAILURE);
-  EXPECT_EQ(stats.status, BenchmarkRunStatus::Failed);
-  EXPECT_EQ(stats.status_reason, Messages::benchmark_reason_unknown_coordinator_exception());
-  EXPECT_EQ(stats.completed_loops, 1u);
-  ASSERT_EQ(stats.loop_results.size(), 1u);
-  EXPECT_EQ(error, Messages::error_prefix() + stats.status_reason + "\n");
-}
-
-TEST(BenchmarkRunnerTest, InjectedCheckpointFailurePreservesCompletedLoopButFailsCommand) {
-  const ScopedDeterministicTimerSystemCalls timer_system_calls;
-  BenchmarkConfig config;
-  config.loop_count = 1;
-  config.output_file = "/tmp/benchmark-runner-hook-unused.json";
-  config.only_bandwidth = true;
-  BenchmarkStatistics stats;
-  BenchmarkRunnerTestHooks hooks;
-  inject_deterministic_elapsed(hooks);
-  hooks.execute_loop = [](BenchmarkConfig&, int loop, HighResTimer&, BenchmarkExecutionState*) {
-    BenchmarkResults results;
-    results.status = BenchmarkRunStatus::Complete;
-    results.loop_index = static_cast<size_t>(loop);
-    return results;
+  const FailureCase cases[] = {
+      {"stop-hook-exception", FailureKind::StopHookException,
+       Messages::benchmark_reason_coordinator_exception("injected stop failure"), 0u, true},
+      {"unknown-checkpoint-exception", FailureKind::UnknownCheckpointException,
+       Messages::benchmark_reason_unknown_coordinator_exception(), 1u, true},
+      {"checkpoint-return-failure", FailureKind::CheckpointReturnFailure,
+       Messages::benchmark_reason_checkpoint_failed(), 1u, false},
   };
-  hooks.checkpoint = [](const BenchmarkConfig&, const BenchmarkStatistics&, double, bool) { return EXIT_FAILURE; };
 
-  testing::internal::CaptureStdout();
-  const int result = run_all_benchmarks(config, stats, &hooks);
-  static_cast<void>(testing::internal::GetCapturedStdout());
+  for (const FailureCase& entry : cases) {
+    SCOPED_TRACE(entry.name);
+    BenchmarkConfig config;
+    config.loop_count = 1;
+    BenchmarkStatistics stats;
+    BenchmarkRunnerTestHooks hooks;
+    if (entry.kind == FailureKind::StopHookException) {
+      hooks.stop_requested = []() -> bool { throw std::runtime_error("injected stop failure"); };
+    } else {
+      config.output_file = "/tmp/benchmark-runner-hook-unused.json";
+      config.only_bandwidth = true;
+      inject_deterministic_elapsed(hooks);
+      hooks.execute_loop = [](BenchmarkConfig&, int loop, HighResTimer&, BenchmarkExecutionState*) {
+        BenchmarkResults results;
+        results.status = BenchmarkRunStatus::Complete;
+        results.loop_index = static_cast<size_t>(loop);
+        return results;
+      };
+      if (entry.kind == FailureKind::UnknownCheckpointException) {
+        hooks.checkpoint = [](const BenchmarkConfig&, const BenchmarkStatistics&, double, bool) -> int { throw 11; };
+      } else {
+        hooks.checkpoint = [](const BenchmarkConfig&, const BenchmarkStatistics&, double, bool) {
+          return EXIT_FAILURE;
+        };
+      }
+    }
 
-  EXPECT_EQ(result, EXIT_FAILURE);
-  EXPECT_EQ(stats.status, BenchmarkRunStatus::Failed);
-  EXPECT_EQ(stats.status_reason, Messages::benchmark_reason_checkpoint_failed());
-  EXPECT_EQ(stats.completed_loops, 1u);
-}
+    testing::internal::CaptureStdout();
+    testing::internal::CaptureStderr();
+    int result = EXIT_SUCCESS;
+    EXPECT_NO_THROW(result = run_all_benchmarks(config, stats, &hooks));
+    const std::string error = testing::internal::GetCapturedStderr();
+    static_cast<void>(testing::internal::GetCapturedStdout());
 
-TEST(BenchmarkRunnerTest,
-     CommandBoundaryFinalizationNeverRetriesFailedFileCheckpoint) {
-  EXPECT_FALSE(should_write_standard_final_json(JsonOutputKind::Disabled,
-                                                EXIT_SUCCESS));
-  EXPECT_TRUE(should_write_standard_final_json(JsonOutputKind::File,
-                                               EXIT_SUCCESS));
-  EXPECT_FALSE(should_write_standard_final_json(JsonOutputKind::File,
-                                                EXIT_FAILURE));
-  EXPECT_TRUE(should_write_standard_final_json(JsonOutputKind::Stdout,
-                                               EXIT_SUCCESS));
-  EXPECT_TRUE(should_write_standard_final_json(JsonOutputKind::Stdout,
-                                               EXIT_FAILURE));
+    EXPECT_EQ(result, EXIT_FAILURE);
+    EXPECT_EQ(stats.status, BenchmarkRunStatus::Failed);
+    EXPECT_EQ(stats.status_reason, entry.expected_reason);
+    EXPECT_EQ(stats.completed_loops, entry.expected_completed_loops);
+    EXPECT_EQ(stats.loop_results.size(), entry.expected_completed_loops);
+    if (entry.expect_error_line) {
+      EXPECT_EQ(error, Messages::error_prefix() + stats.status_reason + "\n");
+    }
+  }
+
+  struct FinalWriteCase {
+    JsonOutputKind kind;
+    int run_result;
+    bool expected_write;
+  };
+  for (const FinalWriteCase& entry :
+       {FinalWriteCase{JsonOutputKind::Disabled, EXIT_SUCCESS, false},
+        FinalWriteCase{JsonOutputKind::File, EXIT_SUCCESS, true},
+        FinalWriteCase{JsonOutputKind::File, EXIT_FAILURE, false},
+        FinalWriteCase{JsonOutputKind::Stdout, EXIT_SUCCESS, true},
+        FinalWriteCase{JsonOutputKind::Stdout, EXIT_FAILURE, true}}) {
+    SCOPED_TRACE(::testing::Message() << static_cast<int>(entry.kind) << "/" << entry.run_result);
+    EXPECT_EQ(should_write_standard_final_json(entry.kind, entry.run_result), entry.expected_write);
+  }
 }
 
 TEST(BenchmarkRunnerTest,

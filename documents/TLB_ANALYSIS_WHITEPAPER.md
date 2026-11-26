@@ -22,14 +22,26 @@ Primary implementation references:
 - `src/benchmark/tlb_analysis.cpp`
 - `src/benchmark/tlb_analysis.h`
 - `src/benchmark/tlb_boundary_detector.cpp`
+- `src/benchmark/tlb_analysis_json.cpp`
 - `src/benchmark/tlb_analysis_json.h`
+- `src/benchmark/tlb_chain.cpp`
+- `src/benchmark/tlb_measurement_scheduler.cpp`
+- `src/benchmark/tlb_runtime_policy.cpp`
+- `src/benchmark/tlb_sweep_planner.cpp`
+- `src/core/config/cli_parser.h`
+- `src/core/config/cli_parser.cpp`
+- `src/core/config/mode_selector.cpp`
 - `src/core/config/argument_parser.cpp`
+- `src/core/config/config_validator.cpp`
+- `tests/test_cli_parser.cpp`
+- `tests/test_config.cpp`
 - `tests/test_analysis.cpp`
 
 Related user-facing docs:
 
-- `README.md`
-- `MANUAL.md`
+- [README.md](../README.md)
+- [MANUAL.md](MANUAL.md)
+- [API.md](API.md)
 
 Related whitepaper for the other standalone analysis mode:
 
@@ -39,10 +51,11 @@ Related whitepaper for the other standalone analysis mode:
 
 ### 3.1 Accepted Forms
 
-`--analyze-tlb` runs a dedicated analysis path and accepts only optional JSON output, optional latency stride override, optional chain-mode override, optional sweep density, optional reproducibility seed, optional parameter sweep specs, and an optional sweep run-count guardrail:
+`--analyze-tlb` runs a dedicated analysis path built on the shared descriptor-driven CLI parser and accepts only optional JSON output, optional latency stride override, optional chain-mode override, optional sweep density, optional reproducibility seed, optional parameter sweep specs, an optional sweep run-count guardrail, and optional help (`-h`/`--help`). Value-taking long options accept both space-separated (`--option <value>`) and inline (`--option=<value>`) forms:
 
 ```bash
 memory_benchmark --analyze-tlb
+memory_benchmark --analyze-tlb --help
 memory_benchmark --analyze-tlb --output tlb_analysis.json
 memory_benchmark --output tlb_analysis.json --analyze-tlb
 memory_benchmark --analyze-tlb --latency-stride-bytes 128 --output tlb_analysis_stride128.json
@@ -53,6 +66,8 @@ memory_benchmark --analyze-tlb --sweep tlb-density=low,medium,high --output tlb_
 memory_benchmark --analyze-tlb --sweep tlb-density=low,medium --output - >tlb_density_sweep.json 2>tlb_density_sweep.log
 memory_benchmark --analyze-tlb --sweep latency-stride-bytes=64,128 --sweep tlb-density=medium,high --sweep-max-runs 4 --output tlb_stride_density_sweep.json
 ```
+
+When `-h`/`--help` is supplied with `--analyze-tlb`, full syntactic, whitelist, duplicate, missing-value, and value-parse checks still run first; once valid, human-facing help is printed to stdout and the process exits `0` before semantic validation, OS queries, timer creation, seed generation, or output-session setup (including `--analyze-tlb --output - --help` and `--analyze-tlb --help --output -`).
 
 ### 3.2 Stride Default
 
@@ -78,7 +93,7 @@ Sweep density applies only to `--analyze-tlb`.
 ### 3.4 Reproducibility Seed (`--seed`)
 
 `--seed <uint64>` fixes the planner order, derived per-task seeds, and standalone TLB pointer-chain permutations. If the
-option is omitted, one 64-bit seed is generated when the command is parsed. A Cartesian parameter sweep reuses that
+option is omitted, one 64-bit seed is generated when the command proceeds past `--help`. A Cartesian parameter sweep reuses that
 same base seed for every generated run, which makes parameter comparisons share the same deterministic schedule policy.
 
 The base seed, whether it was user-provided or generated, and every derived measurement seed are stored in JSON. Task seeds
@@ -100,7 +115,9 @@ envelope on stdout. Every other non-empty value selects a real file, including `
 `-G`. `--sweep-max-runs <count>` limits the number of generated combinations. Its default is `16` for
 `--analyze-tlb` and `256` for other modes; an explicit value overrides the mode default.
 
-Each sweep parameter key may appear only once. A combined real-file JSON result is atomically checkpointed after each
+Each sweep parameter key may appear only once (duplicates fail with `sweep parameter specified more than once: <key>`),
+and combining a direct option (`--latency-stride-bytes`, `--latency-chain-mode`, or `--tlb-density`) with `--sweep` for
+the same parameter is rejected as a conflict (`Cannot specify both --<opt> and --sweep <key>`). A combined real-file JSON result is atomically checkpointed after each
 attempted run. An empty run plan or a stop observed before a run also checkpoints a terminal envelope without adding a
 `runs[]` entry or incrementing `attempted_runs`. A stdout run keeps the same logical transitions but skips lazy
 checkpoint serialization and emits the final envelope once. Both transports record top-level `status`, `status_reason`,
@@ -115,7 +132,7 @@ stops further runs.
 
 ### 3.6 Rejected Combinations
 
-All options outside the accepted set are rejected when `--analyze-tlb` is present.
+All options outside the accepted set are rejected when `--analyze-tlb` is present with a concise single-line stderr diagnostic naming the offending option (`Unsupported option '<token>': ...`) without dumping full usage text. Duplicate single-occurrence flags (including `-T`/`--analyze-tlb` and `-h`/`--help`), inline values on boolean/mode flags (`--analyze-tlb=1`, `--help=1`), single-dash inline values (`-D=low`), and combining a direct flag with `--sweep` for the same parameter are also rejected.
 `--latency-chain-mode global-random` is also rejected for `--analyze-tlb`, because it ignores locality windows and would turn the locality sweep into repeated full-buffer random measurements with misleading boundary labels.
 
 Example (invalid):
@@ -123,6 +140,7 @@ Example (invalid):
 ```bash
 memory_benchmark --analyze-tlb --buffer-size 1024
 memory_benchmark --analyze-tlb --latency-chain-mode global-random
+memory_benchmark --analyze-tlb --tlb-density low --sweep tlb-density=low,high --output tlb_sweep.json
 ```
 
 ## 4. Measurement Workflow
@@ -609,7 +627,7 @@ comparable run conditions. Use the same explicit seed when workload identity mus
 If L1 detection reports "Not detected":
 
 1. **Check the selected buffer size:** Is it large enough to sweep through the TLB capacity? The 16 KB sweep start may be insufficient if stride is large.
-2. **Review the stride:** If `--latency-stride-bytes` is large (e.g., 512 bytes), `min_sweep_locality = max(16KB, 2 * stride)` may skip the actual L1 TLB boundary. Try re-running with a smaller stride.
+2. **Review the stride:** If `--latency-stride-bytes` exceeds half of 16 KB (for example, `16384` bytes on a 16 KiB page system, which is the maximum stride accepted by `--analyze-tlb`), `min_sweep_locality = page_align_up(max(16KB, 2 * stride))` rises to `32 KB` and skips the 16 KB start point, which may obscure an early boundary. Try re-running with a smaller stride.
 3. **Check the paired JSON data:** Export with `--output` and inspect `sweep[].translation_delta_p50_ns` for the accepted signal. Use `spread_p50_latency_ns`, `packed_p50_latency_ns`, and `active_cache_line_footprint_bytes` only as explicitly named cache-hot diagnostics.
 4. **Verify CPU/system state:** Thermal throttling or power-saving modes can obscure boundaries; run in a stable, idle state.
 

@@ -60,6 +60,7 @@ def partition(offset, size, workers):
     for rank in range(1, active):
         target = size // active * rank + min(rank, size % active)
         lo, hi = boundaries[-1] + 1, size - (active - rank)
+        target = max(lo, min(hi, target))
         aligned_lo, aligned_hi = ((offset + lo + 31) // 32) * 32, ((offset + hi) // 32) * 32
         if aligned_lo <= aligned_hi:
             down = max(aligned_lo, min(aligned_hi, (offset + target) // 32 * 32))

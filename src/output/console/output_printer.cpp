@@ -121,26 +121,16 @@ void print_cache_latency_measurement(const std::string& label,
 }  // namespace
 
 /**
- * @brief Displays program usage instructions via command-line arguments.
- *
- * @param prog_name The name of the executable (typically argv[0])
- */
-void print_usage(const char *prog_name) {
-  // Output usage syntax, version, options, and an example to standard error.
-  std::cerr << Messages::usage_header(SOFTVERSION)
-            << Messages::usage_options(prog_name)
-            << Messages::usage_example(prog_name);
-}
-
-/**
  * @brief Displays help text to standard output (for -h/--help).
  *
  * @param prog_name The name of the executable (typically argv[0])
  */
 void print_help(const char *prog_name) {
+  const char* safe_prog_name =
+      (prog_name != nullptr && prog_name[0] != '\0') ? prog_name : "memory_benchmark";
   std::cout << Messages::usage_header(SOFTVERSION)
-            << Messages::usage_options(prog_name)
-            << Messages::usage_example(prog_name);
+            << Messages::usage_options(safe_prog_name)
+            << Messages::usage_example(safe_prog_name);
 }
 
 void print_runtime_banner() {

@@ -74,6 +74,7 @@ enum class SweepParameter {
 struct SweepValue {
   std::string raw_value;
   long long integer_value = 0;
+  unsigned long unsigned_value = 0;
   LatencyChainMode latency_chain_mode = LatencyChainMode::Auto;
   TlbSweepDensity tlb_sweep_density = TlbSweepDensity::Medium;
 };
@@ -200,9 +201,13 @@ struct BenchmarkConfig {
   int main_thread_qos_code = 0;            ///< Return code from pthread_set_qos_class_self_np()
 
   // Tracking flags for user-specified parameters
-  bool user_specified_iterations = false;      ///< Whether user explicitly set --iterations
-  bool user_specified_latency_samples = false; ///< Whether user explicitly set --latency-samples
+  bool user_specified_buffer_size = false;         ///< Whether user explicitly set --buffer-size
+  bool user_specified_iterations = false;          ///< Whether user explicitly set --iterations
+  bool user_specified_latency_samples = false;     ///< Whether user explicitly set --latency-samples
+  bool user_specified_latency_stride = false;      ///< Whether user explicitly set --latency-stride-bytes
+  bool user_specified_latency_chain_mode = false;  ///< Whether user explicitly set --latency-chain-mode
   bool user_specified_latency_tlb_locality = false; ///< Whether user explicitly set --latency-tlb-locality-kb
+  bool user_specified_tlb_density = false;         ///< Whether user explicitly set --tlb-density
   bool user_specified_tlb_seed = false;  ///< Whether user explicitly set --seed
   bool user_specified_pattern_seed = false;  ///< Whether user explicitly set --seed for --patterns
   bool user_specified_benchmark_seed = false;  ///< Whether user explicitly set --seed for --benchmark

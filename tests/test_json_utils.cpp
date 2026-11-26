@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include "output/console/messages/messages_api.h"
 #include "output/json/json_output/json_output_api.h"
@@ -92,43 +93,45 @@ TEST(JsonFileWriterTest, CreatesParentsAtomicallyReplacesAndAnnouncesOnlyWhenReq
   EXPECT_FALSE(std::filesystem::exists(target.string() + ".tmp"));
 }
 
-TEST(JsonFileWriterTest, FailedTemporaryOpenCleansStaleTemporaryPath) {
-  TemporaryDirectory temporary("writer_open_failure");
-  const std::filesystem::path target = temporary.path() / "result.json";
-  const std::filesystem::path stale_temp = target.string() + ".tmp";
-  ASSERT_TRUE(std::filesystem::create_directory(stale_temp));
+TEST(JsonFileWriterTest, WriteFailuresCleanTemporaryFilesPreserveDestinationAndStayContained) {
+  {
+    SCOPED_TRACE("failed temporary open cleans stale temp path");
+    TemporaryDirectory temporary("writer_open_failure");
+    const std::filesystem::path target = temporary.path() / "result.json";
+    const std::filesystem::path stale_temp = target.string() + ".tmp";
+    ASSERT_TRUE(std::filesystem::create_directory(stale_temp));
 
-  testing::internal::CaptureStderr();
-  EXPECT_EQ(write_json_to_file(target, {{"ok", true}}, false), EXIT_FAILURE);
-  const std::string error = testing::internal::GetCapturedStderr();
+    testing::internal::CaptureStderr();
+    EXPECT_EQ(write_json_to_file(target, {{"ok", true}}, false), EXIT_FAILURE);
+    const std::string error = testing::internal::GetCapturedStderr();
 
-  EXPECT_EQ(error, Messages::error_prefix() +
-                       Messages::error_file_write_failed(stale_temp.string(), "Failed to open temporary file: " +
-                                                                                  std::string(std::strerror(EISDIR))) +
-                       "\n");
-  EXPECT_FALSE(std::filesystem::exists(stale_temp));
-  EXPECT_FALSE(std::filesystem::exists(target));
-}
+    const std::string expected_reason = "Failed to open temporary file: " + std::string(std::strerror(EISDIR));
+    EXPECT_EQ(error, Messages::error_prefix() +
+                         Messages::error_file_write_failed(stale_temp.string(), expected_reason) + "\n");
+    EXPECT_FALSE(std::filesystem::exists(stale_temp));
+    EXPECT_FALSE(std::filesystem::exists(target));
+  }
 
-TEST(JsonFileWriterTest, RenameFailurePreservesDestinationAndCleansTemporaryFile) {
-  TemporaryDirectory temporary("writer_rename_failure");
-  const std::filesystem::path target = temporary.path() / "result.json";
-  ASSERT_TRUE(std::filesystem::create_directory(target));
-  write_text(target / "keep", "sentinel");
+  {
+    SCOPED_TRACE("rename failure preserves destination and cleans temporary file");
+    TemporaryDirectory temporary("writer_rename_failure");
+    const std::filesystem::path target = temporary.path() / "result.json";
+    ASSERT_TRUE(std::filesystem::create_directory(target));
+    write_text(target / "keep", "sentinel");
 
-  testing::internal::CaptureStderr();
-  EXPECT_EQ(write_json_to_file(target, {{"ok", true}}, false), EXIT_FAILURE);
-  const std::string error = testing::internal::GetCapturedStderr();
+    testing::internal::CaptureStderr();
+    EXPECT_EQ(write_json_to_file(target, {{"ok", true}}, false), EXIT_FAILURE);
+    const std::string error = testing::internal::GetCapturedStderr();
 
-  EXPECT_NE(error.find(Messages::error_prefix() + "Failed to write file \"" + target.string() +
-                       "\": Failed to rename temporary file: "),
-            std::string::npos);
-  EXPECT_TRUE(std::filesystem::is_directory(target));
-  EXPECT_TRUE(std::filesystem::exists(target / "keep"));
-  EXPECT_FALSE(std::filesystem::exists(target.string() + ".tmp"));
-}
+    EXPECT_NE(error.find(Messages::error_prefix() + "Failed to write file \"" + target.string() +
+                         "\": Failed to rename temporary file: "),
+              std::string::npos);
+    EXPECT_TRUE(std::filesystem::is_directory(target));
+    EXPECT_TRUE(std::filesystem::exists(target / "keep"));
+    EXPECT_FALSE(std::filesystem::exists(target.string() + ".tmp"));
+  }
 
-TEST(JsonFileWriterTest, ParentPathFilesystemErrorCannotEscapeBoundary) {
+  SCOPED_TRACE("parent path filesystem error cannot escape boundary");
   const std::filesystem::path target = std::filesystem::path("/tmp") / std::string(5000, 'x') / "result.json";
 
   testing::internal::CaptureStderr();
@@ -147,27 +150,33 @@ TEST(JsonUtilsTest, UtcTimestampFormatsFixedTimeIndependentOfLocalTimezone) {
   EXPECT_EQ(build_utc_timestamp(fixed_time), "2020-01-02T03:04:05Z");
 }
 
-TEST(JsonUtilsTest, StatisticsUseSampleDeviationInterpolationCvAndMad) {
-  const nlohmann::json statistics = calculate_json_statistics({10.0, 20.0, 30.0, 40.0});
-
-  EXPECT_DOUBLE_EQ(statistics["average"], 25.0);
-  EXPECT_DOUBLE_EQ(statistics["min"], 10.0);
-  EXPECT_DOUBLE_EQ(statistics["max"], 40.0);
-  EXPECT_DOUBLE_EQ(statistics["median"], 25.0);
-  EXPECT_DOUBLE_EQ(statistics["p90"], 37.0);
-  EXPECT_DOUBLE_EQ(statistics["p95"], 38.5);
-  EXPECT_NEAR(statistics["p99"].get<double>(), 39.7, 1e-12);
-  EXPECT_NEAR(statistics["stddev"].get<double>(), 12.909944487358056, 1e-12);
-  EXPECT_NEAR(statistics["coefficient_of_variation_pct"].get<double>(), 51.63977794943222, 1e-12);
-  EXPECT_DOUBLE_EQ(statistics["median_absolute_deviation"], 10.0);
-}
-
-TEST(JsonUtilsTest, SingleZeroHasNoVariationAndUndefinedCv) {
-  const nlohmann::json statistics = calculate_json_statistics({0.0});
-
-  EXPECT_DOUBLE_EQ(statistics["average"], 0.0);
-  EXPECT_DOUBLE_EQ(statistics["median"], 0.0);
-  EXPECT_DOUBLE_EQ(statistics["stddev"], 0.0);
-  EXPECT_TRUE(statistics["coefficient_of_variation_pct"].is_null());
-  EXPECT_DOUBLE_EQ(statistics["median_absolute_deviation"], 0.0);
+TEST(JsonUtilsTest, StatisticsComputeSampleDeviationPercentilesMadAndCv) {
+  struct StatsCase {
+    const char* name; std::vector<double> values;
+    double average, min, max, median, p90, p95, p99, stddev;
+    bool cv_defined; double cv_pct, mad;
+  };
+  const std::vector<StatsCase> cases = {
+      {"multi-sample distribution", {10.0, 20.0, 30.0, 40.0}, 25.0, 10.0, 40.0, 25.0, 37.0, 38.5, 39.7,
+       12.909944487358056, true, 51.63977794943222, 10.0},
+      {"single zero sample", {0.0}, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, false, 0.0, 0.0},
+  };
+  for (const StatsCase& entry : cases) {
+    SCOPED_TRACE(entry.name);
+    const nlohmann::json statistics = calculate_json_statistics(entry.values);
+    EXPECT_DOUBLE_EQ(statistics["average"], entry.average);
+    EXPECT_DOUBLE_EQ(statistics["min"], entry.min);
+    EXPECT_DOUBLE_EQ(statistics["max"], entry.max);
+    EXPECT_DOUBLE_EQ(statistics["median"], entry.median);
+    EXPECT_DOUBLE_EQ(statistics["p90"], entry.p90);
+    EXPECT_DOUBLE_EQ(statistics["p95"], entry.p95);
+    EXPECT_NEAR(statistics["p99"].get<double>(), entry.p99, 1e-12);
+    EXPECT_NEAR(statistics["stddev"].get<double>(), entry.stddev, 1e-12);
+    if (entry.cv_defined) {
+      EXPECT_NEAR(statistics["coefficient_of_variation_pct"].get<double>(), entry.cv_pct, 1e-12);
+    } else {
+      EXPECT_TRUE(statistics["coefficient_of_variation_pct"].is_null());
+    }
+    EXPECT_DOUBLE_EQ(statistics["median_absolute_deviation"], entry.mad);
+  }
 }

@@ -76,51 +76,56 @@ class HighResTimerTest : public testing::Test {
 
 }  // namespace
 
-TEST_F(HighResTimerTest, TickConversionUsesExactTimebaseRatio) {
-  const std::optional<double> first = convert_mach_ticks_to_nanoseconds(3, 125, 3);
-  const std::optional<double> second = convert_mach_ticks_to_nanoseconds(250, 2, 5);
-  ASSERT_TRUE(first.has_value());
-  ASSERT_TRUE(second.has_value());
-  EXPECT_DOUBLE_EQ(*first, 125.0);
-  EXPECT_DOUBLE_EQ(*second, 100.0);
-  EXPECT_FALSE(convert_mach_ticks_to_nanoseconds(1, 1, 0).has_value());
+TEST_F(HighResTimerTest, TickConversionRatioAndCreationErrors) {
+  const struct { const char* name; uint64_t ticks; uint32_t numer; uint32_t denom; bool valid; double ns; } ratios[] = {
+      {"125/3 ratio", 3, 125, 3, true, 125.0},
+      {"2/5 ratio", 250, 2, 5, true, 100.0},
+      {"zero denominator", 1, 1, 0, false, 0.0},
+  };
+  for (const auto& entry : ratios) {
+    SCOPED_TRACE(entry.name);
+    const std::optional<double> converted = convert_mach_ticks_to_nanoseconds(entry.ticks, entry.numer, entry.denom);
+    EXPECT_EQ(converted.has_value(), entry.valid);
+    if (entry.valid) EXPECT_DOUBLE_EQ(*converted, entry.ns);
+  }
+
+  const struct { const char* name; kern_return_t rc; uint32_t denom; std::string expected; } errors[] = {
+      {"mach failure", KERN_FAILURE, 1,
+       Messages::error_prefix() + Messages::error_mach_timebase_info_failed(mach_error_string(KERN_FAILURE)) + "\n"},
+      {"zero denominator", KERN_SUCCESS, 0,
+       Messages::error_prefix() + "timebase denominator is zero (invalid timebase)\n"},
+  };
+  for (const auto& entry : errors) {
+    SCOPED_TRACE(entry.name);
+    state = FakeTimerState{};
+    state.timebase_result = entry.rc;
+    state.denom = entry.denom;
+    testing::internal::CaptureStderr();
+    const std::optional<HighResTimer> timer = HighResTimer::create();
+    const std::string error = testing::internal::GetCapturedStderr();
+    EXPECT_FALSE(timer.has_value());
+    EXPECT_EQ(error, entry.expected);
+  }
 }
 
-TEST_F(HighResTimerTest, CreateRejectsMachFailureWithCentralizedError) {
-  state.timebase_result = KERN_FAILURE;
-  testing::internal::CaptureStderr();
-  const std::optional<HighResTimer> timer = HighResTimer::create();
-  const std::string error = testing::internal::GetCapturedStderr();
+TEST_F(HighResTimerTest, DeterministicClockAndSnapshotRetainExactBoundaries) {
+  {
+    SCOPED_TRACE("deterministic nanoseconds and seconds");
+    state = FakeTimerState{};
+    state.numer = 2;
+    state.denom = 5;
+    set_ticks({100, 350, 500, 750});
+    std::optional<HighResTimer> timer = HighResTimer::create();
+    ASSERT_TRUE(timer.has_value());
 
-  EXPECT_FALSE(timer.has_value());
-  EXPECT_EQ(error, Messages::error_prefix() +
-                       Messages::error_mach_timebase_info_failed(mach_error_string(KERN_FAILURE)) + "\n");
-}
+    timer->start();
+    EXPECT_DOUBLE_EQ(timer->stop_ns(), 100.0);
+    timer->start();
+    EXPECT_DOUBLE_EQ(timer->stop(), 100.0 / 1e9);
+  }
 
-TEST_F(HighResTimerTest, CreateRejectsZeroDenominator) {
-  state.denom = 0;
-  testing::internal::CaptureStderr();
-  const std::optional<HighResTimer> timer = HighResTimer::create();
-  const std::string error = testing::internal::GetCapturedStderr();
-
-  EXPECT_FALSE(timer.has_value());
-  EXPECT_EQ(error, Messages::error_prefix() + "timebase denominator is zero (invalid timebase)\n");
-}
-
-TEST_F(HighResTimerTest, DeterministicClockProducesExactNanosecondsAndSeconds) {
-  state.numer = 2;
-  state.denom = 5;
-  set_ticks({100, 350, 500, 750});
-  std::optional<HighResTimer> timer = HighResTimer::create();
-  ASSERT_TRUE(timer.has_value());
-
-  timer->start();
-  EXPECT_DOUBLE_EQ(timer->stop_ns(), 100.0);
-  timer->start();
-  EXPECT_DOUBLE_EQ(timer->stop(), 100.0 / 1e9);
-}
-
-TEST_F(HighResTimerTest, SnapshotRetainsOriginalBoundariesWithoutExtraClockReads) {
+  SCOPED_TRACE("snapshot retains original boundaries without extra clock reads");
+  state = FakeTimerState{};
   state.numer = 125;
   state.denom = 3;
   set_ticks({100, 103, 200, 200});

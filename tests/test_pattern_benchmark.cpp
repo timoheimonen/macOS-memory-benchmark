@@ -304,7 +304,7 @@ void expect_2mb_pattern_bandwidths_positive(const PatternResults& results) {
 
 }  // namespace
 
-TEST(PatternBenchmarkTest, CollectorSumsCompletionCountersAndPreservesEarlierPartialReason) {
+TEST(PatternBenchmarkTest, CollectorSumsCountersAndExcludesFailedLoopFromJsonAggregate) {
   for (bool partial_first : {false, true}) {
     SCOPED_TRACE(partial_first);
     PatternStatistics statistics;
@@ -330,6 +330,52 @@ TEST(PatternBenchmarkTest, CollectorSumsCompletionCountersAndPreservesEarlierPar
     EXPECT_EQ(statistics.loop_results[partial_first ? 0 : 1].status, PatternRunStatus::Partial);
     if (partial_first) EXPECT_EQ(statistics.status_reason, partial_reason);
   }
+
+  SCOPED_TRACE("failed loop excluded from json aggregate");
+  BenchmarkConfig config;
+  config.loop_count = 2;
+  config.buffer_size = 4096;
+  PatternRunnerTestHooks hooks = make_pattern_runner_hooks();
+  hooks.execute_loop = [](const PatternBuffers&, const BenchmarkConfig&, PatternResults& results, size_t loop_index) {
+    results = make_skipped_pattern_loop();
+    set_pattern_measurement(
+        results, PatternKind::SequentialForward, PatternOperation::Read,
+        make_test_measurement(PatternMeasurementStatus::Measured, "", loop_index == 0 ? 10.0 : 100.0));
+    if (loop_index == 0) {
+      return EXIT_SUCCESS;
+    }
+    results.measurements.back().status = PatternMeasurementStatus::Measured;
+    results.measurements.back().status_reason = "missing injected value";
+    results.measurements.back().bandwidth_gb_s.reset();
+    return EXIT_FAILURE;
+  };
+
+  PatternStatistics statistics;
+  EXPECT_EQ(run_all_pattern_benchmarks(config, statistics, &hooks), EXIT_FAILURE);
+  ASSERT_EQ(statistics.all_forward_read_bw.size(), 1u);
+  EXPECT_DOUBLE_EQ(statistics.all_forward_read_bw.front(), 10.0);
+  const PatternResults headline = extract_pattern_median_results(statistics);
+  const PatternMeasurement& headline_read =
+      get_pattern_measurement(headline, PatternKind::SequentialForward, PatternOperation::Read);
+  ASSERT_TRUE(headline_read.bandwidth_gb_s.has_value());
+  EXPECT_DOUBLE_EQ(*headline_read.bandwidth_gb_s, 10.0);
+
+  const nlohmann::ordered_json output = build_pattern_results_json(config, statistics, 0.5);
+  EXPECT_EQ(output["status"], "failed");
+  EXPECT_EQ(output["completed_loops"], 1u);
+  EXPECT_EQ(output["planned_loops"], 2u);
+  EXPECT_EQ(output["completed_measurements"], 41u);
+  EXPECT_EQ(output["planned_measurements"], 42u);
+  EXPECT_FALSE(output["results_complete"].get<bool>());
+  const nlohmann::ordered_json& read =
+      output[JsonKeys::PATTERNS][JsonKeys::SEQUENTIAL_FORWARD][JsonKeys::BANDWIDTH][JsonKeys::READ_GB_S];
+  ASSERT_EQ(read["values_gb_s"].size(), 1u);
+  EXPECT_DOUBLE_EQ(read["values_gb_s"][0].get<double>(), 10.0);
+  EXPECT_DOUBLE_EQ(read["value_gb_s"].get<double>(), 10.0);
+  EXPECT_DOUBLE_EQ(read["statistics"]["median_p50"].get<double>(), 10.0);
+  ASSERT_EQ(read["measurements"].size(), 2u);
+  EXPECT_DOUBLE_EQ(read["measurements"][0]["value_gb_s"].get<double>(), 10.0);
+  EXPECT_DOUBLE_EQ(read["measurements"][1]["value_gb_s"].get<double>(), 100.0);
 }
 
 TEST(PatternBenchmarkTest, CoordinatorContainsPreparationFailuresAndExceptionsWithPlannedCounts) {
@@ -377,174 +423,124 @@ TEST(PatternBenchmarkTest, CoordinatorContainsPreparationFailuresAndExceptionsWi
   }
 }
 
-TEST(PatternBenchmarkTest, CoordinatorStopsBeforeFirstLoopWithPlannedCounts) {
-  BenchmarkConfig config;
-  config.loop_count = 2;
-  config.buffer_size = 4096;
-  PatternRunnerTestHooks hooks = make_pattern_runner_hooks();
-  hooks.stop_requested = []() { return true; };
-  hooks.execute_loop = [](const PatternBuffers&, const BenchmarkConfig&, PatternResults&, size_t) {
-    ADD_FAILURE() << "executor must not run after a pre-loop stop";
-    return EXIT_FAILURE;
+TEST(PatternBenchmarkTest, CoordinatorStopBoundariesRespectRemainingLoops) {
+  struct StopCase {
+    const char* name;
+    int loop_count;
+    bool stop_always;
+    size_t stop_on_check;
+    PatternRunStatus expected_status;
+    std::string expected_reason;
+    size_t expected_completed_loops;
+    size_t expected_completed_measurements;
+    size_t expected_loop_results;
   };
+  const std::array<StopCase, 3> cases = {{
+      {"before first loop", 2, true, 0, PatternRunStatus::Interrupted, Messages::pattern_reason_loop_interrupted(), 0u,
+       0u, 0u},
+      {"late stop with remaining loop", 2, false, 2, PatternRunStatus::Interrupted,
+       Messages::pattern_reason_loop_interrupted(), 1u, 21u, 1u},
+      {"late stop after final loop", 1, false, 2, PatternRunStatus::Complete, "", 1u, 21u, 1u},
+  }};
 
-  PatternStatistics statistics;
-  EXPECT_EQ(run_all_pattern_benchmarks(config, statistics, &hooks), EXIT_SUCCESS);
-  EXPECT_EQ(statistics.status, PatternRunStatus::Interrupted);
-  EXPECT_EQ(statistics.status_reason, Messages::pattern_reason_loop_interrupted());
-  EXPECT_EQ(statistics.planned_loops, 2u);
-  EXPECT_EQ(statistics.completed_loops, 0u);
-  EXPECT_EQ(statistics.planned_measurements, 42u);
-  EXPECT_EQ(statistics.completed_measurements, 0u);
-  EXPECT_TRUE(statistics.loop_results.empty());
+  for (const StopCase& entry : cases) {
+    SCOPED_TRACE(entry.name);
+    BenchmarkConfig config;
+    config.loop_count = entry.loop_count;
+    config.buffer_size = 4096;
+    PatternRunnerTestHooks hooks = make_pattern_runner_hooks();
+    size_t stop_checks = 0;
+    hooks.stop_requested = [&stop_checks, &entry]() {
+      ++stop_checks;
+      return entry.stop_always || stop_checks == entry.stop_on_check;
+    };
+    hooks.execute_loop = [&entry](const PatternBuffers&, const BenchmarkConfig&, PatternResults& results, size_t) {
+      if (entry.stop_always) {
+        ADD_FAILURE() << "executor must not run after a pre-loop stop";
+        return EXIT_FAILURE;
+      }
+      results = make_complete_pattern_loop();
+      return EXIT_SUCCESS;
+    };
+
+    PatternStatistics statistics;
+    EXPECT_EQ(run_all_pattern_benchmarks(config, statistics, &hooks), EXIT_SUCCESS);
+    EXPECT_EQ(statistics.status, entry.expected_status);
+    EXPECT_EQ(statistics.status_reason, entry.expected_reason);
+    EXPECT_EQ(statistics.planned_loops, static_cast<size_t>(entry.loop_count));
+    EXPECT_EQ(statistics.completed_loops, entry.expected_completed_loops);
+    EXPECT_EQ(statistics.planned_measurements, static_cast<size_t>(entry.loop_count) * 21u);
+    EXPECT_EQ(statistics.completed_measurements, entry.expected_completed_measurements);
+    EXPECT_EQ(statistics.loop_results.size(), entry.expected_loop_results);
+  }
 }
 
-TEST(PatternBenchmarkTest, CoordinatorConvertsLoopExceptionToFailedEvidence) {
-  BenchmarkConfig config;
-  config.loop_count = 1;
-  config.buffer_size = 4096;
-  PatternRunnerTestHooks hooks = make_pattern_runner_hooks();
-  hooks.execute_loop = [](const PatternBuffers&, const BenchmarkConfig&, PatternResults&, size_t) -> int {
-    throw std::runtime_error("injected exception");
-  };
-
-  PatternStatistics statistics;
-  testing::internal::CaptureStderr();
-  const int status = run_all_pattern_benchmarks(config, statistics, &hooks);
-  const std::string error_output = testing::internal::GetCapturedStderr();
-  EXPECT_EQ(status, EXIT_FAILURE);
-  ASSERT_EQ(statistics.loop_results.size(), 1u);
-  EXPECT_EQ(statistics.status, PatternRunStatus::Failed);
-  EXPECT_EQ(statistics.status_reason, Messages::pattern_reason_loop_exception("injected exception"));
-  EXPECT_EQ(statistics.completed_measurements, 0u);
-  EXPECT_NE(error_output.find("injected exception"), std::string::npos);
-
-  hooks.execute_loop = [](const PatternBuffers&, const BenchmarkConfig&, PatternResults&, size_t) -> int { throw 7; };
-  testing::internal::CaptureStderr();
-  EXPECT_EQ(run_all_pattern_benchmarks(config, statistics, &hooks), EXIT_FAILURE);
-  (void)testing::internal::GetCapturedStderr();
-  ASSERT_EQ(statistics.loop_results.size(), 1u);
-  EXPECT_EQ(statistics.status_reason, Messages::pattern_reason_unknown_loop_exception());
-}
-
-TEST(PatternBenchmarkTest, CoordinatorPreservesFailedPartialInvalidAndInterruptedLoopEvidence) {
+TEST(PatternBenchmarkTest, CoordinatorHandlesLoopExceptionsAndPreservesLoopStates) {
+  enum class LoopAction { ReturnStatus, ThrowRuntimeError, ThrowUnknown };
   struct LoopCase {
+    const char* name;
+    LoopAction action;
     PatternMeasurementStatus measurement;
     bool missing_value;
     int executor_result;
     int run_result;
     PatternRunStatus status;
     std::string reason;
+    std::string expected_stderr_substring;
+    size_t completed_measurements;
   };
-  for (const LoopCase& entry :
-       {LoopCase{PatternMeasurementStatus::Measured, false, EXIT_FAILURE, EXIT_FAILURE, PatternRunStatus::Failed, ""},
-        LoopCase{PatternMeasurementStatus::Measured, true, EXIT_SUCCESS, EXIT_SUCCESS, PatternRunStatus::Partial,
-                 Messages::pattern_reason_loop_incomplete()},
-        LoopCase{PatternMeasurementStatus::Invalid, true, EXIT_SUCCESS, EXIT_FAILURE, PatternRunStatus::Failed,
-                 "invalid injected timing"},
-        LoopCase{PatternMeasurementStatus::Interrupted, true, EXIT_SUCCESS, EXIT_SUCCESS, PatternRunStatus::Interrupted,
-                 "injected interruption"}}) {
-    SCOPED_TRACE(static_cast<int>(entry.measurement));
-    SCOPED_TRACE(entry.executor_result);
+  const std::array<LoopCase, 6> cases = {{
+      {"typed exception", LoopAction::ThrowRuntimeError, PatternMeasurementStatus::Measured, false, EXIT_FAILURE,
+       EXIT_FAILURE, PatternRunStatus::Failed, Messages::pattern_reason_loop_exception("injected exception"),
+       "injected exception", 0u},
+      {"unknown exception", LoopAction::ThrowUnknown, PatternMeasurementStatus::Measured, false, EXIT_FAILURE,
+       EXIT_FAILURE, PatternRunStatus::Failed, Messages::pattern_reason_unknown_loop_exception(), "", 0u},
+      {"executor failure", LoopAction::ReturnStatus, PatternMeasurementStatus::Measured, false, EXIT_FAILURE,
+       EXIT_FAILURE, PatternRunStatus::Failed, "", "", 21u},
+      {"missing value partial", LoopAction::ReturnStatus, PatternMeasurementStatus::Measured, true, EXIT_SUCCESS,
+       EXIT_SUCCESS, PatternRunStatus::Partial, Messages::pattern_reason_loop_incomplete(), "", 20u},
+      {"invalid timing", LoopAction::ReturnStatus, PatternMeasurementStatus::Invalid, true, EXIT_SUCCESS, EXIT_FAILURE,
+       PatternRunStatus::Failed, "invalid injected timing", "", 20u},
+      {"interrupted", LoopAction::ReturnStatus, PatternMeasurementStatus::Interrupted, true, EXIT_SUCCESS, EXIT_SUCCESS,
+       PatternRunStatus::Interrupted, "injected interruption", "", 20u},
+  }};
+
+  PatternStatistics statistics;
+  for (const LoopCase& entry : cases) {
+    SCOPED_TRACE(entry.name);
     BenchmarkConfig config;
     config.loop_count = 1;
     config.buffer_size = 4096;
     PatternRunnerTestHooks hooks = make_pattern_runner_hooks();
-    hooks.execute_loop = [&](const PatternBuffers&, const BenchmarkConfig&, PatternResults& results, size_t) {
+    hooks.execute_loop = [&entry](const PatternBuffers&, const BenchmarkConfig&, PatternResults& results,
+                                  size_t) -> int {
+      if (entry.action == LoopAction::ThrowRuntimeError) {
+        throw std::runtime_error("injected exception");
+      }
+      if (entry.action == LoopAction::ThrowUnknown) {
+        throw 7;
+      }
       results = make_complete_pattern_loop();
       results.measurements.back().status = entry.measurement;
       results.measurements.back().status_reason = entry.reason;
       if (entry.missing_value) results.measurements.back().bandwidth_gb_s.reset();
       return entry.executor_result;
     };
-    PatternStatistics statistics;
-    EXPECT_EQ(run_all_pattern_benchmarks(config, statistics, &hooks), entry.run_result);
+
+    testing::internal::CaptureStderr();
+    const int run_status = run_all_pattern_benchmarks(config, statistics, &hooks);
+    const std::string error_output = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(run_status, entry.run_result);
     ASSERT_EQ(statistics.loop_results.size(), 1u);
     EXPECT_EQ(statistics.status, entry.status);
     EXPECT_EQ(statistics.loop_results[0].status, entry.status);
     if (!entry.reason.empty()) EXPECT_EQ(statistics.status_reason, entry.reason);
-    EXPECT_EQ(statistics.completed_loops, 0u);
-    EXPECT_EQ(statistics.completed_measurements, entry.missing_value ? 20u : 21u);
-  }
-}
-
-TEST(PatternBenchmarkTest, FailedLoopEvidenceIsExcludedFromJsonAggregate) {
-  BenchmarkConfig config;
-  config.loop_count = 2;
-  config.buffer_size = 4096;
-  PatternRunnerTestHooks hooks = make_pattern_runner_hooks();
-  hooks.execute_loop = [](const PatternBuffers&, const BenchmarkConfig&, PatternResults& results, size_t loop_index) {
-    results = make_skipped_pattern_loop();
-    set_pattern_measurement(
-        results, PatternKind::SequentialForward, PatternOperation::Read,
-        make_test_measurement(PatternMeasurementStatus::Measured, "", loop_index == 0 ? 10.0 : 100.0));
-    if (loop_index == 0) {
-      return EXIT_SUCCESS;
+    if (!entry.expected_stderr_substring.empty()) {
+      EXPECT_NE(error_output.find(entry.expected_stderr_substring), std::string::npos);
     }
-    results.measurements.back().status = PatternMeasurementStatus::Measured;
-    results.measurements.back().status_reason = "missing injected value";
-    results.measurements.back().bandwidth_gb_s.reset();
-    return EXIT_FAILURE;
-  };
-
-  PatternStatistics statistics;
-  EXPECT_EQ(run_all_pattern_benchmarks(config, statistics, &hooks), EXIT_FAILURE);
-  ASSERT_EQ(statistics.all_forward_read_bw.size(), 1u);
-  EXPECT_DOUBLE_EQ(statistics.all_forward_read_bw.front(), 10.0);
-  const PatternResults headline = extract_pattern_median_results(statistics);
-  const PatternMeasurement& headline_read =
-      get_pattern_measurement(headline, PatternKind::SequentialForward, PatternOperation::Read);
-  ASSERT_TRUE(headline_read.bandwidth_gb_s.has_value());
-  EXPECT_DOUBLE_EQ(*headline_read.bandwidth_gb_s, 10.0);
-
-  const nlohmann::ordered_json output = build_pattern_results_json(config, statistics, 0.5);
-  EXPECT_EQ(output["status"], "failed");
-  EXPECT_EQ(output["completed_loops"], 1u);
-  EXPECT_EQ(output["planned_loops"], 2u);
-  EXPECT_EQ(output["completed_measurements"], 41u);
-  EXPECT_EQ(output["planned_measurements"], 42u);
-  EXPECT_FALSE(output["results_complete"].get<bool>());
-  const nlohmann::ordered_json& read =
-      output[JsonKeys::PATTERNS][JsonKeys::SEQUENTIAL_FORWARD][JsonKeys::BANDWIDTH][JsonKeys::READ_GB_S];
-  ASSERT_EQ(read["values_gb_s"].size(), 1u);
-  EXPECT_DOUBLE_EQ(read["values_gb_s"][0].get<double>(), 10.0);
-  EXPECT_DOUBLE_EQ(read["value_gb_s"].get<double>(), 10.0);
-  EXPECT_DOUBLE_EQ(read["statistics"]["median_p50"].get<double>(), 10.0);
-  ASSERT_EQ(read["measurements"].size(), 2u);
-  EXPECT_DOUBLE_EQ(read["measurements"][0]["value_gb_s"].get<double>(), 10.0);
-  EXPECT_DOUBLE_EQ(read["measurements"][1]["value_gb_s"].get<double>(), 100.0);
-}
-
-TEST(PatternBenchmarkTest, OneShotLateStopInterruptsOnlyWhenLoopsRemain) {
-  auto run_with_loop_count = [](int loop_count) {
-    BenchmarkConfig config;
-    config.loop_count = loop_count;
-    config.buffer_size = 4096;
-    PatternRunnerTestHooks hooks = make_pattern_runner_hooks();
-    hooks.execute_loop = [](const PatternBuffers&, const BenchmarkConfig&, PatternResults& results, size_t) {
-      results = make_complete_pattern_loop();
-      return EXIT_SUCCESS;
-    };
-    size_t stop_checks = 0;
-    hooks.stop_requested = [&stop_checks]() {
-      ++stop_checks;
-      return stop_checks == 2;
-    };
-    PatternStatistics statistics;
-    EXPECT_EQ(run_all_pattern_benchmarks(config, statistics, &hooks), EXIT_SUCCESS);
-    return statistics;
-  };
-
-  const PatternStatistics unfinished = run_with_loop_count(2);
-  EXPECT_EQ(unfinished.status, PatternRunStatus::Interrupted);
-  EXPECT_EQ(unfinished.completed_loops, 1u);
-  EXPECT_EQ(unfinished.completed_measurements, 21u);
-
-  const PatternStatistics finished = run_with_loop_count(1);
-  EXPECT_EQ(finished.status, PatternRunStatus::Complete);
-  EXPECT_TRUE(finished.status_reason.empty());
-  EXPECT_EQ(finished.completed_loops, 1u);
-  EXPECT_EQ(finished.completed_measurements, 21u);
+    EXPECT_EQ(statistics.completed_loops, 0u);
+    EXPECT_EQ(statistics.completed_measurements, entry.completed_measurements);
+  }
 }
 
 TEST(PatternBenchmarkTest, ExecutionOrderIsDeterministicRotatingAndBalancedAcrossPositions) {
@@ -680,74 +676,75 @@ TEST(PatternBenchmarkTest, PhasedStridedKernelsRespectAccessBoundariesIntegratio
   }
 }
 
-TEST(PatternBenchmarkTest, FinalizedPatternPlansDriveWarmupKernelsIntegration) {
-  constexpr size_t buffer_size = 256;
+TEST(PatternBenchmarkTest, PatternAndCacheWarmupKernelsMatchExpectedChecksumsIntegration) {
   constexpr uint64_t initial_checksum = 0x123456789abcdef0ULL;
-  std::vector<unsigned char> source_storage(buffer_size + Constants::CACHE_LINE_SIZE_BYTES);
-  std::vector<unsigned char> destination_storage(buffer_size + Constants::CACHE_LINE_SIZE_BYTES);
-  unsigned char* source = align_to_cache_line(source_storage.data());
-  unsigned char* destination = align_to_cache_line(destination_storage.data());
-  for (size_t offset = 0; offset < buffer_size; ++offset) {
-    source[offset] = static_cast<unsigned char>((offset * 29 + 17) & 0xff);
+  {
+    SCOPED_TRACE("finalized strided and random pattern warmup kernels");
+    constexpr size_t buffer_size = 256;
+    std::vector<unsigned char> source_storage(buffer_size + Constants::CACHE_LINE_SIZE_BYTES);
+    std::vector<unsigned char> destination_storage(buffer_size + Constants::CACHE_LINE_SIZE_BYTES);
+    unsigned char* source = align_to_cache_line(source_storage.data());
+    unsigned char* destination = align_to_cache_line(destination_storage.data());
+    for (size_t offset = 0; offset < buffer_size; ++offset) {
+      source[offset] = static_cast<unsigned char>((offset * 29 + 17) & 0xff);
+    }
+
+    const PatternWorkPlan strided_plan = build_strided_pattern_work_plan(
+        buffer_size, Constants::PATTERN_STRIDE_CACHE_LINE, Constants::PATTERN_ACCESS_SIZE_BYTES, 2, 1, 0);
+    ASSERT_EQ(strided_plan.status, PatternMeasurementStatus::Measured);
+    ASSERT_EQ(strided_plan.workers.size(), 2u);
+
+    uint64_t expected_checksum = initial_checksum;
+    for (const PatternWorkerRange& worker : strided_plan.workers) {
+      expected_checksum ^=
+          memory_read_strided_phased_loop_asm(source + worker.offset_bytes, worker.span_bytes,
+                                              strided_plan.stride_bytes, strided_plan.phase_period_passes, 0);
+    }
+    std::atomic<uint64_t> checksum{initial_checksum};
+    warmup_read_strided(source, strided_plan, checksum);
+    EXPECT_EQ(checksum.load(std::memory_order_acquire), expected_checksum);
+
+    std::fill(destination, destination + buffer_size, 0xa5);
+    warmup_write_strided(destination, strided_plan);
+    EXPECT_TRUE(std::all_of(destination, destination + buffer_size, [](unsigned char value) { return value == 0; }));
+
+    std::fill(destination, destination + buffer_size, 0xa5);
+    warmup_copy_strided(destination, source, strided_plan);
+    EXPECT_TRUE(std::equal(source, source + buffer_size, destination));
+
+    const std::vector<size_t> global_indices = {0, 96, 128, 224};
+    const std::vector<PatternRandomWorkerIndices> random_workers =
+        build_random_worker_indices(buffer_size, Constants::PATTERN_ACCESS_SIZE_BYTES, 2, global_indices);
+    ASSERT_EQ(random_workers.size(), 2u);
+
+    expected_checksum = initial_checksum;
+    for (const PatternRandomWorkerIndices& worker : random_workers) {
+      expected_checksum ^=
+          memory_read_random_loop_asm(source + worker.offset_bytes, worker.indices.data(), worker.indices.size());
+    }
+    checksum.store(initial_checksum, std::memory_order_relaxed);
+    warmup_read_random(source, random_workers, checksum);
+    EXPECT_EQ(checksum.load(std::memory_order_acquire), expected_checksum);
+    EXPECT_EQ(random_workers[0].indices, (std::vector<size_t>{0, 96}));
+    EXPECT_EQ(random_workers[1].indices, (std::vector<size_t>{0, 96}));
+
+    std::fill(destination, destination + buffer_size, 0xa5);
+    warmup_copy_random(destination, source, random_workers);
+    for (size_t offset = 0; offset < buffer_size; ++offset) {
+      const bool selected = offset < 32 || (offset >= 96 && offset < 160) || offset >= 224;
+      EXPECT_EQ(destination[offset], selected ? source[offset] : 0xa5) << "offset=" << offset;
+    }
+
+    std::fill(destination, destination + buffer_size, 0xa5);
+    warmup_write_random(destination, random_workers);
+    for (size_t offset = 0; offset < buffer_size; ++offset) {
+      const bool selected = offset < 32 || (offset >= 96 && offset < 160) || offset >= 224;
+      EXPECT_EQ(destination[offset], selected ? 0u : 0xa5u) << "offset=" << offset;
+    }
   }
 
-  const PatternWorkPlan strided_plan = build_strided_pattern_work_plan(
-      buffer_size, Constants::PATTERN_STRIDE_CACHE_LINE, Constants::PATTERN_ACCESS_SIZE_BYTES, 2, 1, 0);
-  ASSERT_EQ(strided_plan.status, PatternMeasurementStatus::Measured);
-  ASSERT_EQ(strided_plan.workers.size(), 2u);
-
-  uint64_t expected_checksum = initial_checksum;
-  for (const PatternWorkerRange& worker : strided_plan.workers) {
-    expected_checksum ^=
-        memory_read_strided_phased_loop_asm(source + worker.offset_bytes, worker.span_bytes, strided_plan.stride_bytes,
-                                            strided_plan.phase_period_passes, 0);
-  }
-  std::atomic<uint64_t> checksum{initial_checksum};
-  warmup_read_strided(source, strided_plan, checksum);
-  EXPECT_EQ(checksum.load(std::memory_order_acquire), expected_checksum);
-
-  std::fill(destination, destination + buffer_size, 0xa5);
-  warmup_write_strided(destination, strided_plan);
-  EXPECT_TRUE(std::all_of(destination, destination + buffer_size, [](unsigned char value) { return value == 0; }));
-
-  std::fill(destination, destination + buffer_size, 0xa5);
-  warmup_copy_strided(destination, source, strided_plan);
-  EXPECT_TRUE(std::equal(source, source + buffer_size, destination));
-
-  const std::vector<size_t> global_indices = {0, 96, 128, 224};
-  const std::vector<PatternRandomWorkerIndices> random_workers =
-      build_random_worker_indices(buffer_size, Constants::PATTERN_ACCESS_SIZE_BYTES, 2, global_indices);
-  ASSERT_EQ(random_workers.size(), 2u);
-
-  expected_checksum = initial_checksum;
-  for (const PatternRandomWorkerIndices& worker : random_workers) {
-    expected_checksum ^=
-        memory_read_random_loop_asm(source + worker.offset_bytes, worker.indices.data(), worker.indices.size());
-  }
-  checksum.store(initial_checksum, std::memory_order_relaxed);
-  warmup_read_random(source, random_workers, checksum);
-  EXPECT_EQ(checksum.load(std::memory_order_acquire), expected_checksum);
-  EXPECT_EQ(random_workers[0].indices, (std::vector<size_t>{0, 96}));
-  EXPECT_EQ(random_workers[1].indices, (std::vector<size_t>{0, 96}));
-
-  std::fill(destination, destination + buffer_size, 0xa5);
-  warmup_copy_random(destination, source, random_workers);
-  for (size_t offset = 0; offset < buffer_size; ++offset) {
-    const bool selected = offset < 32 || (offset >= 96 && offset < 160) || offset >= 224;
-    EXPECT_EQ(destination[offset], selected ? source[offset] : 0xa5) << "offset=" << offset;
-  }
-
-  std::fill(destination, destination + buffer_size, 0xa5);
-  warmup_write_random(destination, random_workers);
-  for (size_t offset = 0; offset < buffer_size; ++offset) {
-    const bool selected = offset < 32 || (offset >= 96 && offset < 160) || offset >= 224;
-    EXPECT_EQ(destination[offset], selected ? 0u : 0xa5u) << "offset=" << offset;
-  }
-}
-
-TEST(PatternBenchmarkTest, CacheReadWarmupAccumulatesEveryWorkerChunkIntegration) {
+  SCOPED_TRACE("cache read warmup accumulates every worker chunk");
   alignas(Constants::CACHE_LINE_SIZE_BYTES) std::array<unsigned char, 1024> source{};
-  constexpr uint64_t initial_checksum = 0x123456789abcdef0ULL;
   // Four aligned 256-byte chunks contribute distinct bits. The byte positions
   // exercise upper vector lanes and chunk ends without cancelling to zero.
   source[8] = 0x01;
@@ -816,65 +813,67 @@ TEST(PatternBenchmarkTest, FinalizedWorkPlanDrivesInstrumentedExecutorIntegratio
             measured_plan.total_payload_bytes);
 }
 
-TEST(PatternBenchmarkTest, PureCollectionFiltersUnavailableValuesAndPreservesEvidence) {
-  PatternStatistics statistics;
-  statistics.all_forward_read_bw = {999.0};
-  statistics.all_reverse_write_bw = {999.0};
-  statistics.all_random_copy_bw = {999.0};
-  statistics.loop_results.emplace_back();
-  initialize_pattern_statistics(statistics, 4);
+TEST(PatternBenchmarkTest, PureCollectionFiltersUnavailableValuesAndExtractsMedianHeadline) {
+  {
+    SCOPED_TRACE("pure collection resets state filters unavailable values and preserves evidence");
+    PatternStatistics statistics;
+    statistics.all_forward_read_bw = {999.0};
+    statistics.all_reverse_write_bw = {999.0};
+    statistics.all_random_copy_bw = {999.0};
+    statistics.loop_results.emplace_back();
+    initialize_pattern_statistics(statistics, 4);
 
-  EXPECT_TRUE(statistics.loop_results.empty());
-  EXPECT_TRUE(statistics.all_forward_read_bw.empty());
-  EXPECT_TRUE(statistics.all_reverse_write_bw.empty());
-  EXPECT_TRUE(statistics.all_random_copy_bw.empty());
+    EXPECT_TRUE(statistics.loop_results.empty());
+    EXPECT_TRUE(statistics.all_forward_read_bw.empty());
+    EXPECT_TRUE(statistics.all_reverse_write_bw.empty());
+    EXPECT_TRUE(statistics.all_random_copy_bw.empty());
 
-  PatternResults measured_loop = make_skipped_pattern_loop();
-  set_pattern_measurement(measured_loop, PatternKind::SequentialForward, PatternOperation::Read,
-                          make_test_measurement(PatternMeasurementStatus::Measured, "", 12.5));
-  set_pattern_measurement(measured_loop, PatternKind::SequentialReverse, PatternOperation::Write,
-                          make_test_measurement(PatternMeasurementStatus::Measured, "", 7.5));
-  set_pattern_measurement(measured_loop, PatternKind::Random, PatternOperation::Copy,
-                          make_test_measurement(PatternMeasurementStatus::Measured, "", 3.25));
-  collect_pattern_loop_result(statistics, std::move(measured_loop));
+    PatternResults measured_loop = make_skipped_pattern_loop();
+    set_pattern_measurement(measured_loop, PatternKind::SequentialForward, PatternOperation::Read,
+                            make_test_measurement(PatternMeasurementStatus::Measured, "", 12.5));
+    set_pattern_measurement(measured_loop, PatternKind::SequentialReverse, PatternOperation::Write,
+                            make_test_measurement(PatternMeasurementStatus::Measured, "", 7.5));
+    set_pattern_measurement(measured_loop, PatternKind::Random, PatternOperation::Copy,
+                            make_test_measurement(PatternMeasurementStatus::Measured, "", 3.25));
+    collect_pattern_loop_result(statistics, std::move(measured_loop));
 
-  const std::array<PatternMeasurementStatus, 3> unavailable_statuses = {
-      PatternMeasurementStatus::Skipped, PatternMeasurementStatus::Interrupted, PatternMeasurementStatus::Invalid};
-  const std::array<std::string, 3> unavailable_reasons = {"unsupported test pattern", "interrupted after preparation",
-                                                          "invalid measured duration"};
-  for (size_t index = 0; index < unavailable_statuses.size(); ++index) {
-    PatternResults loop = make_skipped_pattern_loop();
-    set_pattern_measurement(loop, PatternKind::SequentialForward, PatternOperation::Read,
-                            make_test_measurement(unavailable_statuses[index], unavailable_reasons[index]));
-    collect_pattern_loop_result(statistics, std::move(loop));
+    const std::array<PatternMeasurementStatus, 3> unavailable_statuses = {
+        PatternMeasurementStatus::Skipped, PatternMeasurementStatus::Interrupted, PatternMeasurementStatus::Invalid};
+    const std::array<std::string, 3> unavailable_reasons = {"unsupported test pattern", "interrupted after preparation",
+                                                            "invalid measured duration"};
+    for (size_t index = 0; index < unavailable_statuses.size(); ++index) {
+      PatternResults loop = make_skipped_pattern_loop();
+      set_pattern_measurement(loop, PatternKind::SequentialForward, PatternOperation::Read,
+                              make_test_measurement(unavailable_statuses[index], unavailable_reasons[index]));
+      collect_pattern_loop_result(statistics, std::move(loop));
+    }
+
+    ASSERT_EQ(statistics.all_forward_read_bw.size(), 1u);
+    EXPECT_DOUBLE_EQ(statistics.all_forward_read_bw.front(), 12.5);
+    ASSERT_EQ(statistics.all_reverse_write_bw.size(), 1u);
+    EXPECT_DOUBLE_EQ(statistics.all_reverse_write_bw.front(), 7.5);
+    ASSERT_EQ(statistics.all_random_copy_bw.size(), 1u);
+    EXPECT_DOUBLE_EQ(statistics.all_random_copy_bw.front(), 3.25);
+    EXPECT_TRUE(statistics.all_forward_write_bw.empty());
+    EXPECT_TRUE(statistics.all_strided_2mb_read_bw.empty());
+
+    ASSERT_EQ(statistics.loop_results.size(), 4u);
+    const PatternMeasurement& measured =
+        get_pattern_measurement(statistics.loop_results[0], PatternKind::SequentialForward, PatternOperation::Read);
+    EXPECT_EQ(measured.status, PatternMeasurementStatus::Measured);
+    EXPECT_TRUE(measured.status_reason.empty());
+    ASSERT_TRUE(measured.bandwidth_gb_s.has_value());
+    EXPECT_DOUBLE_EQ(*measured.bandwidth_gb_s, 12.5);
+    for (size_t index = 0; index < unavailable_statuses.size(); ++index) {
+      const PatternMeasurement& unavailable = get_pattern_measurement(
+          statistics.loop_results[index + 1], PatternKind::SequentialForward, PatternOperation::Read);
+      EXPECT_EQ(unavailable.status, unavailable_statuses[index]);
+      EXPECT_EQ(unavailable.status_reason, unavailable_reasons[index]);
+      EXPECT_FALSE(unavailable.bandwidth_gb_s.has_value());
+    }
   }
 
-  ASSERT_EQ(statistics.all_forward_read_bw.size(), 1u);
-  EXPECT_DOUBLE_EQ(statistics.all_forward_read_bw.front(), 12.5);
-  ASSERT_EQ(statistics.all_reverse_write_bw.size(), 1u);
-  EXPECT_DOUBLE_EQ(statistics.all_reverse_write_bw.front(), 7.5);
-  ASSERT_EQ(statistics.all_random_copy_bw.size(), 1u);
-  EXPECT_DOUBLE_EQ(statistics.all_random_copy_bw.front(), 3.25);
-  EXPECT_TRUE(statistics.all_forward_write_bw.empty());
-  EXPECT_TRUE(statistics.all_strided_2mb_read_bw.empty());
-
-  ASSERT_EQ(statistics.loop_results.size(), 4u);
-  const PatternMeasurement& measured =
-      get_pattern_measurement(statistics.loop_results[0], PatternKind::SequentialForward, PatternOperation::Read);
-  EXPECT_EQ(measured.status, PatternMeasurementStatus::Measured);
-  EXPECT_TRUE(measured.status_reason.empty());
-  ASSERT_TRUE(measured.bandwidth_gb_s.has_value());
-  EXPECT_DOUBLE_EQ(*measured.bandwidth_gb_s, 12.5);
-  for (size_t index = 0; index < unavailable_statuses.size(); ++index) {
-    const PatternMeasurement& unavailable = get_pattern_measurement(
-        statistics.loop_results[index + 1], PatternKind::SequentialForward, PatternOperation::Read);
-    EXPECT_EQ(unavailable.status, unavailable_statuses[index]);
-    EXPECT_EQ(unavailable.status_reason, unavailable_reasons[index]);
-    EXPECT_FALSE(unavailable.bandwidth_gb_s.has_value());
-  }
-}
-
-TEST(PatternBenchmarkTest, MedianHeadlineUsesMeasuredPopulationAndPreservesUnavailableEvidence) {
+  SCOPED_TRACE("median headline uses measured population and preserves unavailable evidence");
   PatternStatistics statistics;
   initialize_pattern_statistics(statistics, 4);
   const std::array<std::optional<double>, 4> read_values = {10.0, 30.0, 20.0, std::nullopt};
@@ -916,54 +915,46 @@ TEST(PatternBenchmarkTest, MedianHeadlineUsesMeasuredPopulationAndPreservesUnava
   ASSERT_TRUE(read.bandwidth_gb_s.has_value());
   EXPECT_DOUBLE_EQ(*read.bandwidth_gb_s, 20.0);
 
-  const PatternMeasurement& write =
-      get_pattern_measurement(headline, PatternKind::SequentialForward, PatternOperation::Write);
-  EXPECT_EQ(write.status, PatternMeasurementStatus::Skipped);
-  EXPECT_EQ(write.status_reason, "write unsupported");
-  EXPECT_FALSE(write.bandwidth_gb_s.has_value());
-
-  const PatternMeasurement& copy =
-      get_pattern_measurement(headline, PatternKind::SequentialForward, PatternOperation::Copy);
-  EXPECT_EQ(copy.status, PatternMeasurementStatus::Skipped);
-  EXPECT_EQ(copy.status_reason, "copy unsupported");
-  EXPECT_FALSE(copy.bandwidth_gb_s.has_value());
-
-  const PatternMeasurement& invalid =
-      get_pattern_measurement(headline, PatternKind::SequentialReverse, PatternOperation::Read);
-  EXPECT_EQ(invalid.status, PatternMeasurementStatus::Skipped);
-  EXPECT_EQ(invalid.status_reason, "reverse unsupported");
-  EXPECT_FALSE(invalid.bandwidth_gb_s.has_value());
-
-  const PatternMeasurement& retained_interruption =
-      get_pattern_measurement(statistics.loop_results.back(), PatternKind::SequentialForward, PatternOperation::Copy);
-  EXPECT_EQ(retained_interruption.status, PatternMeasurementStatus::Interrupted);
-  const PatternMeasurement& retained_invalid =
-      get_pattern_measurement(statistics.loop_results.back(), PatternKind::SequentialReverse, PatternOperation::Read);
-  EXPECT_EQ(retained_invalid.status, PatternMeasurementStatus::Invalid);
-}
-
-TEST(PatternBenchmarkTest, ConsoleRendersUnavailableMeasurementsAsStatusNotZero) {
-  PatternResults results;
-  for (size_t kind_index = 0; kind_index < static_cast<size_t>(PatternKind::Count); ++kind_index) {
-    for (size_t operation_index = 0; operation_index < static_cast<size_t>(PatternOperation::Count);
-         ++operation_index) {
-      PatternMeasurement measurement;
-      measurement.status = PatternMeasurementStatus::Skipped;
-      measurement.status_reason = "test skip";
-      set_pattern_measurement(results, static_cast<PatternKind>(kind_index),
-                              static_cast<PatternOperation>(operation_index), std::move(measurement));
-    }
+  const struct {
+    PatternKind kind;
+    PatternOperation op;
+    const char* reason;
+  } unavailable_headlines[] = {
+      {PatternKind::SequentialForward, PatternOperation::Write, "write unsupported"},
+      {PatternKind::SequentialForward, PatternOperation::Copy, "copy unsupported"},
+      {PatternKind::SequentialReverse, PatternOperation::Read, "reverse unsupported"},
+  };
+  for (const auto& entry : unavailable_headlines) {
+    SCOPED_TRACE(entry.reason);
+    const PatternMeasurement& item = get_pattern_measurement(headline, entry.kind, entry.op);
+    EXPECT_EQ(item.status, PatternMeasurementStatus::Skipped);
+    EXPECT_EQ(item.status_reason, entry.reason);
+    EXPECT_FALSE(item.bandwidth_gb_s.has_value());
   }
 
-  testing::internal::CaptureStdout();
-  print_pattern_results(results);
-  const std::string output = testing::internal::GetCapturedStdout();
-  EXPECT_NE(output.find("N/A [skipped: test skip]"), std::string::npos);
-  EXPECT_EQ(output.find("0.000 GB/s"), std::string::npos);
-  EXPECT_NE(output.find("2 MiB stride"), std::string::npos);
+  EXPECT_EQ(get_pattern_measurement(statistics.loop_results.back(), PatternKind::SequentialForward,
+                                    PatternOperation::Copy)
+                .status,
+            PatternMeasurementStatus::Interrupted);
+  EXPECT_EQ(get_pattern_measurement(statistics.loop_results.back(), PatternKind::SequentialReverse,
+                                    PatternOperation::Read)
+                .status,
+            PatternMeasurementStatus::Invalid);
 }
 
-TEST(PatternBenchmarkTest, StatisticsExposeCvAndEmitNoiseWarning) {
+TEST(PatternBenchmarkTest, ConsoleRendersUnavailableMeasurementsAndNoisyStatisticsWarning) {
+  {
+    SCOPED_TRACE("unavailable measurements render as status not zero");
+    PatternResults results = make_skipped_pattern_loop("test skip");
+    testing::internal::CaptureStdout();
+    print_pattern_results(results);
+    const std::string output = testing::internal::GetCapturedStdout();
+    EXPECT_NE(output.find("N/A [skipped: test skip]"), std::string::npos);
+    EXPECT_EQ(output.find("0.000 GB/s"), std::string::npos);
+    EXPECT_NE(output.find("2 MiB stride"), std::string::npos);
+  }
+
+  SCOPED_TRACE("statistics expose CV and emit noise warning");
   PatternStatistics statistics;
   statistics.all_forward_read_bw = {10.0, 30.0};
 

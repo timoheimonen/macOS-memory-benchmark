@@ -84,8 +84,15 @@ The exact schema 1 whitelist is:
 - `-h, --help`
 
 All other flags, including every other primary mode, CPU thread/cache/latency modifiers, non-cacheable mode, and sweep
-options are rejected. Duplicate options, unknown options, missing values, partial decimal tokens, signed seeds, overflow,
-and non-positive iterations/count are rejected by the dedicated parser.
+options are rejected with a concise single-line diagnostic naming the offending option
+(`Unsupported option '<token>': ...`) on stderr without dumping full usage text. The standalone parser is built on the
+shared descriptor-driven CLI parser (`src/core/config/cli_parser.h` / `.cpp`): value-taking long options accept both
+space-separated (`--buffer-size 512`, `--output -`) and inline (`--buffer-size=512`, `--output=-`, `--output=`) syntax,
+while inline values on boolean/mode flags (`--gpu-bandwidth=1`, `--help=1`) and single-dash inline forms (`-b=512`) are
+rejected. Duplicate single-occurrence options (including `-G`/`--gpu-bandwidth` and `-h`/`--help`), unknown options,
+missing values, partial decimal tokens, signed seeds, overflow, and non-positive iterations/count are rejected before
+Metal work, and `--buffer-size` uses LP64-safe `[0, ULONG_MAX]` range parsing before applying the 64 MB minimum and
+byte-multiplication overflow checks.
 
 Defaults and limits:
 
@@ -648,6 +655,7 @@ loop count divisible by three.
 
 ## 18. Implementation and Verification Map
 
+- Shared CLI option parser: `src/core/config/cli_parser.h`, `src/core/config/cli_parser.cpp`
 - CLI/entry: `src/gpu_bandwidth/gpu_bandwidth.cpp`
 - Pure work planning: `src/gpu_bandwidth/gpu_work_plan.cpp`
 - Backend-independent runner: `src/gpu_bandwidth/gpu_runner.cpp`
@@ -655,9 +663,10 @@ loop count divisible by three.
 - Pure backend contract: `src/gpu_bandwidth/gpu_backend.h`
 - Metal backend: `src/gpu_bandwidth/metal_gpu_backend.mm`
 - Canonical MSL: `src/gpu_bandwidth/gpu_kernels_source.h`
+- CLI, runner, JSON schema, checkpoint, stdout, and unsupported-path tests: `tests/test_gpu_bandwidth.cpp`
 - Capability/correctness integration: `tests/test_gpu_metal_backend.cpp`
 - Planning/guardrails: `tests/test_gpu_work_plan.cpp`
-- Mode routing/hash helpers: `tests/test_mode_selector.cpp`, `tests/test_hash_utils.cpp`
+- Shared CLI parser, mode routing, and hash helpers: `tests/test_cli_parser.cpp`, `tests/test_mode_selector.cpp`, `tests/test_hash_utils.cpp`
 
 Recommended checks:
 
@@ -671,8 +680,8 @@ make test-all
 ```
 
 The aggregate `make test-all` gate runs all GTest cases, followed by `make test-script-examples` and
-`make test-llm-verifier`. Both Python test drivers require Python 3; the latter checks the independent LLM schema-2
-artifact verifier. `jq` is not required by this gate.
+`make test-llm-verifier`. Both Python test drivers require Python 3; the latter checks the independent LLM artifact
+verifier (both schema-2 artifacts and schema-1 LLM sweep envelopes). `jq` is not required by this gate.
 
 Real Metal tests may skip on an unsupported/no-device execution environment. That skip does not replace deterministic
 unsupported-path tests and does not create a performance-validation claim.

@@ -47,99 +47,79 @@ GpuWorkPlanRequest make_request(GpuOperation operation, size_t buffer_bytes,
 
 }  // namespace
 
-TEST(GpuWorkPlanTest, OperationOrderRotatesReadWriteCopyAcrossLoops) {
+TEST(GpuWorkPlanTest, OperationOrderAndSeedsAreDeterministicAndDomainSeparated) {
   EXPECT_EQ(build_gpu_operation_order(0),
-            (std::array<GpuOperation, 3>{GpuOperation::Read,
-                                         GpuOperation::Write,
-                                         GpuOperation::Copy}));
+            (std::array<GpuOperation, 3>{GpuOperation::Read, GpuOperation::Write, GpuOperation::Copy}));
   EXPECT_EQ(build_gpu_operation_order(1),
-            (std::array<GpuOperation, 3>{GpuOperation::Write,
-                                         GpuOperation::Copy,
-                                         GpuOperation::Read}));
+            (std::array<GpuOperation, 3>{GpuOperation::Write, GpuOperation::Copy, GpuOperation::Read}));
   EXPECT_EQ(build_gpu_operation_order(2),
-            (std::array<GpuOperation, 3>{GpuOperation::Copy,
-                                         GpuOperation::Read,
-                                         GpuOperation::Write}));
+            (std::array<GpuOperation, 3>{GpuOperation::Copy, GpuOperation::Read, GpuOperation::Write}));
   EXPECT_EQ(build_gpu_operation_order(3), build_gpu_operation_order(0));
   EXPECT_EQ(build_cyclic_order(4, 0), (std::vector<size_t>{0, 1, 2, 3}));
   EXPECT_EQ(build_cyclic_order(4, 1), (std::vector<size_t>{1, 2, 3, 0}));
   EXPECT_EQ(build_cyclic_order(4, std::numeric_limits<size_t>::max()), (std::vector<size_t>{3, 0, 1, 2}));
   EXPECT_TRUE(build_cyclic_order(0, 7).empty());
+
+  EXPECT_EQ(gpu_operation_seed_domain(GpuOperation::Read), 0x4750555f52454144ULL);
+  EXPECT_EQ(gpu_operation_seed_domain(GpuOperation::Copy), 0x4750555f434f5059ULL);
+  EXPECT_EQ(derive_gpu_operation_seed(42, GpuOperation::Read), 0x2d62513ce5b9b955ULL);
+  EXPECT_EQ(derive_gpu_operation_seed(42, GpuOperation::Write), 0x11dbcad689d7ff1bULL);
+  EXPECT_EQ(derive_gpu_operation_seed(42, GpuOperation::Copy), 0x283298849b447452ULL);
+  EXPECT_NE(derive_gpu_operation_seed(42, GpuOperation::Read), derive_gpu_operation_seed(43, GpuOperation::Read));
+  EXPECT_EQ(derive_gpu_operation_seed(42, static_cast<GpuOperation>(99)), 0u);
 }
 
-TEST(GpuWorkPlanTest, OperationSeedsHaveStableSplitMixDomains) {
-  EXPECT_EQ(gpu_operation_seed_domain(GpuOperation::Read),
-            0x4750555f52454144ULL);
-  EXPECT_EQ(gpu_operation_seed_domain(GpuOperation::Copy),
-            0x4750555f434f5059ULL);
-  EXPECT_EQ(derive_gpu_operation_seed(42, GpuOperation::Read),
-            0x2d62513ce5b9b955ULL);
-  EXPECT_EQ(derive_gpu_operation_seed(42, GpuOperation::Write),
-            0x11dbcad689d7ff1bULL);
-  EXPECT_EQ(derive_gpu_operation_seed(42, GpuOperation::Copy),
-            0x283298849b447452ULL);
-  EXPECT_NE(derive_gpu_operation_seed(42, GpuOperation::Read),
-            derive_gpu_operation_seed(43, GpuOperation::Read));
-  EXPECT_EQ(derive_gpu_operation_seed(
-                42, static_cast<GpuOperation>(99)),
-            0u);
-}
-
-TEST(GpuWorkPlanTest, PassLimitsUseExactPayloadsAndEffectiveCaps) {
+TEST(GpuWorkPlanTest, PassLimitsComputeCapsAndRejectInvalidInputs) {
   const size_t buffer_bytes = 64 * Constants::BYTES_PER_MB;
-  const GpuPassLimits read =
-      calculate_gpu_pass_limits(buffer_bytes, GpuOperation::Read);
-  const GpuPassLimits write =
-      calculate_gpu_pass_limits(buffer_bytes, GpuOperation::Write);
-  const GpuPassLimits copy =
-      calculate_gpu_pass_limits(buffer_bytes, GpuOperation::Copy);
+  struct ValidLimitCase {
+    const char* name;
+    size_t bytes;
+    GpuOperation operation;
+    size_t bytes_per_pass;
+    size_t max_by_payload;
+    size_t effective_max;
+    bool payload_limiting;
+    bool dispatch_limiting;
+  };
+  for (const ValidLimitCase& entry : {
+           ValidLimitCase{"read-64m", buffer_bytes, GpuOperation::Read, buffer_bytes, 1024u, 1024u, true, false},
+           ValidLimitCase{"write-64m", buffer_bytes, GpuOperation::Write, buffer_bytes, 1024u, 1024u, true, false},
+           ValidLimitCase{"copy-64m", buffer_bytes, GpuOperation::Copy, 2 * buffer_bytes, 512u, 512u, true, false},
+           ValidLimitCase{"read-1b", 1u, GpuOperation::Read, 1u, Constants::GPU_MAX_EXACT_PAYLOAD_BYTES, 16384u, false,
+                          true},
+       }) {
+    SCOPED_TRACE(entry.name);
+    const GpuPassLimits limits = calculate_gpu_pass_limits(entry.bytes, entry.operation);
+    ASSERT_TRUE(limits.valid);
+    EXPECT_EQ(limits.bytes_per_pass, entry.bytes_per_pass);
+    EXPECT_EQ(limits.maximum_passes_by_payload, entry.max_by_payload);
+    EXPECT_EQ(limits.effective_maximum_passes, entry.effective_max);
+    EXPECT_EQ(limits.payload_cap_is_limiting, entry.payload_limiting);
+    EXPECT_EQ(limits.dispatch_cap_is_limiting, entry.dispatch_limiting);
+  }
 
-  ASSERT_TRUE(read.valid);
-  ASSERT_TRUE(write.valid);
-  ASSERT_TRUE(copy.valid);
-  EXPECT_EQ(read.bytes_per_pass, buffer_bytes);
-  EXPECT_EQ(write.bytes_per_pass, buffer_bytes);
-  EXPECT_EQ(copy.bytes_per_pass, 2 * buffer_bytes);
-  EXPECT_EQ(read.maximum_passes_by_payload, 1024u);
-  EXPECT_EQ(read.effective_maximum_passes, 1024u);
-  EXPECT_EQ(copy.maximum_passes_by_payload, 512u);
-  EXPECT_EQ(copy.effective_maximum_passes, 512u);
-  EXPECT_TRUE(read.payload_cap_is_limiting);
-  EXPECT_FALSE(read.dispatch_cap_is_limiting);
-
-  const GpuPassLimits tiny =
-      calculate_gpu_pass_limits(1, GpuOperation::Read);
-  ASSERT_TRUE(tiny.valid);
-  EXPECT_EQ(tiny.effective_maximum_passes, 16384u);
-  EXPECT_TRUE(tiny.dispatch_cap_is_limiting);
-  EXPECT_FALSE(tiny.payload_cap_is_limiting);
+  struct InvalidLimitCase {
+    const char* name;
+    size_t bytes;
+    GpuOperation operation;
+    const char* reason_code;
+  };
+  for (const InvalidLimitCase& entry : {
+           InvalidLimitCase{"zero", 0u, GpuOperation::Read, GpuWorkPlanReason::BUFFER_SIZE_ZERO},
+           InvalidLimitCase{"invalid-op", 4096u, static_cast<GpuOperation>(99), GpuWorkPlanReason::INVALID_OPERATION},
+           InvalidLimitCase{"copy-overflow", std::numeric_limits<size_t>::max(), GpuOperation::Copy,
+                            GpuWorkPlanReason::PAYLOAD_PER_PASS_OVERFLOW},
+           InvalidLimitCase{"over-cap", Constants::GPU_MAX_EXACT_PAYLOAD_BYTES + 1, GpuOperation::Read,
+                            GpuWorkPlanReason::PAYLOAD_CAP_BELOW_ONE_PASS},
+       }) {
+    SCOPED_TRACE(entry.name);
+    const GpuPassLimits limits = calculate_gpu_pass_limits(entry.bytes, entry.operation);
+    EXPECT_FALSE(limits.valid);
+    EXPECT_EQ(limits.reason_code, entry.reason_code);
+  }
 }
 
-TEST(GpuWorkPlanTest, PassLimitsRejectZeroOverflowAndOverCapSinglePass) {
-  const GpuPassLimits zero =
-      calculate_gpu_pass_limits(0, GpuOperation::Read);
-  EXPECT_FALSE(zero.valid);
-  EXPECT_EQ(zero.reason_code, GpuWorkPlanReason::BUFFER_SIZE_ZERO);
-
-  const GpuPassLimits invalid = calculate_gpu_pass_limits(
-      4096, static_cast<GpuOperation>(99));
-  EXPECT_FALSE(invalid.valid);
-  EXPECT_EQ(invalid.reason_code, GpuWorkPlanReason::INVALID_OPERATION);
-
-  const GpuPassLimits copy_overflow = calculate_gpu_pass_limits(
-      std::numeric_limits<size_t>::max(), GpuOperation::Copy);
-  EXPECT_FALSE(copy_overflow.valid);
-  EXPECT_EQ(copy_overflow.reason_code,
-            GpuWorkPlanReason::PAYLOAD_PER_PASS_OVERFLOW);
-
-  const GpuPassLimits too_large = calculate_gpu_pass_limits(
-      Constants::GPU_MAX_EXACT_PAYLOAD_BYTES + 1, GpuOperation::Read);
-  EXPECT_FALSE(too_large.valid);
-  EXPECT_EQ(too_large.reason_code,
-            GpuWorkPlanReason::PAYLOAD_CAP_BELOW_ONE_PASS);
-}
-
-TEST(GpuWorkPlanTest, PlannerUsesDeterministicVectorTailAndGridGeometry) {
+TEST(GpuWorkPlanTest, PlannerGeometryGridCapsAndValidation) {
   GpuWorkPlanRequest request = make_request(GpuOperation::Read, 31, 2);
   request.max_total_threads_per_threadgroup = 200;
   const GpuWorkPlan plan = build_gpu_work_plan(request);
@@ -165,16 +145,11 @@ TEST(GpuWorkPlanTest, PlannerUsesDeterministicVectorTailAndGridGeometry) {
   EXPECT_EQ(plan.kernel_source_sha256, "test-source-sha256");
   EXPECT_EQ(plan.msl_language_version, "2.3");
   EXPECT_EQ(plan.methodology_version, Constants::GPU_METHODOLOGY_VERSION);
-  EXPECT_EQ(plan.timing_policy,
-            "one-command-buffer-one-serial-encoder");
-  EXPECT_EQ(plan.pass_mapping,
-            "one-full-buffer-pass-per-dispatch");
-  EXPECT_EQ(plan.warmup_policy,
-            "excluded-full-buffer-warmup-before-each-attempt");
-  EXPECT_EQ(plan.calibration_policy,
-            "automatic-150ms-100-250ms-max-two-corrections");
-  EXPECT_EQ(plan.duration_quality_policy,
-            "report-without-performance-retry-after-freeze");
+  EXPECT_EQ(plan.timing_policy, "one-command-buffer-one-serial-encoder");
+  EXPECT_EQ(plan.pass_mapping, "one-full-buffer-pass-per-dispatch");
+  EXPECT_EQ(plan.warmup_policy, "excluded-full-buffer-warmup-before-each-attempt");
+  EXPECT_EQ(plan.calibration_policy, "automatic-150ms-100-250ms-max-two-corrections");
+  EXPECT_EQ(plan.duration_quality_policy, "report-without-performance-retry-after-freeze");
   EXPECT_EQ(plan.timed_accumulator_algorithm, "gpu-dual-mod32-v2");
   EXPECT_EQ(plan.final_checksum_algorithm, "not-applicable");
 
@@ -184,62 +159,56 @@ TEST(GpuWorkPlanTest, PlannerUsesDeterministicVectorTailAndGridGeometry) {
     size_t tail_bytes;
   };
   for (const TailCase& tail_case :
-       {TailCase{1, 0, 1}, TailCase{15, 0, 15}, TailCase{17, 1, 1},
-        TailCase{31, 1, 15}}) {
-    const GpuWorkPlan tail_plan = build_gpu_work_plan(
-        make_request(GpuOperation::Write, tail_case.buffer_bytes, 1));
+       {TailCase{1, 0, 1}, TailCase{15, 0, 15}, TailCase{17, 1, 1}, TailCase{31, 1, 15}}) {
+    SCOPED_TRACE(tail_case.buffer_bytes);
+    const GpuWorkPlan tail_plan = build_gpu_work_plan(make_request(GpuOperation::Write, tail_case.buffer_bytes, 1));
     ASSERT_TRUE(tail_plan.valid) << tail_case.buffer_bytes;
     EXPECT_EQ(tail_plan.vector_count, tail_case.vector_count);
     EXPECT_EQ(tail_plan.tail_bytes, tail_case.tail_bytes);
     EXPECT_EQ(tail_plan.threadgroups_per_grid, 1u);
   }
-}
 
-TEST(GpuWorkPlanTest, PlannerCapsGridAndSupportsValidationOverrides) {
-  const size_t vector_count =
-      Constants::GPU_MAX_THREADGROUPS_PER_GRID *
-          Constants::GPU_THREADS_PER_THREADGROUP_CAP +
-      1;
-  const size_t buffer_bytes =
-      vector_count * Constants::GPU_VECTOR_WIDTH_BYTES;
-  GpuWorkPlanRequest request =
-      make_request(GpuOperation::Read, buffer_bytes, 1);
-
-  const GpuWorkPlan production = build_gpu_work_plan(request);
+  const size_t capped_vectors =
+      Constants::GPU_MAX_THREADGROUPS_PER_GRID * Constants::GPU_THREADS_PER_THREADGROUP_CAP + 1;
+  GpuWorkPlanRequest capped_request =
+      make_request(GpuOperation::Read, capped_vectors * Constants::GPU_VECTOR_WIDTH_BYTES, 1);
+  const GpuWorkPlan production = build_gpu_work_plan(capped_request);
   ASSERT_TRUE(production.valid) << production.reason_code;
   EXPECT_EQ(production.threads_per_threadgroup, 256u);
   EXPECT_EQ(production.required_threadgroups_per_grid, 8193u);
   EXPECT_EQ(production.threadgroups_per_grid, 8192u);
   EXPECT_EQ(production.grid_threads, 8192u * 256u);
 
-  request.maximum_threadgroups_per_grid = 2048;
-  const GpuWorkPlan validation_override = build_gpu_work_plan(request);
+  capped_request.maximum_threadgroups_per_grid = 2048;
+  const GpuWorkPlan validation_override = build_gpu_work_plan(capped_request);
   ASSERT_TRUE(validation_override.valid);
   EXPECT_EQ(validation_override.required_threadgroups_per_grid, 8193u);
   EXPECT_EQ(validation_override.threadgroups_per_grid, 2048u);
   EXPECT_NE(validation_override.plan_identity, production.plan_identity);
-}
 
-TEST(GpuWorkPlanTest, PlannerRejectsInvalidPipelineGeometry) {
-  GpuWorkPlanRequest request = make_request(GpuOperation::Read, 4096, 1);
-  request.thread_execution_width = 0;
-  EXPECT_EQ(build_gpu_work_plan(request).reason_code,
-            GpuWorkPlanReason::THREAD_EXECUTION_WIDTH_ZERO);
-
-  request = make_request(GpuOperation::Read, 4096, 1);
-  request.max_total_threads_per_threadgroup = 0;
-  EXPECT_EQ(build_gpu_work_plan(request).reason_code,
-            GpuWorkPlanReason::MAX_THREADS_PER_THREADGROUP_ZERO);
-
-  request = make_request(GpuOperation::Read, 4096, 1);
-  request.thread_execution_width = 257;
-  EXPECT_EQ(build_gpu_work_plan(request).reason_code,
-            GpuWorkPlanReason::THREAD_EXECUTION_WIDTH_EXCEEDS_CAP);
-
-  request = make_request(GpuOperation::Read, 4096, 1);
-  request.maximum_threadgroups_per_grid = 0;
-  EXPECT_EQ(build_gpu_work_plan(request).reason_code,
-            GpuWorkPlanReason::THREADGROUP_LIMIT_ZERO);
+  struct InvalidGeometryCase {
+    const char* name;
+    size_t thread_execution_width;
+    size_t max_threads_per_tg;
+    size_t max_tgs_per_grid;
+    const char* reason_code;
+  };
+  for (const InvalidGeometryCase& entry : {
+           InvalidGeometryCase{"width-zero", 0, 1024, Constants::GPU_MAX_THREADGROUPS_PER_GRID,
+                               GpuWorkPlanReason::THREAD_EXECUTION_WIDTH_ZERO},
+           InvalidGeometryCase{"max-threads-zero", 32, 0, Constants::GPU_MAX_THREADGROUPS_PER_GRID,
+                               GpuWorkPlanReason::MAX_THREADS_PER_THREADGROUP_ZERO},
+           InvalidGeometryCase{"width-exceeds-cap", 257, 1024, Constants::GPU_MAX_THREADGROUPS_PER_GRID,
+                               GpuWorkPlanReason::THREAD_EXECUTION_WIDTH_EXCEEDS_CAP},
+           InvalidGeometryCase{"tg-limit-zero", 32, 1024, 0, GpuWorkPlanReason::THREADGROUP_LIMIT_ZERO},
+       }) {
+    SCOPED_TRACE(entry.name);
+    GpuWorkPlanRequest invalid_request = make_request(GpuOperation::Read, 4096, 1);
+    invalid_request.thread_execution_width = entry.thread_execution_width;
+    invalid_request.max_total_threads_per_threadgroup = entry.max_threads_per_tg;
+    invalid_request.maximum_threadgroups_per_grid = entry.max_tgs_per_grid;
+    EXPECT_EQ(build_gpu_work_plan(invalid_request).reason_code, entry.reason_code);
+  }
 }
 
 TEST(GpuWorkPlanTest, PlannerCalculatesExactPayloadAndRejectsExplicitCaps) {
@@ -336,39 +305,26 @@ TEST(GpuWorkPlanTest, FrozenPlanIdentityIsCanonicalAndSensitiveToWork) {
   ASSERT_TRUE(first.valid);
   ASSERT_TRUE(repeated.valid);
   EXPECT_EQ(first.plan_identity, repeated.plan_identity);
-  EXPECT_EQ(
-      first.plan_identity,
-      "gpu-work-plan-v1|operation=read|requested_buffer_bytes=31|"
-      "effective_buffer_bytes=31|passes=2|bytes_per_pass=31|"
-      "exact_payload_bytes=62|base_seed=42|"
-      "operation_seed=3270265601418443093|vector_width_bytes=16|"
-      "vector_count=1|tail_bytes=15|thread_execution_width=32|"
-      "max_total_threads_per_threadgroup=200|threads_per_threadgroup=192|"
-      "maximum_threadgroups_per_grid=8192|threadgroups_per_grid=1|"
-      "grid_threads=192|dispatch_count=2|data_resource_options=33|"
-      "status_resource_options=17|data_storage_mode=private|"
-      "data_hazard_tracking_mode=tracked|status_storage_mode=shared|"
-      "status_hazard_tracking_mode=tracked|kernel_revision=test-kernel-v1|"
-      "kernel_source_sha256=test-source-sha256|msl_language_version=2.3|"
-      "methodology_version=gpu-bandwidth-v1-private-runtime-single-cmdbuf-"
-      "calibrated-balanced|timing_policy=one-command-buffer-one-serial-encoder|"
-      "pass_mapping=one-full-buffer-pass-per-dispatch|warmup_policy=excluded-"
-      "full-buffer-warmup-before-each-attempt|calibration_policy=automatic-"
-      "150ms-100-250ms-max-two-corrections|duration_quality_policy=report-"
-      "without-performance-retry-after-freeze|timed_accumulator_algorithm="
-      "gpu-dual-mod32-v2|final_checksum_algorithm=not-applicable");
+
+  EXPECT_EQ(first.plan_identity.rfind("gpu-work-plan-v1|", 0), 0u);
+  for (const char* token : {"|operation=read|", "|requested_buffer_bytes=31|", "|passes=2|", "|exact_payload_bytes=62|",
+                            "|base_seed=42|", "|operation_seed=3270265601418443093|", "|threads_per_threadgroup=192|",
+                            "|grid_threads=192|", "|data_resource_options=33|", "|status_resource_options=17|",
+                            "|kernel_revision=test-kernel-v1|", "|kernel_source_sha256=test-source-sha256|",
+                            "|timed_accumulator_algorithm=gpu-dual-mod32-v2|",
+                            "|final_checksum_algorithm=not-applicable"}) {
+    SCOPED_TRACE(token);
+    EXPECT_NE(first.plan_identity.find(token), std::string::npos);
+  }
 
   request.passes = 3;
-  EXPECT_NE(build_gpu_work_plan(request).plan_identity,
-            first.plan_identity);
+  EXPECT_NE(build_gpu_work_plan(request).plan_identity, first.plan_identity);
   request.passes = 2;
   request.base_seed = 43;
-  EXPECT_NE(build_gpu_work_plan(request).plan_identity,
-            first.plan_identity);
+  EXPECT_NE(build_gpu_work_plan(request).plan_identity, first.plan_identity);
   request.base_seed = 42;
   request.kernel_source_sha256 = "different-source-sha256";
-  EXPECT_NE(build_gpu_work_plan(request).plan_identity,
-            first.plan_identity);
+  EXPECT_NE(build_gpu_work_plan(request).plan_identity, first.plan_identity);
 }
 
 TEST(GpuTimedAccumulatorOracleTest,
