@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -30,6 +31,7 @@
 
 #include "core/config/version.h"
 #include "core/timing/timer.h"
+#include "llm_memory/llm_backend.h"
 #include "llm_memory/llm_memory.h"
 #include "llm_memory/llm_runner.h"
 #include "llm_memory/llm_sweep_runner.h"
@@ -190,6 +192,11 @@ class LlmCommandHooksScope {
     set_llm_memory_command_test_hooks(&hooks_);
   }
 
+  explicit LlmCommandHooksScope(LlmMemoryCommandTestHooks hooks)
+      : hooks_(std::move(hooks)) {
+    set_llm_memory_command_test_hooks(&hooks_);
+  }
+
   ~LlmCommandHooksScope() { set_llm_memory_command_test_hooks(nullptr); }
 
   LlmCommandHooksScope(const LlmCommandHooksScope&) = delete;
@@ -197,6 +204,85 @@ class LlmCommandHooksScope {
 
  private:
   LlmMemoryCommandTestHooks hooks_;
+};
+
+class LlmBackendFactoryHookScope {
+ public:
+  explicit LlmBackendFactoryHookScope(LlmBackendFactoryTestHook hook)
+      : hook_(std::move(hook)) {
+    set_llm_backend_factory_test_hook(&hook_);
+  }
+
+  ~LlmBackendFactoryHookScope() { set_llm_backend_factory_test_hook(nullptr); }
+
+  LlmBackendFactoryHookScope(const LlmBackendFactoryHookScope&) = delete;
+  LlmBackendFactoryHookScope& operator=(const LlmBackendFactoryHookScope&) =
+      delete;
+
+ private:
+  LlmBackendFactoryTestHook hook_;
+};
+
+class PreparationInterruptedFakeBackend final : public LlmBackend {
+ public:
+  PreparationInterruptedFakeBackend() {
+    evidence_.backend = LlmMemoryBackend::Cpu;
+  }
+
+  LlmMemoryBackend kind() const noexcept override {
+    return LlmMemoryBackend::Cpu;
+  }
+
+  LlmBackendAuxiliaryEstimate calculate_auxiliary_estimate(
+      const LlmMemoryWorkPlan& model_plan) const noexcept override {
+    const LlmExecutorAuxiliaryEstimate cpu =
+        calculate_llm_executor_auxiliary_estimate(model_plan);
+    LlmBackendAuxiliaryEstimate estimate;
+    estimate.valid = cpu.valid;
+    estimate.reason_code = cpu.reason_code;
+    estimate.checksum_auxiliary_bytes = cpu.checksum_auxiliary_bytes;
+    estimate.orchestration_auxiliary_bytes = cpu.orchestration_auxiliary_bytes;
+    estimate.total_auxiliary_bytes =
+        cpu.checksum_auxiliary_bytes + cpu.orchestration_auxiliary_bytes;
+    estimate.backend_evidence = cpu;
+    return estimate;
+  }
+
+  LlmBackendLifecycleResult initialize(const LlmMemoryConfig&) noexcept override {
+    evidence_.initialization = {LlmBackendStatus::Ready, LlmBackendReason::VALID};
+    return evidence_.initialization;
+  }
+
+  LlmBackendLifecycleResult resolve_execution_plan(
+      const LlmMemoryWorkPlan&) noexcept override {
+    evidence_.plan_resolution = {LlmBackendStatus::Ready, LlmBackendReason::VALID};
+    return evidence_.plan_resolution;
+  }
+
+  LlmBackendLifecycleResult prepare_resources(
+      const LlmMemoryWorkPlan&) override {
+    evidence_.preparation = {LlmBackendStatus::Failed,
+                             LlmBackendReason::PREPARATION_INTERRUPTED};
+    return evidence_.preparation;
+  }
+
+  LlmTaskExecutionResult execute_task(const LlmMemoryWorkPlan&,
+                                      const LlmScenarioWorkPlan&,
+                                      const LlmRunnerTaskContext&) override {
+    return LlmTaskExecutionResult{};
+  }
+
+  const LlmBackendEvidence& evidence() const noexcept override {
+    return evidence_;
+  }
+
+  LlmBackendLifecycleResult release_resources() noexcept override {
+    evidence_.release = {LlmBackendStatus::Ready, LlmBackendReason::VALID};
+    return evidence_.release;
+  }
+
+ private:
+  LlmBackendEvidence evidence_;
 };
 
 class LlmCommandOutputFileScope {
@@ -1353,7 +1439,7 @@ TEST(LlmMemoryConfigTest,
                 std::numeric_limits<size_t>::max());
   constexpr size_t kUnsafeInteger =
       Constants::LLM_JSON_MAX_SAFE_INTEGER + 1;
-  constexpr std::array<size_t LlmMemoryConfig::*, 10> kFields = {
+  constexpr std::array<size_t LlmMemoryConfig::*, 9> kFields = {
       &LlmMemoryConfig::weight_size_mb,
       &LlmMemoryConfig::layer_count,
       &LlmMemoryConfig::query_head_count,
@@ -1363,7 +1449,6 @@ TEST(LlmMemoryConfigTest,
       &LlmMemoryConfig::batch_size,
       &LlmMemoryConfig::requested_workers,
       &LlmMemoryConfig::available_workers,
-      &LlmMemoryConfig::sweep_max_runs,
   };
 
   for (size_t LlmMemoryConfig::*field : kFields) {
@@ -1376,6 +1461,14 @@ TEST(LlmMemoryConfigTest,
   LlmMemoryConfig config = valid_config();
   config.user_specified_iterations = true;
   config.iterations = kUnsafeInteger;
+  expect_invalid(config, LlmMemoryConfigReason::JSON_INTEGER_OUT_OF_RANGE);
+
+  // sweep_max_runs is emitted only for sweep envelopes, so it must not reject direct runs.
+  config = valid_config();
+  config.run_sweep = false;
+  config.sweep_max_runs = kUnsafeInteger;
+  EXPECT_TRUE(validate_llm_memory_config(config).valid);
+  config.run_sweep = true;
   expect_invalid(config, LlmMemoryConfigReason::JSON_INTEGER_OUT_OF_RANGE);
 
   config = valid_config();
@@ -1615,9 +1708,113 @@ TEST(LlmMemoryConfigTest, RejectsInvalidAndConflictingLlmSweepConfigurations) {
         std::string::npos)
         << parsed.stderr_output;
   }
+
+  // Direct commands without --sweep must remain unaffected by an out-of-JSON-range --sweep-max-runs.
+  {
+    LlmMemoryConfig config;
+    const CapturedLlmParse parsed = parse_llm_arguments_capturing(
+        {"memory_benchmark", "--llm-memory", "--weight-size-mb", "64",
+         "--layers", "4", "--query-heads", "8", "--kv-heads", "2", "--head-dim",
+         "64", "--context-tokens", "32", "--sweep-max-runs",
+         "9007199254740992"},
+        config);
+    EXPECT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+    EXPECT_FALSE(config.run_sweep);
+  }
 }
 
-TEST(LlmMemoryConfigTest, LlmSweepCollectPreservesPreInitFailureReason) {
+TEST(LlmMemoryConfigIntegrationTest,
+     DirectSetupFailureWritesSchema2DocumentForStdoutAndFileIntegration) {
+  auto verify_setup_failure_document = [](const nlohmann::ordered_json& doc,
+                                          size_t expected_loops,
+                                          const std::string& expected_reason) {
+    EXPECT_EQ(doc.at("schema_version"), Constants::LLM_JSON_SCHEMA_VERSION);
+    EXPECT_EQ(doc.at("mode"), Constants::LLM_JSON_MODE_NAME);
+    EXPECT_EQ(doc.at("status"), "failed");
+    EXPECT_EQ(doc.at("reason_code"), expected_reason);
+    EXPECT_FALSE(doc.at("results_complete").get<bool>());
+    EXPECT_FALSE(doc.at("run_accepted").get<bool>());
+    EXPECT_FALSE(doc.at("scenario_order_balance_complete").get<bool>());
+    ASSERT_EQ(doc.at("loop_records").size(), expected_loops);
+    for (size_t loop_idx = 0; loop_idx < expected_loops; ++loop_idx) {
+      const auto& loop = doc.at("loop_records")[loop_idx];
+      EXPECT_EQ(loop.at("loop_index"), loop_idx);
+      EXPECT_EQ(loop.at("realized_order").size(), 0u);
+      EXPECT_EQ(loop.at("realized_order_count"), 0u);
+      ASSERT_EQ(loop.at("measurement_indexes").size(), kLlmScenarioCount);
+      for (size_t pos = 0; pos < kLlmScenarioCount; ++pos) {
+        EXPECT_EQ(loop.at("measurement_indexes")[pos],
+                  loop_idx * kLlmScenarioCount + pos);
+      }
+    }
+    const size_t expected_measurements = expected_loops * kLlmScenarioCount;
+    ASSERT_EQ(doc.at("measurements").size(), expected_measurements);
+    for (size_t i = 0; i < expected_measurements; ++i) {
+      const auto& row = doc.at("measurements")[i];
+      EXPECT_EQ(row.at("measurement_id"), i);
+      EXPECT_TRUE(row.at("plan_ref").is_null());
+      EXPECT_EQ(row.at("status"), "failed");
+      EXPECT_EQ(row.at("reason_code"),
+                LlmRunnerReason::NOT_RUN_AFTER_RUNTIME_FAILURE);
+      EXPECT_FALSE(row.at("attempted").get<bool>());
+    }
+    const auto& counters = doc.at("counters");
+    EXPECT_EQ(counters.at("planned_loops"), expected_loops);
+    EXPECT_EQ(counters.at("attempted_loops"), 0u);
+    EXPECT_EQ(counters.at("completed_loops"), 0u);
+    EXPECT_EQ(counters.at("planned_measurements"), expected_measurements);
+    EXPECT_EQ(counters.at("attempted_measurements"), 0u);
+    EXPECT_EQ(counters.at("terminal_measurements"), expected_measurements);
+    EXPECT_EQ(counters.at("measured_measurements"), 0u);
+    const auto& lifecycle = doc.at("checkpoint_lifecycle");
+    EXPECT_EQ(lifecycle.at("current_request"), "terminal");
+    EXPECT_EQ(lifecycle.at("snapshot_interval_loops"),
+              std::max<size_t>(1, expected_loops / 8 + (expected_loops % 8 != 0)));
+  };
+
+  const LlmParserHooksScope parser_hooks(1, 1);
+  for (bool throw_exception : {false, true}) {
+    for (bool to_file : {false, true}) {
+      SCOPED_TRACE(::testing::Message()
+                   << "throw_exception=" << throw_exception
+                   << " to_file=" << to_file);
+      const LlmCommandOutputFileScope output;
+      std::vector<std::string> arguments = valid_llm_arguments();
+      arguments.insert(
+          arguments.end(),
+          {"--threads", "1", "--iterations", "1", "--count", "9", "--seed",
+           "1", "--output", to_file ? output.path().string() : "-"});
+      LlmMemoryCommandTestHooks hooks;
+      hooks.before_runner = [throw_exception](LlmMemoryWorkPlan& plan) {
+        if (throw_exception) {
+          throw std::runtime_error("injected pre-init command exception");
+        }
+        plan.memory_budget.request.orchestration_auxiliary_bytes = 0;
+      };
+      const LlmCommandHooksScope command_hooks(std::move(hooks));
+
+      testing::internal::CaptureStdout();
+      testing::internal::CaptureStderr();
+      const int status = run_llm_command(std::move(arguments));
+      const std::string stderr_output = testing::internal::GetCapturedStderr();
+      const std::string stdout_output = testing::internal::GetCapturedStdout();
+
+      EXPECT_EQ(status, EXIT_FAILURE) << stderr_output;
+      const std::string payload =
+          to_file ? read_llm_command_output_file(output.path()) : stdout_output;
+      ASSERT_FALSE(payload.empty()) << stderr_output;
+      nlohmann::ordered_json document;
+      ASSERT_NO_THROW(document = nlohmann::ordered_json::parse(payload));
+      verify_setup_failure_document(
+          document, 9u,
+          throw_exception ? LlmRunnerReason::RUNNER_EXCEPTION
+                          : LlmRunnerReason::AUXILIARY_BUDGET_INSUFFICIENT);
+    }
+  }
+}
+
+TEST(LlmMemoryConfigIntegrationTest,
+     LlmSweepCollectPreservesPreInitFailureReasonIntegration) {
   LlmMemoryConfig config;
   const CapturedLlmParse parsed = parse_llm_arguments_capturing(
       {"memory_benchmark", "--llm-memory", "--weight-size-mb", "1",
@@ -1647,4 +1844,215 @@ TEST(LlmMemoryConfigTest, LlmSweepCollectPreservesPreInitFailureReason) {
   EXPECT_NE(stderr_text.find(Messages::error_mach_timebase_info_failed(
                 mach_error_string(KERN_FAILURE))),
             std::string::npos);
+}
+
+TEST(LlmMemoryConfigIntegrationTest,
+     LlmSweepCollectCoversErrorAndInterruptionBranchesIntegration) {
+  const auto parse_collect_config = [](std::vector<std::string> args) {
+    LlmMemoryConfig config;
+    const CapturedLlmParse parsed =
+        parse_llm_arguments_capturing(std::move(args), config);
+    EXPECT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+    config.collect_json_for_sweep = true;
+    return config;
+  };
+  const std::vector<std::string> base_decode_args = {
+      "memory_benchmark", "--llm-memory", "--weight-size-mb", "1", "--layers",
+      "2", "--query-heads", "4", "--kv-heads", "2", "--head-dim", "16",
+      "--context-tokens", "16", "--threads", "1", "--iterations", "1",
+      "--count", "1", "--seed", "42"};
+
+  // 1. Invalid backend fails before planning with empty JSON and preserved reason.
+  {
+    LlmMemoryConfig config = parse_collect_config(base_decode_args);
+    config.backend = static_cast<LlmMemoryBackend>(99);
+    nlohmann::ordered_json collected;
+    std::string reason;
+    bool prep_interrupted = true;
+    testing::internal::CaptureStdout();
+    testing::internal::CaptureStderr();
+    const int status =
+        run_llm_memory_collect(config, collected, &reason, &prep_interrupted);
+    testing::internal::GetCapturedStderr();
+    testing::internal::GetCapturedStdout();
+    EXPECT_EQ(status, EXIT_FAILURE);
+    EXPECT_TRUE(collected.empty());
+    EXPECT_FALSE(prep_interrupted);
+    EXPECT_EQ(reason, LlmBackendReason::INVALID_BACKEND);
+  }
+
+  // 2. Interruption during prepare_llm_memory_work_plan (paged decode ownership).
+  {
+    std::vector<std::string> args = base_decode_args;
+    args.insert(args.end(), {"--kv-layout", "paged", "--kv-block-tokens", "8"});
+    const LlmMemoryConfig config = parse_collect_config(std::move(args));
+    LlmMemoryCommandTestHooks hooks;
+    hooks.stop_requested = []() { return true; };
+    const LlmCommandHooksScope command_hooks(std::move(hooks));
+    nlohmann::ordered_json collected;
+    std::string reason;
+    bool prep_interrupted = false;
+    testing::internal::CaptureStdout();
+    testing::internal::CaptureStderr();
+    const int status =
+        run_llm_memory_collect(config, collected, &reason, &prep_interrupted);
+    testing::internal::GetCapturedStderr();
+    testing::internal::GetCapturedStdout();
+    EXPECT_EQ(status, EXIT_SUCCESS);
+    EXPECT_TRUE(collected.empty());
+    EXPECT_TRUE(prep_interrupted);
+    EXPECT_EQ(reason, LlmKvLayoutReason::PREPARATION_INTERRUPTED);
+  }
+
+  // 3. Interruption during finalize_llm_memory_work_plan (paged prefill table materialization).
+  {
+    const LlmMemoryConfig config = parse_collect_config(
+        {"memory_benchmark", "--llm-memory", "--phase", "prefill",
+         "--kv-layout", "paged", "--weight-size-mb", "1", "--layers", "2",
+         "--query-heads", "4", "--kv-heads", "2", "--head-dim", "16",
+         "--prompt-tokens", "16", "--attention-query-tile-tokens", "8",
+         "--kv-block-tokens", "8", "--threads", "1", "--iterations", "1",
+         "--count", "1", "--seed", "42"});
+    LlmMemoryCommandTestHooks hooks;
+    hooks.stop_requested = []() { return true; };
+    const LlmCommandHooksScope command_hooks(std::move(hooks));
+    nlohmann::ordered_json collected;
+    std::string reason;
+    bool prep_interrupted = false;
+    testing::internal::CaptureStdout();
+    testing::internal::CaptureStderr();
+    const int status =
+        run_llm_memory_collect(config, collected, &reason, &prep_interrupted);
+    testing::internal::GetCapturedStderr();
+    testing::internal::GetCapturedStdout();
+    EXPECT_EQ(status, EXIT_SUCCESS);
+    EXPECT_TRUE(collected.empty());
+    EXPECT_TRUE(prep_interrupted);
+    EXPECT_EQ(reason, LlmKvLayoutReason::PREPARATION_INTERRUPTED);
+  }
+
+  // 4. Interruption reported by backend->prepare_resources().
+  {
+    const LlmMemoryConfig config = parse_collect_config(base_decode_args);
+    const LlmBackendFactoryHookScope backend_hook([](LlmMemoryBackend) {
+      return std::make_unique<PreparationInterruptedFakeBackend>();
+    });
+    nlohmann::ordered_json collected;
+    std::string reason;
+    bool prep_interrupted = false;
+    testing::internal::CaptureStdout();
+    testing::internal::CaptureStderr();
+    const int status =
+        run_llm_memory_collect(config, collected, &reason, &prep_interrupted);
+    testing::internal::GetCapturedStderr();
+    testing::internal::GetCapturedStdout();
+    EXPECT_EQ(status, EXIT_SUCCESS);
+    EXPECT_TRUE(collected.empty());
+    EXPECT_TRUE(prep_interrupted);
+    EXPECT_EQ(reason, LlmBackendReason::PREPARATION_INTERRUPTED);
+  }
+
+  // 5. Non-timer !result.initialized setup failure populates schema-2 failed JSON.
+  {
+    const LlmMemoryConfig config = parse_collect_config(base_decode_args);
+    LlmMemoryCommandTestHooks hooks;
+    hooks.before_runner = [](LlmMemoryWorkPlan& plan) {
+      plan.memory_budget.request.orchestration_auxiliary_bytes = 0;
+    };
+    const LlmCommandHooksScope command_hooks(std::move(hooks));
+    nlohmann::ordered_json collected;
+    std::string reason;
+    bool prep_interrupted = true;
+    testing::internal::CaptureStdout();
+    testing::internal::CaptureStderr();
+    const int status =
+        run_llm_memory_collect(config, collected, &reason, &prep_interrupted);
+    testing::internal::GetCapturedStderr();
+    testing::internal::GetCapturedStdout();
+    EXPECT_EQ(status, EXIT_FAILURE);
+    EXPECT_FALSE(prep_interrupted);
+    EXPECT_EQ(reason, LlmRunnerReason::AUXILIARY_BUDGET_INSUFFICIENT);
+    ASSERT_FALSE(collected.empty());
+    EXPECT_EQ(collected.at("status"), "failed");
+    EXPECT_EQ(collected.at("reason_code"),
+              LlmRunnerReason::AUXILIARY_BUDGET_INSUFFICIENT);
+    EXPECT_EQ(collected.at("measurements").size(), kLlmScenarioCount);
+    EXPECT_EQ(collected.at("counters").at("terminal_measurements"),
+              kLlmScenarioCount);
+  }
+
+  // 6. Exception before result initialization populates schema-2 setup-failure JSON.
+  {
+    const LlmMemoryConfig config = parse_collect_config(base_decode_args);
+    LlmMemoryCommandTestHooks hooks;
+    hooks.before_runner = [](LlmMemoryWorkPlan&) {
+      throw std::runtime_error("injected collect pre-init exception");
+    };
+    const LlmCommandHooksScope command_hooks(std::move(hooks));
+    nlohmann::ordered_json collected;
+    std::string reason;
+    bool prep_interrupted = true;
+    testing::internal::CaptureStdout();
+    testing::internal::CaptureStderr();
+    const int status =
+        run_llm_memory_collect(config, collected, &reason, &prep_interrupted);
+    testing::internal::GetCapturedStderr();
+    testing::internal::GetCapturedStdout();
+    EXPECT_EQ(status, EXIT_FAILURE);
+    EXPECT_FALSE(prep_interrupted);
+    EXPECT_EQ(reason, LlmRunnerReason::RUNNER_EXCEPTION);
+    ASSERT_FALSE(collected.empty());
+    EXPECT_EQ(collected.at("status"), "failed");
+    EXPECT_EQ(collected.at("reason_code"), LlmRunnerReason::RUNNER_EXCEPTION);
+    EXPECT_EQ(collected.at("measurements").size(), kLlmScenarioCount);
+  }
+
+  // 7. Post-run exception in collect mode rewrites collected JSON with late-command-error-correction.
+  {
+    const LlmMemoryConfig config = parse_collect_config(base_decode_args);
+    const LlmCommandHooksScope command_hooks(
+        []() { throw std::runtime_error("injected collect post-run exception"); });
+    nlohmann::ordered_json collected;
+    std::string reason;
+    bool prep_interrupted = true;
+    testing::internal::CaptureStdout();
+    testing::internal::CaptureStderr();
+    const int status =
+        run_llm_memory_collect(config, collected, &reason, &prep_interrupted);
+    testing::internal::GetCapturedStderr();
+    testing::internal::GetCapturedStdout();
+    EXPECT_EQ(status, EXIT_FAILURE);
+    EXPECT_FALSE(prep_interrupted);
+    EXPECT_EQ(reason, LlmRunnerReason::RUNNER_EXCEPTION);
+    ASSERT_FALSE(collected.empty());
+    EXPECT_EQ(collected.at("status"), "failed");
+    EXPECT_EQ(collected.at("reason_code"), LlmRunnerReason::RUNNER_EXCEPTION);
+    EXPECT_TRUE(collected.at("results_complete").get<bool>());
+    EXPECT_FALSE(collected.at("run_accepted").get<bool>());
+    EXPECT_EQ(collected.at("checkpoint_lifecycle").at("current_request"),
+              "late-command-error-correction");
+  }
+
+  // 8. Graceful task-boundary interruption returns EXIT_SUCCESS with interrupted schema-2 JSON.
+  {
+    const LlmMemoryConfig config = parse_collect_config(base_decode_args);
+    LlmMemoryCommandTestHooks hooks;
+    hooks.stop_requested = []() { return true; };
+    const LlmCommandHooksScope command_hooks(std::move(hooks));
+    nlohmann::ordered_json collected;
+    std::string reason;
+    bool prep_interrupted = true;
+    testing::internal::CaptureStdout();
+    testing::internal::CaptureStderr();
+    const int status =
+        run_llm_memory_collect(config, collected, &reason, &prep_interrupted);
+    testing::internal::GetCapturedStderr();
+    testing::internal::GetCapturedStdout();
+    EXPECT_EQ(status, EXIT_SUCCESS);
+    EXPECT_FALSE(prep_interrupted);
+    ASSERT_FALSE(collected.empty());
+    EXPECT_EQ(collected.at("status"), "interrupted");
+    EXPECT_TRUE(collected.at("interruption_requested").get<bool>());
+    EXPECT_FALSE(collected.at("run_accepted").get<bool>());
+  }
 }

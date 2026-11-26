@@ -1160,6 +1160,8 @@ int parse_llm_memory_arguments(int argc, char* argv[],
   return EXIT_SUCCESS;
 }
 
+namespace {
+
 /**
  * Execute one concrete LLM memory profile run for direct or sweep-collect mode.
  *
@@ -1175,6 +1177,12 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
                            nlohmann::ordered_json* collected_json,
                            std::string* failure_reason,
                            bool* preparation_interrupted) noexcept {
+  const auto stop_check = []() {
+    if (llm_command_hooks_active && active_llm_command_hooks.stop_requested) {
+      return active_llm_command_hooks.stop_requested();
+    }
+    return signal_received();
+  };
   const auto record_failure = [&](std::string_view reason) {
     if (failure_reason != nullptr && !reason.empty()) {
       *failure_reason = std::string(reason);
@@ -1249,8 +1257,7 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
 
     LlmMemoryWorkPlanDraft model_draft = prepare_llm_memory_work_plan(
         config, config.available_workers, metadata.available_memory_bytes,
-        metadata.page_size_bytes,
-        []() { return signal_received(); });
+        metadata.page_size_bytes, stop_check);
     if (!model_draft.valid) {
       record_failure(model_draft.reason_code);
       if (collected_json != nullptr &&
@@ -1383,12 +1390,11 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
           std::move(model_draft),
           std::move(runtime_execution),
           checksum_auxiliary_bytes, orchestration_auxiliary_bytes,
-          []() { return signal_received(); });
+          stop_check);
     } else {
       model_plan = finalize_llm_memory_work_plan(
           std::move(model_draft), checksum_auxiliary_bytes,
-          orchestration_auxiliary_bytes,
-          []() { return signal_received(); });
+          orchestration_auxiliary_bytes, stop_check);
     }
     if (!model_plan.valid) {
       record_failure(model_plan.reason_code);
@@ -1415,6 +1421,7 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
     }
 
     LlmRunnerHooks hooks;
+    hooks.stop_requested = stop_check;
     if (output_session != nullptr) {
       hooks.progress_snapshots = output_session->persists_checkpoints();
       hooks.observe_file_writes = [&]() {
@@ -1439,6 +1446,9 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
       };
     }
 
+    if (llm_command_hooks_active && active_llm_command_hooks.before_runner) {
+      active_llm_command_hooks.before_runner(model_plan);
+    }
     run_status =
         run_llm_memory_suite(config, model_plan, *backend, result, hooks);
     if (!result.initialized) {
@@ -1582,6 +1592,8 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
   }
   return run_status;
 }
+
+}  // namespace
 
 int run_llm_memory_collect(const LlmMemoryConfig& config,
                            nlohmann::ordered_json& result_json,
@@ -1785,7 +1797,7 @@ LlmMemoryConfigValidation validate_llm_memory_config(
     validation.reason_code = LlmMemoryConfigReason::LOOP_COUNT_REQUIRED;
     return validation;
   }
-  const std::array<size_t, 15> json_integer_fields = {
+  const std::array<size_t, 14> json_integer_fields = {
       config.weight_size_mb,
       config.layer_count,
       config.query_head_count,
@@ -1800,12 +1812,13 @@ LlmMemoryConfigValidation validate_llm_memory_config(
       config.available_workers,
       config.iterations,
       config.loop_count,
-      config.sweep_max_runs,
   };
   if (std::any_of(json_integer_fields.begin(), json_integer_fields.end(),
                   [](size_t value) {
                     return value > Constants::LLM_JSON_MAX_SAFE_INTEGER;
                   }) ||
+      (config.run_sweep &&
+       config.sweep_max_runs > Constants::LLM_JSON_MAX_SAFE_INTEGER) ||
       config.loop_count >
           Constants::LLM_JSON_MAX_SAFE_INTEGER / kLlmScenarioCount) {
     validation.reason_code =

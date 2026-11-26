@@ -757,6 +757,18 @@ a resource bound or a requested evidence level that is unavailable. `artifact_co
 cases. An artifact alone cannot establish the original process exit status; the process acceptance procedure below
 still applies to callers launching the producer.
 
+Consistent verdicts emit `artifact_consistent`, `run_accepted`, `reason_code` (`valid`, `run-not-accepted` for an
+unaccepted direct run, or `sweep-not-accepted` for an unaccepted sweep), `checks` (`checksum`, `timing`, `build`),
+and `oracle_work_used`. Rejected or unsupported verdicts emit `artifact_consistent` (`false` or `null`),
+`run_accepted` (`false`), `reason_code`, and on `invalid-input` an optional truncated `detail` string. Consistent
+sweep verdicts additionally emit `artifact_kind` (`"llm_sweep"`), `planned_runs`, `completed_runs`, `verified_runs`,
+and `run_verdicts` (one object per attempted run with `run_index`, `status`, `artifact_consistent`, `run_accepted`,
+and `reason_code`, where `reason_code` is `"nested-result-null"` when `runs[].result` is null). Across a sweep,
+each `checks` field reports the most conservative evidence level observed among verified non-null runs
+(`unavailable` before `independent-oracle` for `checksum`; `elapsed-only`, then `unavailable`, then `cpu-raw-ticks`
+or `gpu-timestamps` for `timing`; `unavailable`, then `manifest-only`, then `binary-bound` for `build`), defaulting
+to `unavailable` when every attempted run has a null `result`.
+
 Checks reconstruct geometry, frozen work, payload/layout/lookup quantities, seed derivation and the canonical
 Fisher–Yates table digest; bind component, model, scenario, layout and nested identity evidence; derive independent
 CPU worker/run and Metal dual-mod32 expectations once per canonical plan; check original timing, rates, named

@@ -1081,6 +1081,107 @@ class VerifierTests(unittest.TestCase):
         self.assertFalse(verdict["run_accepted"])
         del hashlib
 
+    def test_clamped_workers_distinguish_requested_from_execution_workers(self):
+        # When effective_workers < requested_workers (e.g., clamped by available workers or blocks),
+        # measurement.requested_workers matches configuration.requested_workers while
+        # execution.requested_workers matches effective_workers.
+        doc = fixture("cpu-decode-paged")
+        doc["configuration"]["requested_workers"] = 10
+        doc["configuration"]["available_workers"] = 2
+        doc["resolved_plan"]["model_work_plan"]["requested_workers"] = 10
+        doc["resolved_plan"]["plan_identity"] = doc["resolved_plan"]["plan_identity"].replace(
+            "|requested_workers=2|", "|requested_workers=10|"
+        )
+        for sp in doc["resolved_plan"]["scenario_plans"]:
+            old_id = sp["plan_identity"]
+            prefix, pairs = verifier.identity_fields(old_id)
+            new_model_id = doc["resolved_plan"]["plan_identity"]
+            updated = [
+                ("model_plan_identity_size", str(len(new_model_id)))
+                if k == "model_plan_identity_size"
+                else ("model_plan_identity", new_model_id)
+                if k == "model_plan_identity"
+                else (k, v)
+                for k, v in pairs
+            ]
+            sp["plan_identity"] = verifier.pipe(prefix, updated)
+        for row in doc["measurements"]:
+            row["requested_workers"] = 10
+            self.assertEqual(row["effective_workers"], 2)
+            self.assertEqual(row["execution"]["requested_workers"], 2)
+            self.assertEqual(row["execution"]["created_workers"], 2)
+            self.assertEqual(row["execution"]["completed_workers"], 2)
+        verdict = verifier.verify(doc)
+        self.assertTrue(verdict["artifact_consistent"])
+        self.assertTrue(verdict["run_accepted"])
+
+        for mutate in (
+            lambda d: d["measurements"][0].update(requested_workers=2),
+            lambda d: d["measurements"][0].update(effective_workers=10),
+            lambda d: d["measurements"][0]["execution"].update(requested_workers=10),
+        ):
+            bad = copy.deepcopy(doc)
+            mutate(bad)
+            self.assert_reason(bad, "worker-lifecycle")
+
+    def test_setup_failure_artifact_shape_is_consistent(self):
+        # Verify the schema-2 shape emitted by initialize_llm_setup_failure_result.
+        doc = fixture("cpu-decode-contiguous")
+        doc["resolved_plan"]["scenario_plans"] = []
+        doc["resolved_plan"]["frozen_plan_refs"] = {s: None for s in verifier.SCENARIOS}
+        doc["calibration"]["attempts"] = {s: [] for s in verifier.SCENARIOS}
+        for row in doc["measurements"]:
+            row.update(
+                plan_ref=None,
+                status="failed",
+                reason_code="not-run-after-runtime-failure",
+                attempted=False,
+                completed_work_units=0,
+                completed_effective_model_payload_bytes="0",
+                completed_layout_metadata_lookup_count="0",
+                completed_layout_metadata_read_bytes="0",
+                completed_task_accounted_bytes="0",
+                completion_derivation=None,
+                elapsed_seconds=None,
+                synthetic_work_unit_latency_seconds=None,
+                synthetic_memory_work_units_per_second=None,
+                effective_model_payload_gb_s=None,
+            )
+            row["execution"].update(status="not_run", valid=None)
+            row["execution"]["timing"] = dict(evaluated=False, valid=None, diagnostic_elapsed_seconds=None, cpu_raw=None)
+            for check in row["execution"]["validation"]["checks"]:
+                check["evaluated"] = False if check["applicable"] else None
+                check["valid"] = None
+            row["checksum"].update(
+                status="not_evaluated",
+                checksum_valid=None,
+                actual_worker_checksums=None,
+                actual_run_checksum=None,
+            )
+        for loop in doc["loop_records"]:
+            loop["realized_order"] = []
+            loop["realized_order_count"] = 0
+        doc.update(
+            status="failed",
+            reason_code="auxiliary-budget-insufficient",
+            results_complete=False,
+            run_accepted=False,
+            scenario_order_balance_complete=False,
+            interruption_requested=False,
+        )
+        for k in (
+            "planned_work_units",
+            "planned_effective_model_payload_bytes",
+            "planned_layout_metadata_lookup_count",
+            "planned_layout_metadata_read_bytes",
+            "planned_task_accounted_bytes",
+        ):
+            doc["counters"][k] = "0"
+        refresh(doc)
+        verdict = verifier.verify(doc)
+        self.assertTrue(verdict["artifact_consistent"])
+        self.assertFalse(verdict["run_accepted"])
+
 
 class ArithmeticGoldens(unittest.TestCase):
     def test_published_cpu_golden_and_wrap(self):
@@ -1173,6 +1274,38 @@ class ArithmeticGoldens(unittest.TestCase):
                             ),
                             [v & mask for v in expected],
                         )
+
+    def test_partition_clamps_target_when_aligned_boundaries_exhausted(self):
+        # Small spans partitioned across many workers exhaust 32-byte boundaries before all workers
+        # are placed; boundaries must remain strictly increasing with positive active spans.
+        self.assertEqual(
+            oracle.partition(0, 128, 10),
+            [
+                (0, 32),
+                (32, 32),
+                (64, 32),
+                (96, 1),
+                (97, 1),
+                (98, 1),
+                (99, 1),
+                (100, 4),
+                (104, 12),
+                (116, 12),
+            ],
+        )
+        for offset in (0, 17, 64, 128):
+            for size in (1, 10, 64, 96, 128, 192, 256):
+                for workers in (1, 2, 4, 8, 10, 16):
+                    ranges = oracle.partition(offset, size, workers)
+                    self.assertEqual(len(ranges), workers)
+                    active = min(size, workers)
+                    cursor = offset
+                    for start, length in ranges[:active]:
+                        self.assertEqual(start, cursor)
+                        self.assertGreater(length, 0)
+                        cursor += length
+                    self.assertEqual(cursor, offset + size)
+                    self.assertEqual(ranges[active:], [(0, 0)] * (workers - active))
 
 
 class BuildProvenanceTests(unittest.TestCase):

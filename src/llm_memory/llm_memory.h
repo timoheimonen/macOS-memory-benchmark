@@ -246,8 +246,12 @@ struct LlmMemoryParserTestHooks {
 void set_llm_memory_parser_test_hooks(
     const LlmMemoryParserTestHooks* hooks);
 
-/** Deterministic exception seam at the post-run command boundary. */
+struct LlmMemoryWorkPlan;
+
+/** Deterministic test seams at the LLM command boundary. */
 struct LlmMemoryCommandTestHooks {
+  std::function<bool()> stop_requested;
+  std::function<void(LlmMemoryWorkPlan&)> before_runner;
   std::function<void()> after_initialized_runner;
 };
 

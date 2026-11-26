@@ -1189,16 +1189,10 @@ def check_measurements(doc, m, plans):
                 close(row[key], value)
             if m["backend"] == "cpu":
                 equal(row["completion_derivation"], "accepted-plan-derived", "completion-derivation")
+                equal(row["requested_workers"], doc["configuration"]["requested_workers"], "worker-lifecycle")
+                equal(row["effective_workers"], m["workers"], "worker-lifecycle")
                 for key in ("requested_workers", "created_workers", "completed_workers"):
-                    equal(
-                        ex[key],
-                        (
-                            m["workers"]
-                            if key != "requested_workers"
-                            else doc["configuration"]["requested_workers"]
-                        ),
-                        "worker-lifecycle",
-                    )
+                    equal(ex[key], m["workers"], "worker-lifecycle")
                 require(
                     ex["timer_started"] is True
                     and ex["timer_stopped"] is True

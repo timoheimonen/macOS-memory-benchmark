@@ -23,6 +23,11 @@
 #include "llm_memory/llm_cpu_backend.h"
 #include "llm_memory/llm_metal_backend.h"
 
+namespace {
+LlmBackendFactoryTestHook active_backend_factory_hook;
+bool backend_factory_hook_active = false;
+}  // namespace
+
 LlmBackendAuxiliaryEstimate LlmBackend::calculate_auxiliary_estimate(
     const LlmAuxiliaryPreflightView& preflight) const noexcept {
   LlmBackendAuxiliaryEstimate estimate;
@@ -44,6 +49,9 @@ LlmBackendAuxiliaryEstimate LlmBackend::calculate_auxiliary_estimate(
 }
 
 std::unique_ptr<LlmBackend> create_llm_backend(LlmMemoryBackend backend) {
+  if (backend_factory_hook_active && active_backend_factory_hook) {
+    return active_backend_factory_hook(backend);
+  }
   switch (backend) {
     case LlmMemoryBackend::Cpu:
       return create_llm_cpu_backend();
@@ -51,6 +59,16 @@ std::unique_ptr<LlmBackend> create_llm_backend(LlmMemoryBackend backend) {
       return create_llm_metal_backend();
   }
   return nullptr;
+}
+
+void set_llm_backend_factory_test_hook(const LlmBackendFactoryTestHook* hook) {
+  if (hook == nullptr) {
+    active_backend_factory_hook = LlmBackendFactoryTestHook{};
+    backend_factory_hook_active = false;
+    return;
+  }
+  active_backend_factory_hook = *hook;
+  backend_factory_hook_active = true;
 }
 
 const LlmResourcePreparationResult* get_llm_cpu_preparation(const LlmBackendEvidence& evidence) noexcept {
