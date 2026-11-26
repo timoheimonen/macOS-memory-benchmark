@@ -643,8 +643,10 @@ middle, and trailing items.
   `BenchmarkConfig` parser or CPU sweep runner
 - The four active Metal methodologies are governed by runtime capability checks
 - Requires each common model option `--weight-size-mb <MiB>`, `--layers <count>`, `--query-heads <count>`,
-  `--kv-heads <count>`, and `--head-dim <count>` exactly once. Decode requires `--context-tokens <count>`; prefill
-  requires `--prompt-tokens <P>` and `--attention-query-tile-tokens <Q>`. Cross-phase geometry is rejected
+  `--kv-heads <count>`, and `--head-dim <count>` exactly once. Decode requires `--context-tokens <count>` (unless
+  supplied via `--sweep context-tokens=...`); prefill requires `--prompt-tokens <P>` (unless supplied via
+  `--sweep prompt-tokens=...`) and `--attention-query-tile-tokens <Q>` (unless supplied via
+  `--sweep attention-query-tile-tokens=...`). Cross-phase geometry is rejected
 - Allows optional `--llm-memory-backend <cpu|metal>`, `--kv-element-bytes <1|2|4>`, `--batch-size <count>`,
   `--phase <decode|prefill>`, `--kv-layout <contiguous|paged>`, CPU-only `-t`/`--threads <count>`,
   `-i`/`--iterations <count>`,

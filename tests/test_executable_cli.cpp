@@ -1982,6 +1982,10 @@ TEST(ExecutableCliIntegrationTest,
     EXPECT_EQ(nested["configuration"]["kv_block_tokens"],
               expected_pairs[i].second);
     EXPECT_EQ(nested["configuration"]["base_seed_uint64_decimal"], "42");
+    const nlohmann::json& json_peak =
+        nested["backend_evidence"]["cpu"]["resources"]["json_output_peak_estimate"];
+    EXPECT_TRUE(json_peak["enabled"].get<bool>());
+    EXPECT_GT(std::stoull(json_peak["total_bytes"].get<std::string>()), 0u);
   }
   EXPECT_EQ(access((output.path() + ".tmp").c_str(), F_OK), -1);
 }

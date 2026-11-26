@@ -1896,6 +1896,63 @@ TEST(LlmMemoryJsonTest, JsonPeakEstimateIsZeroWhenOutputIsDisabled) {
   EXPECT_EQ(estimate.total_bytes, 0u);
 }
 
+TEST(LlmMemoryJsonTest, CollectJsonForSweepEnablesJsonPeakEstimateAndEvidenceWithEmptyOutputFile) {
+  LlmMemoryConfig disabled = explicit_config(1);
+  disabled.output_file.clear();
+  disabled.collect_json_for_sweep = false;
+
+  LlmMemoryConfig sweep_collect = disabled;
+  sweep_collect.collect_json_for_sweep = true;
+
+  LlmMemoryWorkPlanDraft draft = prepare_llm_memory_work_plan(plan_request(sweep_collect));
+  ASSERT_TRUE(draft.valid) << draft.reason_code;
+
+  const LlmJsonPeakEstimate disabled_preflight =
+      calculate_llm_json_peak_estimate(disabled, draft.auxiliary_preflight);
+  EXPECT_TRUE(disabled_preflight.valid);
+  EXPECT_EQ(disabled_preflight.total_bytes, 0u);
+
+  const LlmJsonPeakEstimate collect_preflight =
+      calculate_llm_json_peak_estimate(sweep_collect, draft.auxiliary_preflight);
+  ASSERT_TRUE(collect_preflight.valid);
+  EXPECT_GT(collect_preflight.fixed_schema_bytes, 0u);
+  EXPECT_GT(collect_preflight.measurement_record_bytes, 0u);
+  EXPECT_GT(collect_preflight.worker_checksum_bytes, 0u);
+  EXPECT_GT(collect_preflight.total_bytes, 0u);
+
+  const LlmJsonPeakEstimate invalid_preflight =
+      calculate_llm_json_peak_estimate(sweep_collect, LlmAuxiliaryPreflightView{});
+  EXPECT_FALSE(invalid_preflight.valid);
+  EXPECT_EQ(invalid_preflight.reason_code, LlmJsonReason::INVALID_MODEL_WORK_PLAN);
+
+  const LlmMemoryWorkPlan plan = admitted_plan(sweep_collect);
+  ASSERT_TRUE(plan.valid) << plan.reason_code;
+  const LlmJsonPeakEstimate collect_final = calculate_llm_json_peak_estimate(sweep_collect, plan);
+  ASSERT_TRUE(collect_final.valid);
+  EXPECT_EQ(collect_final.total_bytes, collect_preflight.total_bytes);
+
+  const LlmJsonPeakEstimate invalid_plan =
+      calculate_llm_json_peak_estimate(sweep_collect, LlmMemoryWorkPlan{});
+  EXPECT_FALSE(invalid_plan.valid);
+  EXPECT_EQ(invalid_plan.reason_code, LlmJsonReason::INVALID_MODEL_WORK_PLAN);
+
+  const LlmMemoryResult result = complete_result(sweep_collect, plan);
+  const OrderedJson collect_doc = build_llm_memory_json(
+      sweep_collect, plan, preparation_for(plan), fixed_metadata(sweep_collect, plan), result);
+  const OrderedJson& collect_peak =
+      collect_doc["backend_evidence"]["cpu"]["resources"]["json_output_peak_estimate"];
+  EXPECT_TRUE(collect_peak["enabled"].get<bool>());
+  EXPECT_TRUE(collect_peak["valid"].get<bool>());
+  EXPECT_EQ(collect_peak["total_bytes"], std::to_string(collect_final.total_bytes));
+
+  const OrderedJson disabled_doc = build_llm_memory_json(
+      disabled, plan, preparation_for(plan), fixed_metadata(disabled, plan), result);
+  const OrderedJson& disabled_peak =
+      disabled_doc["backend_evidence"]["cpu"]["resources"]["json_output_peak_estimate"];
+  EXPECT_FALSE(disabled_peak["enabled"].get<bool>());
+  EXPECT_EQ(disabled_peak["total_bytes"], "0");
+}
+
 TEST(LlmMemoryJsonTest, PreflightAuxiliaryEstimatesExactlyMatchFinalizedPlanForAllActiveCpuProfiles) {
   const std::array<LlmMemoryConfig, 4> configs = {explicit_config(3), paged_config(3), prefill_config(3),
                                                   paged_prefill_config(3)};
