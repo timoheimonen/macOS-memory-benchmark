@@ -32,9 +32,8 @@
  * - GPU bandwidth: Standalone Metal GPU memory read/write/copy measurements
  * - LLM memory profile: Standalone CPU/Metal synthetic decode/prefill memory workloads with contiguous or paged KV
  *
- * Standard, pattern, TLB, and core-to-core modes also support validated parameter sweeps.
- * GPU bandwidth and the LLM memory profile are intentionally standalone and do
- * not participate in sweeps.
+ * Standard, pattern, TLB, core-to-core, and LLM-memory modes also support validated parameter sweeps.
+ * GPU bandwidth is intentionally standalone and does not participate in sweeps.
  *
  * @author Timo Heimonen
  */

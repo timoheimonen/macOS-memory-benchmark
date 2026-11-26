@@ -708,4 +708,26 @@ TEST(SweepRunnerTest, LlmMemoryPreInitFailureAndPreparationInterruptionPreserveR
     EXPECT_EQ(execution.output_json["runs"][1]["status_reason"], "preparation-interrupted");
     EXPECT_TRUE(execution.output_json["runs"][1]["result"].is_null());
   }
+
+  {
+    std::vector<Json> checkpoints;
+    std::vector<bool> announce_flags;
+    size_t executed_runs = 0;
+    const std::vector<SweepRunOutcome> outcomes = {
+        {EXIT_SUCCESS, make_complete_llm(), "", false},
+        {EXIT_FAILURE, Json::object(), "preparation-interrupted", true},
+    };
+    const SweepExecutionResult execution =
+        execute_sweep_plan(SweepNestedMode::LlmMemory, make_parameters(2), Json::object(),
+                           make_hooks(outcomes, checkpoints, announce_flags, executed_runs));
+    EXPECT_EQ(execution.exit_code, EXIT_FAILURE);
+    EXPECT_EQ(execution.output_json["status"], "failed");
+    EXPECT_EQ(execution.output_json["status_reason"], "preparation-interrupted");
+    EXPECT_EQ(execution.output_json["attempted_runs"], 2u);
+    EXPECT_EQ(execution.output_json["completed_runs"], 1u);
+    EXPECT_FALSE(execution.output_json["conclusions_valid"].get<bool>());
+    EXPECT_EQ(execution.output_json["runs"][1]["status"], "failed");
+    EXPECT_EQ(execution.output_json["runs"][1]["status_reason"], "preparation-interrupted");
+    EXPECT_TRUE(execution.output_json["runs"][1]["result"].is_null());
+  }
 }

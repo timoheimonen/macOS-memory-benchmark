@@ -48,8 +48,11 @@ LlmColdChecks required_llm_cold_checks(const LlmMemoryWorkPlan& model, LlmScenar
         LlmColdCheckKind::KvAppendUnchanged, writes || (paged && !prefill), padding);
   }
   const auto* metal = get_llm_metal_execution_plan(model);
-  padding = paged && metal && metal->resources.paged_layout &&
-      metal->resources.paged_layout->last_block_valid_bytes < metal->resources.paged_layout->block_bytes;
+  padding = paged && (metal && metal->resources.paged_layout
+                          ? metal->resources.paged_layout->last_block_valid_bytes <
+                                metal->resources.paged_layout->block_bytes
+                          : model.geometry.last_block_valid_bytes <
+                                model.geometry.kv_block_bytes);
   return make_llm_cold_checks(writes, prefill ? LlmColdCheckKind::KvPrefillFinalSamples :
       LlmColdCheckKind::KvAppendFinal, writes, writes && padding);
 }

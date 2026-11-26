@@ -1241,6 +1241,54 @@ TEST(LlmMemoryWorkPlanTest, MetalProfilesCarryExactRuntimePlanningAndIdentities)
   }
 }
 
+TEST(LlmMemoryWorkPlanTest, MetalPagedPrefillFinalizesWhenPromptModuloBlockIsNotOne) {
+  for (const std::pair<size_t, size_t> shape : {std::pair<size_t, size_t>{64, 16}, std::pair<size_t, size_t>{35, 16}}) {
+    SCOPED_TRACE(shape.first);
+    LlmMemoryWorkPlanRequest request = metal_prefill_work_plan_request(LlmKvLayout::Paged);
+    request.geometry.prompt_tokens = shape.first;
+    request.geometry.attention_query_tile_tokens = 8;
+    request.geometry.kv_block_tokens = shape.second;
+
+    LlmMemoryWorkPlanDraft draft = prepare_llm_memory_work_plan(request);
+    ASSERT_TRUE(draft.valid) << draft.reason_code;
+    EXPECT_EQ(draft.candidate.geometry.decode_append_offset_in_last_block, 0U);
+    LlmMetalExecutionPlan provisional = build_llm_metal_execution_plan(metal_resource_request(draft.candidate));
+    ASSERT_TRUE(provisional.valid) << provisional.reason_code;
+    ASSERT_TRUE(provisional.resources.paged_layout.has_value());
+    const size_t expected_layout_append =
+        ((shape.first - 1) % shape.second) * draft.candidate.geometry.k_or_v_record_bytes_per_layer;
+    ASSERT_NE(expected_layout_append, 0U);
+    EXPECT_EQ(provisional.resources.paged_layout->decode_append_offset_in_last_block, expected_layout_append);
+    ASSERT_TRUE(attach_llm_metal_execution_plan(draft, std::move(provisional)));
+
+    LlmMetalExecutionPlan exact = build_llm_metal_execution_plan(metal_resource_request(draft.candidate));
+    ASSERT_TRUE(exact.valid) << exact.reason_code;
+    LlmMemoryWorkPlan plan = finalize_llm_memory_work_plan(std::move(draft), std::move(exact), 0, 0);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    const auto* execution = get_llm_metal_execution_plan(plan);
+    ASSERT_NE(execution, nullptr);
+    ASSERT_TRUE(execution->valid) << execution->reason_code;
+    ASSERT_TRUE(execution->resources.paged_layout.has_value());
+    EXPECT_EQ(plan.geometry.decode_append_offset_in_last_block, 0U);
+    EXPECT_EQ(execution->resources.paged_layout->decode_append_offset_in_last_block, expected_layout_append);
+
+    // Tampering the paged layout's append offset must still be rejected during finalization.
+    LlmMemoryWorkPlanDraft mismatch_draft = prepare_llm_memory_work_plan(request);
+    ASSERT_TRUE(mismatch_draft.valid) << mismatch_draft.reason_code;
+    ASSERT_TRUE(attach_llm_metal_execution_plan(
+        mismatch_draft, build_llm_metal_execution_plan(metal_resource_request(mismatch_draft.candidate))));
+    LlmMetalExecutionPlan tampered = build_llm_metal_execution_plan(metal_resource_request(mismatch_draft.candidate));
+    ASSERT_TRUE(tampered.valid) << tampered.reason_code;
+    tampered.resources.paged_layout->decode_append_offset_in_last_block = 0;
+    LlmMemoryWorkPlan rejected = finalize_llm_memory_work_plan(std::move(mismatch_draft), std::move(tampered), 0, 0);
+    ASSERT_TRUE(rejected.valid) << rejected.reason_code;
+    const auto* rejected_execution = get_llm_metal_execution_plan(rejected);
+    ASSERT_NE(rejected_execution, nullptr);
+    EXPECT_FALSE(rejected_execution->valid);
+    EXPECT_EQ(rejected_execution->reason_code, LlmWorkPlanReason::INVALID_MODEL_WORK_PLAN);
+  }
+}
+
 TEST(LlmMemoryWorkPlanTest,
      MetalScenarioPlansEnforceDispatchWorkUnitCapBeforeExecution) {
   LlmMemoryWorkPlanDraft draft =

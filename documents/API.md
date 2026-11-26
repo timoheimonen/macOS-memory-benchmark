@@ -31,7 +31,7 @@ GPU schema 1 is a direct-only mode and does not support sweeps. LLM sweeps use t
 
 ## Invocation and stream contract
 
-For any result-producing direct benchmark command, or a supported CPU parameter sweep, an output value that is exactly
+For any result-producing direct benchmark command, or a supported parameter sweep, an output value that is exactly
 `-` selects stdout JSON:
 
 ```bash
@@ -741,10 +741,12 @@ reduce the single-snapshot peak allowance.
 `python3 script-examples/verify_llm_result.py result.json` reads either one direct schema-2 `llm_memory` document or
 one schema-1 LLM sweep envelope (`configuration.mode == "sweep"`, `configuration.base_mode == "llm_memory"`,
 `configuration.sweep_schema_version == 1`). For a sweep envelope it validates the Cartesian plan cardinality without
-materializing the full Cartesian product, checks run ordering, `attempted_runs`, envelope completion/acceptance counts,
-nested `configuration.output_file == ""`, parameter consistency against each nested `configuration`, profile and fixed
-base-configuration/`build_manifest` homogeneity across all non-null runs, and runs full independent schema-2
-verification on every non-null `runs[].result` under one shared artifact-wide work budget.
+materializing the full Cartesian product, checks run ordering independently of JSON object key order in
+`configuration.sweep_parameters`, enforces prefix-stop and envelope-status/metadata consistency, checks
+`attempted_runs`, envelope completion/acceptance counts, nested `configuration.output_file == ""`, parameter
+consistency against each nested `configuration`, profile and fixed base-configuration/`build_manifest` homogeneity
+across all non-null runs, and runs full independent schema-2 verification on every non-null `runs[].result` under one
+shared artifact-wide input (64 MiB), node (1,000,000), and oracle-work (1,000,000) budget.
 It supports the eight current CPU/Metal × decode/prefill × contiguous/paged component sets. Other schemas,
 methodologies and profiles are unsupported; there is no migration or historical field fallback. The independent
 Python arithmetic never imports or invokes producer helpers or executes the optional binary.

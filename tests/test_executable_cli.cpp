@@ -2053,3 +2053,63 @@ TEST(ExecutableCliIntegrationTest,
   EXPECT_TRUE(envelope["runs"][0]["result"].is_null());
   expect_no_dash_transport_artifacts(result);
 }
+
+TEST(ExecutableCliIntegrationTest,
+     LlmMemoryPagedPrefillSweepSucceedsForNonUnitBlockRemainderIntegration) {
+  {
+    const CliResult cpu_result = run_memory_benchmark({
+        "--llm-memory", "--phase", "prefill", "--kv-layout", "paged",
+        "--weight-size-mb", "1", "--layers", "2", "--query-heads", "4",
+        "--kv-heads", "2", "--head-dim", "16", "--attention-query-tile-tokens",
+        "8", "--sweep", "prompt-tokens=16,32", "--sweep",
+        "kv-block-tokens=8,16", "--threads", "1", "--iterations", "1",
+        "--count", "1", "--seed", "42", "--output", "-"});
+    expect_process_completed(cpu_result);
+    ASSERT_EQ(cpu_result.exit_code, EXIT_SUCCESS) << cpu_result.stderr_output;
+    const nlohmann::json envelope = parse_single_stdout_json(cpu_result);
+    EXPECT_EQ(envelope["status"], "complete");
+    EXPECT_EQ(envelope["completed_runs"], 4u);
+    EXPECT_TRUE(envelope["conclusions_valid"].get<bool>());
+    ASSERT_EQ(envelope["runs"].size(), 4u);
+    for (const nlohmann::json& run : envelope["runs"]) {
+      EXPECT_EQ(run["status"], "complete");
+      EXPECT_TRUE(run["result"]["run_accepted"].get<bool>());
+      EXPECT_TRUE(run["result"]["resolved_plan"]["layout"]
+                     ["decode_append_offset_in_last_block"]
+                         .is_null());
+    }
+    expect_no_dash_transport_artifacts(cpu_result);
+  }
+
+  {
+    const CliResult metal_result = run_memory_benchmark({
+        "--llm-memory", "--llm-memory-backend", "metal", "--phase", "prefill",
+        "--kv-layout", "paged", "--weight-size-mb", "1", "--layers", "2",
+        "--query-heads", "4", "--kv-heads", "2", "--head-dim", "16",
+        "--attention-query-tile-tokens", "8", "--kv-block-tokens", "16",
+        "--sweep", "prompt-tokens=16,32", "--iterations", "1", "--count", "1",
+        "--seed", "42", "--output", "-"});
+    expect_process_completed(metal_result);
+    const nlohmann::json envelope = parse_single_stdout_json(metal_result);
+    if (metal_result.exit_code != EXIT_SUCCESS &&
+        envelope.contains("runs") && !envelope["runs"].empty() &&
+        envelope["runs"][0]["result"].is_object() &&
+        envelope["runs"][0]["result"]["status"] == "unsupported") {
+      GTEST_SKIP() << "Metal backend unsupported on this host: "
+                   << envelope["runs"][0]["result"]["reason_code"];
+    }
+    ASSERT_EQ(metal_result.exit_code, EXIT_SUCCESS) << metal_result.stderr_output;
+    EXPECT_EQ(envelope["status"], "complete");
+    EXPECT_EQ(envelope["completed_runs"], 2u);
+    EXPECT_TRUE(envelope["conclusions_valid"].get<bool>());
+    ASSERT_EQ(envelope["runs"].size(), 2u);
+    for (const nlohmann::json& run : envelope["runs"]) {
+      EXPECT_EQ(run["status"], "complete");
+      EXPECT_TRUE(run["result"]["run_accepted"].get<bool>());
+      EXPECT_TRUE(run["result"]["resolved_plan"]["layout"]
+                     ["decode_append_offset_in_last_block"]
+                         .is_null());
+    }
+    expect_no_dash_transport_artifacts(metal_result);
+  }
+}

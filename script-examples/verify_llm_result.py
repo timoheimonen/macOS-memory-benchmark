@@ -199,9 +199,12 @@ def check_geometry(doc, budget):
         equal(c["attention_query_tile_tokens"], q, "configuration-geometry-mismatch")
         equal(g["prefill"]["tile_count"], str(tiles), "geometry-mismatch")
         equal(g["prefill"]["attention_prefix_token_visits_per_sequence"], str(sum(ends)), "geometry-mismatch")
-    block = integer(layout["kv_block_tokens"], maximum=U32) if paged else 0
     if paged:
+        block = integer(c["kv_block_tokens"], maximum=U32)
         require(block > 0 and block & (block - 1) == 0, "geometry-range")
+    else:
+        require(c["kv_block_tokens"] is None, "configuration-geometry-mismatch")
+        block = 0
     blocks = (n + block - 1) // block if paged else 0
     record = h * d * e
     weight = integer(g["active_weight_bytes_per_work_unit"], True)
@@ -300,28 +303,76 @@ def check_geometry(doc, budget):
     for key, value in zip(SCENARIOS, seeds[3:]):
         equal(doc["seeds"]["scenario_domain_seeds"][key], str(value), "seed-mismatch")
     model.update(buffer_seeds=seeds[:3], scenario_seeds=dict(zip(SCENARIOS, seeds[3:])), base_seed=seed)
+    layout_geometry_present = False
+    permutation_present = False
     if paged:
-        for key, value in {
-            "blocks_per_sequence": blocks,
-            "physical_blocks_per_layer": b * blocks,
-            "total_physical_blocks": l * b * blocks,
-            "block_bytes": block * record,
-            "last_block_tokens": n - (blocks - 1) * block,
-            "last_block_valid_bytes": (n - (blocks - 1) * block) * record,
-            "block_table_entries": b * blocks,
-            "block_table_bytes": 4 * b * blocks,
-        }.items():
-            equal(layout[key], str(value), "layout-mismatch")
-        table = permutation(seed, b * blocks, budget)
-        digest = hashlib.sha256(b"".join(v.to_bytes(4, "little") for v in table)).hexdigest()
-        equal(
-            layout["permutation_seed_uint64_decimal"],
-            str(splitmix(seed ^ 0x4C4C4D4B56504731)),
-            "seed-mismatch",
+        layout_geometry_keys = (
+            "kv_block_tokens",
+            "blocks_per_sequence",
+            "physical_blocks_per_layer",
+            "total_physical_blocks",
+            "block_bytes",
+            "last_block_tokens",
+            "last_block_valid_bytes",
+            "decode_append_offset_in_last_block",
+            "block_table_entries",
+            "block_table_bytes",
+            "layout_geometry_identity",
         )
-        equal(layout["permutation_sha256"], digest, "permutation-digest-mismatch")
-        equal(layout["permutation_entry_count"], str(len(table)), "layout-mismatch")
-        model["table"] = table
+        permutation_keys = (
+            "layout_identity",
+            "permutation_domain_uint64_hex",
+            "permutation_seed_uint64_decimal",
+            "permutation_algorithm_version",
+            "permutation_entry_count",
+            "permutation_sha256",
+            "permutation_identity",
+        )
+        expected_append_offset = ((n - 1) % block) * record
+        unattempted_metal_failure = (
+            backend == "metal"
+            and not any(row["attempted"] for row in doc["measurements"])
+            and doc["status"] in ("unsupported", "failed")
+        )
+        if unattempted_metal_failure and not r["resources"]["metal"]["valid"] and layout["kv_block_tokens"] is None:
+            for key in layout_geometry_keys:
+                require(layout[key] is None, "layout-mismatch")
+        else:
+            layout_geometry_present = True
+            equal(layout["kv_block_tokens"], block, "configuration-geometry-mismatch")
+            for key, value in {
+                "blocks_per_sequence": blocks,
+                "physical_blocks_per_layer": b * blocks,
+                "total_physical_blocks": l * b * blocks,
+                "block_bytes": block * record,
+                "last_block_tokens": n - (blocks - 1) * block,
+                "last_block_valid_bytes": (n - (blocks - 1) * block) * record,
+                "block_table_entries": b * blocks,
+                "block_table_bytes": 4 * b * blocks,
+            }.items():
+                equal(layout[key], str(value), "layout-mismatch")
+            if prefill:
+                require(layout["decode_append_offset_in_last_block"] is None, "layout-mismatch")
+            else:
+                equal(layout["decode_append_offset_in_last_block"], str(expected_append_offset), "layout-mismatch")
+        if unattempted_metal_failure and layout["permutation_sha256"] is None:
+            for key in permutation_keys:
+                require(layout[key] is None, "layout-mismatch")
+        else:
+            require(layout_geometry_present, "layout-mismatch")
+            permutation_present = True
+            table = permutation(seed, b * blocks, budget)
+            digest = hashlib.sha256(b"".join(v.to_bytes(4, "little") for v in table)).hexdigest()
+            equal(
+                layout["permutation_seed_uint64_decimal"],
+                str(splitmix(seed ^ 0x4C4C4D4B56504731)),
+                "seed-mismatch",
+            )
+            equal(layout["permutation_sha256"], digest, "permutation-digest-mismatch")
+            equal(layout["permutation_entry_count"], str(len(table)), "layout-mismatch")
+            model["table"] = table
+    model["layout_geometry_present"] = layout_geometry_present
+    model["permutation_present"] = permutation_present
     model["read"], model["write"] = read, write
     return model
 
@@ -430,20 +481,37 @@ def check_identities(doc, m, budget):
         k_layout_padding_bytes=r["resources"]["k_layout_padding_bytes"],
         v_layout_padding_bytes=r["resources"]["v_layout_padding_bytes"],
     )
-    layout_alias = {"kv_blocks_per_sequence": "blocks_per_sequence", "kv_block_bytes": "block_bytes"}
-    for key in (
-        "kv_block_tokens",
-        "kv_blocks_per_sequence",
-        "physical_blocks_per_layer",
-        "total_physical_blocks",
-        "kv_block_bytes",
-        "last_block_tokens",
-        "last_block_valid_bytes",
-        "decode_append_offset_in_last_block",
-        "block_table_entries",
-        "block_table_bytes",
-    ):
-        expected[key] = layout[layout_alias.get(key, key)] or 0
+    if m["paged"]:
+        last_block_tokens = m["tokens"] - (m["blocks"] - 1) * m["block_tokens"]
+        entries = m["batch"] * m["blocks"]
+        expected.update(
+            kv_block_tokens=m["block_tokens"],
+            kv_blocks_per_sequence=m["blocks"],
+            physical_blocks_per_layer=entries,
+            total_physical_blocks=m["layers"] * entries,
+            kv_block_bytes=m["block_bytes"],
+            last_block_tokens=last_block_tokens,
+            last_block_valid_bytes=last_block_tokens * m["record"],
+            decode_append_offset_in_last_block=(
+                0 if m["prefill"] else ((m["tokens"] - 1) % m["block_tokens"]) * m["record"]
+            ),
+            block_table_entries=entries,
+            block_table_bytes=4 * entries,
+        )
+    else:
+        for key in (
+            "kv_block_tokens",
+            "kv_blocks_per_sequence",
+            "physical_blocks_per_layer",
+            "total_physical_blocks",
+            "kv_block_bytes",
+            "last_block_tokens",
+            "last_block_valid_bytes",
+            "decode_append_offset_in_last_block",
+            "block_table_entries",
+            "block_table_bytes",
+        ):
+            expected[key] = 0
     expected["layout_metadata_lookups_per_layer_sequence_per_work_unit"] = (
         (
             m["blocks"] + 2 * sum((t + m["block_tokens"] - 1) // m["block_tokens"] for t in m["tile_ends"])
@@ -580,59 +648,69 @@ def check_identities(doc, m, budget):
         )
     require(required == values.keys(), "model-identity-field-set")
     if m["paged"]:
-        lp, lv = fields(layout["layout_geometry_identity"])
-        equal(lp, "llm-kv-layout-geometry-v1", "layout-identity-mismatch")
-        mapping = dict(
-            expected,
-            sequence_tokens=m["tokens"],
-            layer_count=m["layers"],
-            batch_size=m["batch"],
-            blocks_per_sequence=m["blocks"],
-            block_bytes=m["block_bytes"],
-            k_physical_bytes=g["k_mapping_bytes"],
-            v_physical_bytes=g["v_mapping_bytes"],
-            kv_layout_version=r["component_identities"]["kv_layout_version"],
-        )
         entries = m["blocks"] * m["batch"]
-        table_bytes = 4 * entries
-        bits = (entries + 7) // 8
-        resident = int(g["kv_capacity_bytes"]) + table_bytes
-        mapping.update(
-            validation_bitset_bytes=bits,
-            transient_peak_bytes=table_bytes + bits,
-            resident_layout_bytes=resident,
-            known_owned_peak_bytes=resident + bits,
-            permutation_iterations=max(0, entries - 1),
-            validation_entries=entries,
-            hash_entries=entries,
-            upload_bytes=table_bytes,
-        )
-        for key, value in lv.items():
-            require(key in mapping, "unknown-layout-identity-field")
-            equal(value, str(mapping[key]), "layout-identity-mismatch")
-        _, lv = fields(layout["layout_identity"])
-        mapping = dict(
-            geometry_identity=layout["layout_geometry_identity"],
-            permutation_algorithm_version="splitmix64-fisher-yates-rejection-v1",
-            permutation_domain=0x4C4C4D4B56504731,
-            permutation_domain_uint64_hex="0x4c4c4d4b56504731",
-            permutation_seed=splitmix(m["base_seed"] ^ 0x4C4C4D4B56504731),
-            permutation_entry_count=entries,
-            permutation_sha256=layout["permutation_sha256"],
-        )
-        equal(lv, {k: str(v) for k, v in mapping.items()}, "layout-identity-mismatch")
-        _, pv = fields(layout["permutation_identity"])
-        equal(
-            pv,
-            dict(
-                domain=str(0x4C4C4D4B56504731),
-                domain_uint64_hex="0x4c4c4d4b56504731",
-                resolved_seed=str(mapping["permutation_seed"]),
-                entry_count=str(entries),
-                sha256=layout["permutation_sha256"],
-            ),
-            "permutation-identity-mismatch",
-        )
+        if m["layout_geometry_present"]:
+            lp, lv = fields(layout["layout_geometry_identity"])
+            equal(lp, "llm-kv-layout-geometry-v1", "layout-identity-mismatch")
+            mapping = dict(
+                expected,
+                sequence_tokens=m["tokens"],
+                layer_count=m["layers"],
+                batch_size=m["batch"],
+                blocks_per_sequence=m["blocks"],
+                block_bytes=m["block_bytes"],
+                decode_append_offset_in_last_block=((m["tokens"] - 1) % m["block_tokens"]) * m["record"],
+                k_physical_bytes=g["k_mapping_bytes"],
+                v_physical_bytes=g["v_mapping_bytes"],
+                kv_layout_version=r["component_identities"]["kv_layout_version"],
+            )
+            table_bytes = 4 * entries
+            bits = (entries + 7) // 8
+            resident = int(g["kv_capacity_bytes"]) + table_bytes
+            mapping.update(
+                validation_bitset_bytes=bits,
+                transient_peak_bytes=table_bytes + bits,
+                resident_layout_bytes=resident,
+                known_owned_peak_bytes=resident + bits,
+                permutation_iterations=max(0, entries - 1),
+                validation_entries=entries,
+                hash_entries=entries,
+                upload_bytes=table_bytes,
+            )
+            for key, value in lv.items():
+                require(key in mapping, "unknown-layout-identity-field")
+                equal(value, str(mapping[key]), "layout-identity-mismatch")
+        else:
+            require(layout["layout_geometry_identity"] is None, "layout-identity-mismatch")
+        if m["permutation_present"]:
+            _, lv = fields(layout["layout_identity"])
+            mapping = dict(
+                geometry_identity=layout["layout_geometry_identity"],
+                permutation_algorithm_version="splitmix64-fisher-yates-rejection-v1",
+                permutation_domain=0x4C4C4D4B56504731,
+                permutation_domain_uint64_hex="0x4c4c4d4b56504731",
+                permutation_seed=splitmix(m["base_seed"] ^ 0x4C4C4D4B56504731),
+                permutation_entry_count=entries,
+                permutation_sha256=layout["permutation_sha256"],
+            )
+            equal(lv, {k: str(v) for k, v in mapping.items()}, "layout-identity-mismatch")
+            _, pv = fields(layout["permutation_identity"])
+            equal(
+                pv,
+                dict(
+                    domain=str(0x4C4C4D4B56504731),
+                    domain_uint64_hex="0x4c4c4d4b56504731",
+                    resolved_seed=str(mapping["permutation_seed"]),
+                    entry_count=str(entries),
+                    sha256=layout["permutation_sha256"],
+                ),
+                "permutation-identity-mismatch",
+            )
+        else:
+            require(
+                layout["layout_identity"] is None and layout["permutation_identity"] is None,
+                "layout-identity-mismatch",
+            )
     # Validate nested identity hashes against reconstructed/published canonical content.
     strings = set()
     stack = [r, doc["backend_evidence"]]
@@ -942,6 +1020,8 @@ def check_plans(doc, m, budget):
         equal(values, mapped, "plan-identity-mismatch")
         expected = p["expected_checksum"]
         if expected["status"] == "available":
+            if m["paged"]:
+                require("table" in m, "layout-mismatch")
             oracle = cpu_checksum if m["backend"] == "cpu" else metal_checksum
             workers, run = oracle(m, scenario, work, budget)
             equal(expected["expected_worker_checksums"], workers, "expected-worker-checksum-mismatch")
@@ -1367,7 +1447,15 @@ def check_manifest(manifest):
         )
 
 
-def verify_single(doc, binary=None, require_raw=False, budget=None):
+def hash_binary(binary):
+    digest = hashlib.sha256()
+    with open(binary, "rb") as f:
+        while chunk := f.read(65536):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_single(doc, binary=None, require_raw=False, budget=None, binary_digest=None):
     if type(doc.get("schema_version")) is not int or doc["schema_version"] != 2:
         raise Rejected("unsupported-schema", True)
     if doc.get("mode") != "llm_memory":
@@ -1425,13 +1513,11 @@ def verify_single(doc, binary=None, require_raw=False, budget=None):
     manifest = doc["build_manifest"]
     build = "manifest-only" if doc["build_manifest"]["status"] != "unavailable" else "unavailable"
     check_manifest(manifest)
-    if binary is not None:
+    if binary_digest is None and binary is not None:
+        binary_digest = hash_binary(binary)
+    if binary_digest is not None:
         require(manifest["binary_sha256"] is not None, "binary-hash-unavailable")
-        h = hashlib.sha256()
-        with open(binary, "rb") as f:
-            while chunk := f.read(65536):
-                h.update(chunk)
-        equal(h.hexdigest(), manifest["binary_sha256"], "binary-hash-mismatch")
+        equal(binary_digest, manifest["binary_sha256"], "binary-hash-mismatch")
         build = "binary-bound"
     return dict(
         artifact_consistent=True,
@@ -1476,7 +1562,7 @@ def verify_sweep(doc, binary=None, require_raw=False):
     sweep_params = cfg.get("sweep_parameters")
     require(isinstance(sweep_params, dict) and len(sweep_params) > 0, "sweep-parameters-invalid")
     param_keys = []
-    param_lists = []
+    parsed_params = {}
     product = 1
     for key, values in sweep_params.items():
         require(key in SWEEP_PARAM_CONFIG_KEYS, "sweep-parameter-unsupported")
@@ -1485,18 +1571,44 @@ def verify_sweep(doc, binary=None, require_raw=False):
         for value in values:
             parsed = integer(value, maximum=(1 << 53) - 1)
             require(parsed > 0, "sweep-parameter-value-invalid")
+            if key == "kv-block-tokens":
+                require(parsed <= U32 and (parsed & (parsed - 1)) == 0, "sweep-parameter-value-invalid")
             parsed_values.append(parsed)
         product *= len(parsed_values)
         if product > planned_runs or product > sweep_max_runs:
             raise Rejected("sweep-plan-count-mismatch")
         param_keys.append(key)
-        param_lists.append(parsed_values)
+        parsed_params[key] = parsed_values
     require(product == planned_runs, "sweep-plan-count-mismatch")
+    if "context-tokens" in parsed_params and (
+        "prompt-tokens" in parsed_params or "attention-query-tile-tokens" in parsed_params
+    ):
+        raise Rejected("sweep-parameters-invalid")
+    if "prompt-tokens" in parsed_params and "attention-query-tile-tokens" in parsed_params:
+        require(
+            max(parsed_params["attention-query-tile-tokens"]) <= min(parsed_params["prompt-tokens"]),
+            "sweep-parameter-value-invalid",
+        )
 
     status = doc.get("status")
     require(status in ("complete", "partial", "interrupted", "failed"), "sweep-status-invalid")
+    status_reason = doc.get("status_reason")
+    require(
+        status_reason is None or (isinstance(status_reason, str) and len(status_reason) > 0),
+        "sweep-status-invalid",
+    )
     conclusions_valid = doc.get("conclusions_valid")
     require(type(conclusions_valid) is bool, "sweep-conclusions-invalid")
+
+    elapsed_sec = doc.get("execution_time_sec")
+    require(
+        type(elapsed_sec) in (int, float) and math.isfinite(elapsed_sec) and elapsed_sec >= 0,
+        "sweep-metadata-invalid",
+    )
+    timestamp = doc.get("timestamp")
+    require(isinstance(timestamp, str) and len(timestamp) > 0, "sweep-metadata-invalid")
+    version = doc.get("version")
+    require(isinstance(version, str) and len(version) > 0, "sweep-metadata-invalid")
 
     runs = doc.get("runs")
     require(isinstance(runs, list) and len(runs) <= planned_runs, "sweep-runs-invalid")
@@ -1504,6 +1616,7 @@ def verify_sweep(doc, binary=None, require_raw=False):
 
     budget = Budget()
     budget(len(runs))
+    binary_digest = hash_binary(binary) if binary is not None else None
 
     swept_config_keys = {SWEEP_PARAM_CONFIG_KEYS[k] for k in param_keys}
     fixed_config_keys = (
@@ -1526,6 +1639,16 @@ def verify_sweep(doc, binary=None, require_raw=False):
         "resolved_sources",
     ) + tuple(k for k in SWEEP_PARAM_CONFIG_KEYS.values() if k not in swept_config_keys)
 
+    # Match Cartesian prefix order independently of JSON object key order in sweep_parameters.
+    multi_keys = [k for k in param_keys if len(parsed_params[k]) > 1]
+    fixed_keys = tuple(k for k in param_keys if len(parsed_params[k]) == 1)
+    candidate_orders = [tuple(order) + fixed_keys for order in itertools.permutations(multi_keys)]
+    active_candidates = [
+        (order, itertools.islice(itertools.product(*(parsed_params[k] for k in order)), len(runs)))
+        for order in candidate_orders
+    ]
+    param_key_set = set(param_keys)
+
     run_verdicts = []
     observed_completed = 0
     observed_profile = None
@@ -1534,15 +1657,37 @@ def verify_sweep(doc, binary=None, require_raw=False):
     checksum_levels = set()
     timing_levels = set()
     build_levels = set()
+    stopped = False
 
-    expected_iter = itertools.islice(itertools.product(*param_lists), len(runs))
-    for index, (run, combo) in enumerate(zip(runs, expected_iter)):
-        expected_assignment = dict(zip(param_keys, combo))
+    for index, run in enumerate(runs):
+        require(not stopped, "sweep-invalid-execution-prefix")
         require(isinstance(run, dict), "sweep-run-invalid")
         equal(run.get("index"), index, "sweep-run-index-mismatch")
-        equal(run.get("parameters"), expected_assignment, "sweep-parameters-mismatch")
+        run_params = run.get("parameters")
+        require(
+            isinstance(run_params, dict)
+            and run_params.keys() == param_key_set
+            and all(type(v) is int for v in run_params.values()),
+            "sweep-parameters-mismatch",
+        )
+        budget(len(active_candidates))
+        next_candidates = []
+        for order, iterator in active_candidates:
+            combo = next(iterator, None)
+            if combo is not None and all(run_params[k] == v for k, v in zip(order, combo)):
+                next_candidates.append((order, iterator))
+        active_candidates = next_candidates
+        require(len(active_candidates) > 0, "sweep-parameters-mismatch")
+
         run_status = run.get("status")
         require(run_status in ("complete", "partial", "interrupted", "failed"), "sweep-run-status-invalid")
+        run_reason = run.get("status_reason")
+        if run_status == "complete":
+            require(run_reason is None, "sweep-run-status-mismatch")
+        else:
+            require(isinstance(run_reason, str) and len(run_reason) > 0, "sweep-run-status-mismatch")
+            stopped = True
+
         nested = run.get("result")
         if nested is None:
             require(run_status != "complete", "sweep-run-status-mismatch")
@@ -1558,7 +1703,9 @@ def verify_sweep(doc, binary=None, require_raw=False):
             continue
 
         require(isinstance(nested, dict), "sweep-run-result-invalid")
-        nested_verdict = verify_single(nested, binary=binary, require_raw=require_raw, budget=budget)
+        nested_verdict = verify_single(
+            nested, require_raw=require_raw, budget=budget, binary_digest=binary_digest
+        )
         nested_profile = (
             nested["backend"],
             nested["phase"],
@@ -1580,7 +1727,7 @@ def verify_sweep(doc, binary=None, require_raw=False):
             equal(base_config, observed_base_config, "sweep-base-config-mismatch")
             equal(nested["build_manifest"], observed_manifest, "sweep-base-config-mismatch")
 
-        for key, expected_value in expected_assignment.items():
+        for key, expected_value in run_params.items():
             equal(nested_cfg.get(SWEEP_PARAM_CONFIG_KEYS[key]), expected_value, "sweep-nested-parameter-mismatch")
 
         nested_status = nested["status"]
@@ -1612,10 +1759,22 @@ def verify_sweep(doc, binary=None, require_raw=False):
 
     equal(completed_runs, observed_completed, "sweep-completed-runs-mismatch")
     all_complete = planned_runs > 0 and len(runs) == planned_runs and completed_runs == planned_runs
+    last_status = runs[-1]["status"] if runs else None
     if status == "complete":
-        require(all_complete and conclusions_valid is True, "sweep-status-mismatch")
+        require(all_complete and conclusions_valid is True and status_reason is None, "sweep-status-mismatch")
     else:
-        require(conclusions_valid is False, "sweep-status-mismatch")
+        require(
+            conclusions_valid is False and isinstance(status_reason, str) and len(status_reason) > 0,
+            "sweep-status-mismatch",
+        )
+        if status == "failed":
+            if status_reason != "checkpoint-write-failed":
+                require(last_status == "failed", "sweep-status-mismatch")
+        elif status == "interrupted":
+            require(last_status != "failed", "sweep-status-mismatch")
+        elif status == "partial":
+            require(len(runs) > 0 and last_status in ("partial", "complete"), "sweep-status-mismatch")
+            require(last_status == "partial" or len(runs) < planned_runs, "sweep-status-mismatch")
 
     envelope_accepted = status == "complete" and conclusions_valid is True and all_complete
 

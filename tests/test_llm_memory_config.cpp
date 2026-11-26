@@ -1353,7 +1353,7 @@ TEST(LlmMemoryConfigTest,
                 std::numeric_limits<size_t>::max());
   constexpr size_t kUnsafeInteger =
       Constants::LLM_JSON_MAX_SAFE_INTEGER + 1;
-  constexpr std::array<size_t LlmMemoryConfig::*, 9> kFields = {
+  constexpr std::array<size_t LlmMemoryConfig::*, 10> kFields = {
       &LlmMemoryConfig::weight_size_mb,
       &LlmMemoryConfig::layer_count,
       &LlmMemoryConfig::query_head_count,
@@ -1363,6 +1363,7 @@ TEST(LlmMemoryConfigTest,
       &LlmMemoryConfig::batch_size,
       &LlmMemoryConfig::requested_workers,
       &LlmMemoryConfig::available_workers,
+      &LlmMemoryConfig::sweep_max_runs,
   };
 
   for (size_t LlmMemoryConfig::*field : kFields) {
@@ -1557,6 +1558,12 @@ TEST(LlmMemoryConfigTest, RejectsInvalidAndConflictingLlmSweepConfigurations) {
         "64", "--sweep", "context-tokens=32,64,128", "--sweep-max-runs", "2",
         "--output", "out.json"},
        Messages::error_sweep_too_many_runs(3u, 2u)},
+      {"sweep-max-runs exceeds exact JSON integer range",
+       {"memory_benchmark", "--llm-memory", "--weight-size-mb", "64",
+        "--layers", "4", "--query-heads", "8", "--kv-heads", "2", "--head-dim",
+        "64", "--sweep", "context-tokens=32,64", "--sweep-max-runs",
+        "9007199254740992", "--output", "out.json"},
+       LlmMemoryConfigReason::JSON_INTEGER_OUT_OF_RANGE},
       {"non-power-of-two block in sweep preflight",
        {"memory_benchmark", "--llm-memory", "--weight-size-mb", "64",
         "--layers", "4", "--query-heads", "8", "--kv-heads", "2", "--head-dim",

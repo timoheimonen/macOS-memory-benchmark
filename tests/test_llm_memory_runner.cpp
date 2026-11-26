@@ -1041,6 +1041,19 @@ TEST(LlmMemoryRunnerTest, PreinitializedMetalTerminalOutcomesPrecedeBudgetChecks
 
     EXPECT_FALSE(checkpoints.front().terminal_checkpoint_completed);
 
+    // Unresolved Metal paged plans still determine padding-canary applicability from geometry.
+    LlmMemoryConfig padded_metal = explicit_metal_paged_prefill_config();
+    padded_metal.prompt_tokens = 5;
+    padded_metal.kv_block_tokens = 4;
+    const LlmMemoryWorkPlan unresolved_padded = build_metal_runner_plan(padded_metal, false);
+    ASSERT_TRUE(unresolved_padded.valid) << unresolved_padded.reason_code;
+    const LlmMetalExecutionPlan* const unresolved_padded_metal = get_llm_metal_execution_plan(unresolved_padded);
+    ASSERT_NE(unresolved_padded_metal, nullptr);
+    EXPECT_FALSE(unresolved_padded_metal->resources.paged_layout.has_value());
+    EXPECT_FALSE(required_llm_cold_checks(unresolved_padded, LlmScenario::WeightsOnly)[2].applicable);
+    EXPECT_TRUE(required_llm_cold_checks(unresolved_padded, LlmScenario::KvOnly)[2].applicable);
+    EXPECT_TRUE(required_llm_cold_checks(unresolved_padded, LlmScenario::Mixed)[2].applicable);
+
     const LlmMemoryWorkPlan not_preinitialized = build_metal_runner_plan(config, false);
     ASSERT_TRUE(not_preinitialized.valid) << not_preinitialized.reason_code;
     FakeLlmBackend fresh_backend(LlmMemoryBackend::Metal);

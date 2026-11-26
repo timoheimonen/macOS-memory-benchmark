@@ -197,21 +197,43 @@ void initialize_llm_setup_failure_result(
     const LlmMemoryConfig& config, std::string_view reason_code,
     LlmMemoryResult& result) {
   result = LlmMemoryResult{};
-  result.initialized = true;
   result.status = LlmRunStatus::Failed;
   result.reason_code = canonicalize_llm_result_reason_code(reason_code);
   result.counters.planned_loops = config.loop_count;
-  NumericUtils::checked_multiply(
-      config.loop_count, kLlmScenarioCount,
-      result.counters.planned_measurements);
+  result.snapshot_interval_loops = std::max<size_t>(
+      1, config.loop_count / 8 + (config.loop_count % 8 != 0));
   constexpr std::array<LlmScenario, kLlmScenarioCount> kScenarios = {
       LlmScenario::WeightsOnly, LlmScenario::KvOnly,
       LlmScenario::Mixed};
   for (size_t index = 0; index < kScenarios.size(); ++index) {
     result.aggregates[index].scenario = kScenarios[index];
   }
+  if (NumericUtils::checked_multiply(
+          config.loop_count, kLlmScenarioCount,
+          result.counters.planned_measurements)) {
+    result.loops.reserve(config.loop_count);
+    result.measurements.reserve(result.counters.planned_measurements);
+    for (size_t loop_index = 0; loop_index < config.loop_count; ++loop_index) {
+      LlmLoopRecord loop;
+      loop.loop_index = loop_index;
+      loop.planned_order = build_llm_scenario_order(loop_index);
+      for (size_t position = 0; position < kLlmScenarioCount; ++position) {
+        LlmMeasurementState measurement;
+        measurement.scenario = loop.planned_order[position];
+        measurement.status = LlmMeasurementStatus::Failed;
+        measurement.reason_code = LlmRunnerReason::NOT_RUN_AFTER_RUNTIME_FAILURE;
+        measurement.loop_index = loop_index;
+        measurement.order_position = position;
+        loop.measurement_indexes[position] = result.measurements.size();
+        result.measurements.push_back(std::move(measurement));
+      }
+      result.loops.push_back(std::move(loop));
+    }
+    result.counters.terminal_measurements = result.measurements.size();
+  }
   result.snapshot_request = "terminal";
   result.terminal_checkpoint_attempted = true;
+  result.initialized = true;
 }
 
 int write_llm_setup_failure_final(
@@ -1043,6 +1065,11 @@ int parse_llm_memory_arguments(int argc, char* argv[],
                 << Messages::error_sweep_requires_output() << std::endl;
       return EXIT_FAILURE;
     }
+    if (config.sweep_max_runs > Constants::LLM_JSON_MAX_SAFE_INTEGER) {
+      report_llm_config_failure(
+          LlmMemoryConfigReason::JSON_INTEGER_OUT_OF_RANGE);
+      return EXIT_FAILURE;
+    }
     const size_t run_count = calculate_llm_sweep_run_count(config);
     if (run_count == 0 || run_count > config.sweep_max_runs) {
       std::cerr << Messages::error_prefix()
@@ -1758,7 +1785,7 @@ LlmMemoryConfigValidation validate_llm_memory_config(
     validation.reason_code = LlmMemoryConfigReason::LOOP_COUNT_REQUIRED;
     return validation;
   }
-  const std::array<size_t, 14> json_integer_fields = {
+  const std::array<size_t, 15> json_integer_fields = {
       config.weight_size_mb,
       config.layer_count,
       config.query_head_count,
@@ -1773,6 +1800,7 @@ LlmMemoryConfigValidation validate_llm_memory_config(
       config.available_workers,
       config.iterations,
       config.loop_count,
+      config.sweep_max_runs,
   };
   if (std::any_of(json_integer_fields.begin(), json_integer_fields.end(),
                   [](size_t value) {

@@ -3526,7 +3526,15 @@ bool metal_paged_layout_matches(
                     geometry.prefill.has_value()
                 ? geometry.prefill->prompt_tokens
                 : 0;
-  return sequence_tokens != 0 && paged.valid &&
+  size_t expected_layout_append_offset = 0;
+  if (sequence_tokens == 0 || geometry.kv_block_tokens == 0 ||
+      !NumericUtils::checked_multiply(
+          (sequence_tokens - 1) % geometry.kv_block_tokens,
+          geometry.k_or_v_record_bytes_per_layer,
+          expected_layout_append_offset)) {
+    return false;
+  }
+  return paged.valid &&
          paged.sequence_tokens == sequence_tokens &&
          paged.kv_block_tokens == geometry.kv_block_tokens &&
          paged.layer_count == geometry.layer_count &&
@@ -3542,7 +3550,11 @@ bool metal_paged_layout_matches(
          paged.last_block_valid_bytes ==
              geometry.last_block_valid_bytes &&
          paged.decode_append_offset_in_last_block ==
-             geometry.decode_append_offset_in_last_block &&
+             expected_layout_append_offset &&
+         geometry.decode_append_offset_in_last_block ==
+             (geometry.phase == LlmPhase::Decode
+                  ? expected_layout_append_offset
+                  : size_t{0}) &&
          paged.block_table_entries == geometry.block_table_entries &&
          paged.memory.k_logical_bytes == geometry.k_logical_bytes &&
          paged.memory.v_logical_bytes == geometry.v_logical_bytes &&

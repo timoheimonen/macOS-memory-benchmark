@@ -561,8 +561,8 @@ SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<
                                         nlohmann::ordered_json initial_output, const SweepExecutionHooks& hooks) {
   SweepExecutionResult execution;
   execution.output_json = std::move(initial_output);
-  // General and core-to-core producers converge here before the first
-  // checkpoint, so every persisted envelope has the same schema authority.
+  // General, core-to-core, and LLM sweep producers converge here before the
+  // first checkpoint, so every persisted envelope has the same schema authority.
   nlohmann::ordered_json& configuration = execution.output_json[JsonKeys::CONFIGURATION];
   if (!configuration.is_object()) {
     configuration = nlohmann::ordered_json::object();
@@ -628,7 +628,7 @@ SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<
       outcome.failure_reason = SWEEP_NESTED_RUN_EXCEPTION_REASON;
     }
     SweepNestedCompletion completion;
-    if (outcome.interrupted && outcome.result_json.empty()) {
+    if (outcome.interrupted && outcome.exit_code == EXIT_SUCCESS && outcome.result_json.empty()) {
       completion.status = SweepAttemptStatus::Interrupted;
       completion.reason = outcome.failure_reason.empty() ? "nested-run-interrupted" : outcome.failure_reason;
     } else if (!outcome.result_json.empty() || outcome.exit_code == EXIT_SUCCESS) {
@@ -637,7 +637,7 @@ SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<
       completion.status = SweepAttemptStatus::Failed;
       completion.reason = outcome.failure_reason.empty() ? "nested-run-execution-failed" : outcome.failure_reason;
     }
-    if (!outcome.interrupted && outcome.exit_code != EXIT_SUCCESS) {
+    if (outcome.exit_code != EXIT_SUCCESS) {
       completion.status = SweepAttemptStatus::Failed;
       if (!outcome.failure_reason.empty()) {
         completion.reason = outcome.failure_reason;
