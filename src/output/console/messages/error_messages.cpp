@@ -51,6 +51,92 @@ std::string error_duplicate_option(const std::string& option) {
   return "Duplicate option: " + option;
 }
 
+std::string error_option_does_not_take_value(const std::string& option) {
+  return "Option " + option + " does not take a value";
+}
+
+std::string error_option_not_allowed_in_mode(const std::string& option,
+                                             const std::string& allowed_options) {
+  return "Unsupported option '" + option + "': " + allowed_options;
+}
+
+const std::string& error_missing_primary_mode() {
+  static const std::string msg =
+      "A primary mode option is required (--benchmark, --patterns, --analyze-tlb, "
+      "--analyze-core2core, --gpu-bandwidth, or --llm-memory)";
+  return msg;
+}
+
+std::string error_patterns_incompatible_option(const std::string& option) {
+  return "--patterns cannot be used with " + option +
+         " (pattern benchmarks do not run cache or latency tests)";
+}
+
+std::string error_only_bandwidth_incompatible_option(const std::string& option) {
+  return "--only-bandwidth cannot be used with " + option +
+         " (option is only relevant for latency tests)";
+}
+
+const std::string& error_only_latency_with_threads() {
+  static const std::string msg =
+      "--only-latency cannot be used with --threads (latency tests are single-threaded)";
+  return msg;
+}
+
+const std::string& reason_signed_integer_invalid() {
+  static const std::string reason =
+      "must be an integer without whitespace, a plus sign, or trailing characters";
+  return reason;
+}
+
+const std::string& reason_signed_integer_out_of_range() {
+  static const std::string reason = "out of range";
+  return reason;
+}
+
+const std::string& reason_unsigned_integer_invalid() {
+  static const std::string reason =
+      "must be an unsigned 64-bit integer without whitespace, a sign, or trailing characters";
+  return reason;
+}
+
+const std::string& reason_unsigned_integer_out_of_range() {
+  static const std::string reason = "out of range for an unsigned 64-bit integer";
+  return reason;
+}
+
+const std::string& reason_positive_integer() {
+  static const std::string reason = "must be a positive integer";
+  return reason;
+}
+
+std::string reason_positive_int_range(long long max_val) {
+  return "must be between 1 and " + std::to_string(max_val);
+}
+
+const std::string& reason_tlb_density_invalid() {
+  static const std::string reason = "must be one of: low, medium, high";
+  return reason;
+}
+
+const std::string& reason_sweep_syntax() {
+  static const std::string reason = "sweep must use key=value1,value2 syntax";
+  return reason;
+}
+
+const std::string& reason_sweep_empty_value() {
+  static const std::string reason = "sweep value list cannot contain empty values";
+  return reason;
+}
+
+std::string reason_unsupported_sweep_parameter(const std::string& parameter) {
+  return "unsupported sweep parameter: " + parameter;
+}
+
+std::string reason_unsupported_core_to_core_sweep_parameter(const std::string& parameter) {
+  return "unsupported core-to-core sweep parameter: " + parameter;
+}
+
 std::string error_buffer_size_calculation(unsigned long size_mb) {
   std::ostringstream oss;
   oss << "Buffer size calculation error (" << size_mb << " MB).";
@@ -170,8 +256,8 @@ const std::string& error_analyze_tlb_must_be_used_alone() {
       "--analyze-tlb allows only optional -o/--output <target>, "
       "-s/--latency-stride-bytes <bytes>, -m/--latency-chain-mode <mode>, "
       "-D/--tlb-density <low|medium|high>, --seed <uint64>, "
-      "-S/--sweep <key=...>, and -X/--sweep-max-runs <count> "
-      "(no other options allowed)";
+      "-S/--sweep <key=...>, -X/--sweep-max-runs <count>, "
+      "and -h/--help (no other options allowed)";
   return msg;
 }
 

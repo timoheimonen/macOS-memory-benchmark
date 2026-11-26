@@ -96,14 +96,14 @@ StrictIntegerParseStatus parse_strict_unsigned_decimal(const std::string& value,
 
 const char* strict_signed_decimal_error_reason(StrictIntegerParseStatus status) {
   return status == StrictIntegerParseStatus::OutOfRange
-             ? "out of range"
-             : "must be an integer without whitespace, a plus sign, or trailing characters";
+             ? Messages::reason_signed_integer_out_of_range().c_str()
+             : Messages::reason_signed_integer_invalid().c_str();
 }
 
 const char* strict_unsigned_decimal_error_reason(StrictIntegerParseStatus status) {
   return status == StrictIntegerParseStatus::OutOfRange
-             ? "out of range for an unsigned 64-bit integer"
-             : "must be an unsigned 64-bit integer without whitespace, a sign, or trailing characters";
+             ? Messages::reason_unsigned_integer_out_of_range().c_str()
+             : Messages::reason_unsigned_integer_invalid().c_str();
 }
 
 namespace {

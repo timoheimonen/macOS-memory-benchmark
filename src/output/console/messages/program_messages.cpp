@@ -142,6 +142,7 @@ std::string usage_options(const std::string& prog_name) {
   std::ostringstream oss;
   oss << "Usage: " << prog_name << " [options]\n"
       << "Platform: macOS 26 or later on Apple Silicon (ARM64).\n"
+      << "Long options that take a value accept both --option <value> and --option=<value>.\n"
       << "Options:\n"
       << "  -B, --benchmark       Run calibrated, seeded, balanced standard bandwidth/latency benchmark.\n"
       << "                        JSON uses standard schema "
@@ -194,8 +195,8 @@ std::string usage_options(const std::string& prog_name) {
       << "                        boundary validation (allows optional -o/--output <target>,\n"
       << "                        -s/--latency-stride-bytes <bytes>, -m/--latency-chain-mode <mode>,\n"
       << "                        -D/--tlb-density <low|medium|high>, --seed <uint64>,\n"
-      << "                        -S/--sweep <key=...>,\n"
-      << "                        and -X/--sweep-max-runs <count> only).\n"
+      << "                        -S/--sweep <key=...>, -X/--sweep-max-runs <count>,\n"
+      << "                        and -h/--help only).\n"
       << "                        JSON output uses schema 4 with exact string seeds and scoped counters.\n"
       << "  -D, --tlb-density <level>\n"
       << "                        Runtime profile for --analyze-tlb: low, medium, high (default: medium).\n"

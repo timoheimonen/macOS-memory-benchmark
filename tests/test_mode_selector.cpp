@@ -131,3 +131,71 @@ TEST(ModeSelectorTest, MissingOutputValueRemainsOwnedByTheParser) {
     EXPECT_EQ(selected_mode.selected_options.front(), "--benchmark");
   }
 }
+
+TEST(ModeSelectorTest, KnownValueOptionsSkipFlagShapedValuesWithoutModeConflict) {
+  const PrimaryModeSelection buffer_size_value =
+      select({"program", "--benchmark", "--buffer-size", "-G"});
+  EXPECT_EQ(buffer_size_value.mode, PrimaryBenchmarkMode::Standard);
+  ASSERT_EQ(buffer_size_value.selected_options.size(), 1u);
+  EXPECT_EQ(buffer_size_value.selected_options.front(), "--benchmark");
+
+  const PrimaryModeSelection sweep_value =
+      select({"program", "--benchmark", "--sweep", "-T"});
+  EXPECT_EQ(sweep_value.mode, PrimaryBenchmarkMode::Standard);
+  ASSERT_EQ(sweep_value.selected_options.size(), 1u);
+  EXPECT_EQ(sweep_value.selected_options.front(), "--benchmark");
+
+  const PrimaryModeSelection llm_value =
+      select({"program", "--llm-memory", "--layers", "-B", "--output", "-C"});
+  EXPECT_EQ(llm_value.mode, PrimaryBenchmarkMode::LlmMemory);
+  ASSERT_EQ(llm_value.selected_options.size(), 1u);
+  EXPECT_EQ(llm_value.selected_options.front(), "--llm-memory");
+
+  const PrimaryModeSelection inline_output =
+      select({"program", "--output=-G", "--benchmark"});
+  EXPECT_EQ(inline_output.mode, PrimaryBenchmarkMode::Standard);
+  ASSERT_EQ(inline_output.selected_options.size(), 1u);
+  EXPECT_EQ(inline_output.selected_options.front(), "--benchmark");
+
+  const PrimaryModeSelection inline_output_only =
+      select({"program", "--output=-G"});
+  EXPECT_EQ(inline_output_only.mode, PrimaryBenchmarkMode::None);
+  EXPECT_TRUE(inline_output_only.selected_options.empty());
+}
+
+TEST(ModeSelectorTest, LongModeWithInlineValueRoutesToOwningMode) {
+  for (const ModeCase& mode_case : kModeCases) {
+    SCOPED_TRACE(mode_case.long_option);
+    const PrimaryModeSelection selection =
+        select({"program", std::string(mode_case.long_option) + "=1"});
+    EXPECT_EQ(selection.mode, mode_case.mode);
+    ASSERT_EQ(selection.selected_options.size(), 1u);
+    EXPECT_EQ(selection.selected_options.front(), mode_case.long_option);
+  }
+
+  const PrimaryModeSelection short_inline = select({"program", "-G=1"});
+  EXPECT_EQ(short_inline.mode, PrimaryBenchmarkMode::None);
+  EXPECT_TRUE(short_inline.selected_options.empty());
+}
+
+TEST(ModeSelectorTest, HandlesEmptyAndNullArgvSafely) {
+  const PrimaryModeSelection zero_argc = select_primary_benchmark_mode(0, nullptr);
+  EXPECT_EQ(zero_argc.mode, PrimaryBenchmarkMode::None);
+  EXPECT_TRUE(zero_argc.selected_options.empty());
+
+  const PrimaryModeSelection negative_argc = select_primary_benchmark_mode(-2, nullptr);
+  EXPECT_EQ(negative_argc.mode, PrimaryBenchmarkMode::None);
+  EXPECT_TRUE(negative_argc.selected_options.empty());
+
+  const PrimaryModeSelection null_argv = select_primary_benchmark_mode(3, nullptr);
+  EXPECT_EQ(null_argv.mode, PrimaryBenchmarkMode::None);
+  EXPECT_TRUE(null_argv.selected_options.empty());
+
+  std::string prog = "program";
+  std::string mode = "--gpu-bandwidth";
+  char* argv_with_null[] = {prog.data(), nullptr, mode.data()};
+  const PrimaryModeSelection with_null_slot = select_primary_benchmark_mode(3, argv_with_null);
+  EXPECT_EQ(with_null_slot.mode, PrimaryBenchmarkMode::GpuBandwidth);
+  ASSERT_EQ(with_null_slot.selected_options.size(), 1u);
+  EXPECT_EQ(with_null_slot.selected_options.front(), "--gpu-bandwidth");
+}

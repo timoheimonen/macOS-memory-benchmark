@@ -12,7 +12,10 @@
 
 #include "core/config/mode_selector.h"
 
+#include "core/config/cli_parser.h"
+
 #include <array>
+#include <string_view>
 
 namespace {
 
@@ -35,22 +38,32 @@ constexpr std::array<ModeOption, 6> kModeOptions{{
 
 PrimaryModeSelection select_primary_benchmark_mode(int argc, char* argv[]) {
   PrimaryModeSelection selection;
+  if (argc <= 1 || argv == nullptr) {
+    return selection;
+  }
+
   std::array<bool, kModeOptions.size()> seen{};
 
   for (int argument_index = 1; argument_index < argc; ++argument_index) {
-    const std::string argument = argv[argument_index];
-    // Output targets are opaque and may exactly match a primary-mode flag.
-    // Skip one raw value when present; the owning parser still validates it.
-    if (argument == "-o" || argument == "--output") {
+    if (argv[argument_index] == nullptr) {
+      continue;
+    }
+
+    const std::string_view token(argv[argument_index]);
+    // Space-separated value-taking options consume one raw token that may
+    // look like a primary-mode flag (e.g. `-o -G`, `--buffer-size -G`,
+    // `--sweep -T`). Skip that value; the owning parser validates it.
+    if (token.find('=') == std::string_view::npos && is_known_cli_value_option(token)) {
       if (argument_index + 1 < argc) {
         ++argument_index;
       }
       continue;
     }
 
+    const std::string_view long_option_name = extract_long_option_name(token);
     for (size_t mode_index = 0; mode_index < kModeOptions.size(); ++mode_index) {
       const ModeOption& option = kModeOptions[mode_index];
-      if (argument != option.short_option && argument != option.long_option) {
+      if (token != option.short_option && long_option_name != option.long_option) {
         continue;
       }
       if (!seen[mode_index]) {
