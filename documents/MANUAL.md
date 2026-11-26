@@ -104,7 +104,8 @@ source compiled at runtime; the optional offline Metal Toolchain is not required
 
 ### First run
 
-Running with no arguments shows help:
+Running with no arguments shows help and exits `0` (passing modifier options without a primary mode flag fails with an
+error instead of falling back to help):
 
 ```bash
 memory_benchmark
@@ -463,12 +464,23 @@ zero bandwidth.
 
 ## Command-Line Options
 
-Options that take a value, such as `--buffer-size`, `--cache-size`, `--threads`, `--latency-samples`, and `--output`,
-must be specified at most once per command. `--sweep` is the exception: repeat it once per swept parameter, while using
-each parameter key at most once.
+All six primary modes share one descriptor-driven CLI option parser. Every single-occurrence option — including primary
+mode selectors (`-B`, `-P`, `-T`, `-C`, `-G`, `-M`), boolean flags (`-W`, `-L`, `-u`, `-h`), and single-value options
+such as `--buffer-size`, `--cache-size`, `--threads`, `--latency-samples`, and `--output` — must be specified at most
+once per command across all six modes. `-S`/`--sweep` is the sole repeatable option: repeat it once per swept parameter,
+while using each parameter key at most once.
 
-Long options require a double dash (`--`). A single dash is reserved for one-character short options, so legacy
-forms such as `-buffersize` or `-benchmark` are invalid.
+Long options require a double dash (`--`), and long value-taking options accept both space-separated (`--buffer-size 512`,
+`--output -`) and inline (`--buffer-size=512`, `--output=-`, `--output=`, `--sweep=buffer-size=128,256`) syntax. Passing
+an inline value to a boolean or primary-mode flag (such as `--benchmark=1` or `--help=1`) is rejected
+(`Option --... does not take a value`). A single dash is reserved for space-separated one-character short options, so
+legacy single-dash long forms (`-buffersize`, `-benchmark`) and single-dash inline forms (`-b=512`) are invalid.
+
+All six mode parsers emit concise single-line `Error: ...` diagnostics on `stderr` without dumping the full usage text
+on parse errors, and standalone whitelist modes (`--analyze-tlb`, `--analyze-core2core`, `--gpu-bandwidth`,
+`--llm-memory`) explicitly name the offending option (`Unsupported option '<token>': ...`). Running `memory_benchmark`
+with no arguments prints help to stdout and exits `0`; running with modifier options but no primary mode flag fails with
+`EXIT_FAILURE`, empty stdout, and a centralized error on `stderr`.
 
 Numeric values must be complete decimal tokens. Leading/trailing whitespace,
 leading `+`, trailing characters, and overflow are rejected; unsigned seeds
@@ -575,7 +587,7 @@ middle, and trailing items.
   only when detected availability or executable span size requires it
 - Metal LLM-memory does not detect CPU workers and rejects explicit `--threads`; its worker and worker-QoS JSON fields
   are null with applicability false
-- Latency tests remain single-threaded
+- Latency tests remain single-threaded; `--threads` is rejected with `--benchmark --only-latency`
 
 ### Mode selection
 
@@ -591,12 +603,14 @@ middle, and trailing items.
 - Reuses calibrated work and seeded logical chains so repeated loops vary runtime conditions rather than workload shape
 - A direct command accepts `--output -` as a final machine-readable stdout target. After parsing, the banner,
   configuration, progress, results, warnings, and errors are routed to stderr; stdout contains one JSON document
-- Running without any primary mode flag shows help and exits
+- Running with no arguments (`memory_benchmark`) shows help and exits `0`; passing modifier options without any primary
+  mode flag fails with a non-zero exit code and a centralized error on stderr
 
 #### `--patterns`
 
 - Runs only access-pattern benchmarks
-- Skips standard bandwidth/latency sections
+- Skips standard bandwidth/latency sections and rejects unused cache/latency modifiers (`--cache-size`,
+  `--latency-samples`, `--latency-stride-bytes`, `--latency-chain-mode`, and `--latency-tlb-locality-kb`)
 - Automatically calibrates each read/write/copy sample toward 150 ms (intended window 100–250 ms) unless
   `--iterations` is explicitly supplied
 - Uses the historical all-detected-CPU-core default for comparison compatibility; a matching explicit worker-count
@@ -775,13 +789,14 @@ middle, and trailing items.
 
 - Runs bandwidth paths only
 - **Requires `--benchmark`**
-- Incompatible with: `--patterns`, `--cache-size` (any value including `0`), `--latency-samples`
+- Incompatible with: `--patterns`, `--cache-size` (any value including `0`), `--latency-samples`,
+  `--latency-stride-bytes`, `--latency-chain-mode`, `--latency-tlb-locality-kb`
 
 #### `--only-latency`
 
 - Runs latency paths only
 - **Requires `--benchmark`**
-- Incompatible with: `--patterns`, `--iterations`
+- Incompatible with: `--patterns`, `--iterations`, `--threads`
 - Supports selective target disabling:
   - `--buffer-size 0` disables main-memory latency
   - `--cache-size 0` disables cache latency
@@ -790,7 +805,10 @@ middle, and trailing items.
 #### `--analyze-tlb`
 
 - Runs standalone TLB analysis mode only
-- Can be combined only with optional `--output <target>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--seed <uint64>`, `--sweep <key=...>`, and `--sweep-max-runs <count>`
+- Can be combined only with optional `--output <target>`, `--latency-stride-bytes <bytes>`, `--latency-chain-mode <mode>`, `--tlb-density <low|medium|high>`, `--seed <uint64>`, `--sweep <key=...>`, `--sweep-max-runs <count>`, and `-h`/`--help`
+- `--analyze-tlb --help` (including `--analyze-tlb --output - --help` and `--analyze-tlb --help --output -`) prints
+  human-facing help to stdout and exits `0` after syntactic, whitelist, duplicate, missing-value, and value-parse
+  checks, before semantic validation, OS queries, timer creation, seed generation, or output-session setup
 - Uses latency stride from `--latency-stride-bytes` (same default as standard latency mode). Analyze-TLB stride must be pointer-aligned and must not exceed the system page size; it does not need to divide the page size. The default standard profile performs a base locality sweep of up to 15 canonical points, stride-clamped to `max(16KB, 2*stride)` up to `256MB`, and may insert page-aligned refinement points near detected knees/boundaries
 - Builds a page-native spread chain with exactly one pointer node per requested page and a cache-line-dense packed control with the same node and unique-cache-line counts. Each scheduler task measures both layouts in one round, alternates pair order, and stores the same-round `spread - packed` translation delta
 - Detects likely private-cache knee candidates from spread latency as a separate diagnostic and reports whether the region may interfere with interpretation; accepted L1/L2 claims still require the paired translation-delta and validation gates
@@ -957,7 +975,8 @@ middle, and trailing items.
   after orchestration reaches its terminal state. Intermediate standard, sweep and GPU checkpoint requests are
   lazy no-ops; LLM skips intermediate snapshot preparation. Neither emits intermediate documents
 - Post-parse human output is routed to stderr while the stdout target is active. Parse, preflight, and other pre-result
-  failures leave stdout empty; `--help` remains a human-facing stdout command when that mode accepts the combination
+  failures leave stdout empty; `--help` remains a human-facing stdout command across all six primary modes (including
+  `--analyze-tlb --help`, `--output - --help`, and `--output=- --help`)
 - For result-producing modes, every other non-empty value is a file target, including `./-` and flag-shaped names such
   as `-G`. Thus `--output ./-` writes an ordinary file named `-`. Relative paths write under the current working
   directory, and parent directories are created automatically. LLM-memory accepts and retains the same raw target
@@ -1005,8 +1024,10 @@ middle, and trailing items.
 - `--analyze-tlb` supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`
 - `--analyze-core2core` supports `count` and `latency-samples`
 - `--llm-memory` supports `context-tokens` (decode), `prompt-tokens` and `attention-query-tile-tokens` (prefill), and
-  `kv-block-tokens` (paged KV); combining a direct flag and `--sweep` for the same parameter is rejected, and every
-  generated Cartesian configuration is preflight-validated before execution
+  `kv-block-tokens` (paged KV), and preflight-validates every generated Cartesian configuration before execution
+- Combining a direct option and `--sweep` for the same parameter is rejected uniformly across all sweep-capable modes
+  (`--benchmark`, `--patterns`, `--analyze-tlb`, `--analyze-core2core`, and `--llm-memory`) via
+  `Cannot specify both --<opt> and --sweep <key>`
 - `--gpu-bandwidth` does not support `--sweep` or `--sweep-max-runs` (GPU schema 1)
 
 #### `--sweep-max-runs <count>`
@@ -1045,7 +1066,8 @@ middle, and trailing items.
   pre-initialization failures record `result: null` with the specific stable `status_reason`, and an interruption during
   pre-runner or backend resource preparation records `result: null` and `status: "interrupted"` with
   `status_reason: "preparation-interrupted"` and exit status `0`
-- A parameter key may appear only once in one sweep command
+- A parameter key may appear only once in one sweep command across all sweep-capable modes (duplicates fail with
+  `sweep parameter specified more than once: <key>`)
 - Core-to-core sweeps also append and retain the latest attempted run when it is interrupted or fails; a file target
   checkpoints that update. Each entry records `status` and `status_reason`; `attempted_runs` counts those entries, while
   `completed_runs` counts only nested core-to-core results with `status: "complete"` and
@@ -1058,7 +1080,13 @@ middle, and trailing items.
 
 #### `-h`, `--help`
 
-- Print help and exit
+- Accepted standalone and across all six primary modes (`--benchmark`, `--patterns`, `--analyze-tlb`,
+  `--analyze-core2core`, `--gpu-bandwidth`, and `--llm-memory`)
+- Runs full syntactic, whitelist, duplicate, missing-value, and value-parse validation first (for example,
+  `--help --unknown`, `-h --help`, and `--help --iterations` fail)
+- Once valid, prints human-facing help to stdout and exits `0` before required-option checks, semantic validation, OS
+  queries, timer creation, seed generation, or output-session setup (including `--output - --help` and
+  `--help --output -`)
 
 ---
 
@@ -1197,23 +1225,44 @@ memory_benchmark --benchmark --only-bandwidth --count 5 --sweep buffer-size=512,
 ### Invalid combinations
 
 ```bash
+# invalid: modifier option(s) without a primary mode flag (bare memory_benchmark prints help)
+memory_benchmark --only-bandwidth
+memory_benchmark --threads 4
+memory_benchmark --seed 42
+
 # invalid: --benchmark with --patterns (mutually exclusive)
 memory_benchmark --benchmark --patterns
 
-# invalid: pattern mode with only-bandwidth
+# invalid: pattern mode with only-bandwidth or only-latency
 memory_benchmark --patterns --only-bandwidth
-
-# invalid: pattern mode with only-latency
 memory_benchmark --patterns --only-latency
 
-# invalid: latency samples with only-bandwidth
-memory_benchmark --benchmark --only-bandwidth --latency-samples 5000
+# invalid: pattern mode rejects unused cache and latency modifiers
+memory_benchmark --patterns --cache-size 64
+memory_benchmark --patterns --latency-stride-bytes 128
 
-# invalid: iterations with only-latency
+# invalid: latency modifiers with only-bandwidth
+memory_benchmark --benchmark --only-bandwidth --latency-samples 5000
+memory_benchmark --benchmark --only-bandwidth --latency-stride-bytes 128
+
+# invalid: iterations or threads with only-latency
 memory_benchmark --benchmark --only-latency --iterations 2000
+memory_benchmark --benchmark --only-latency --threads 4
 
 # invalid: both latency targets disabled
 memory_benchmark --benchmark --only-latency --buffer-size 0 --cache-size 0
+
+# invalid: direct option combined with --sweep for the same parameter (all sweep-capable modes)
+memory_benchmark --benchmark --buffer-size 512 --sweep buffer-size=256,512 --output sweep.json
+memory_benchmark --analyze-core2core --count 3 --sweep count=1,3 --output core2core_sweep.json
+
+# invalid: inline value on a boolean/mode flag or single-dash inline value
+memory_benchmark --benchmark=1
+memory_benchmark --benchmark -b=512
+
+# invalid: duplicated single-occurrence mode or boolean flag
+memory_benchmark --benchmark --benchmark
+memory_benchmark --analyze-tlb --help -h
 
 # invalid: analyze-tlb with unsupported extra option
 memory_benchmark --analyze-tlb --buffer-size 1024
@@ -1484,8 +1533,9 @@ support `context-tokens`, `kv-block-tokens`, `prompt-tokens`, and `attention-que
 ## Understanding Console Output
 
 Every successfully started direct mode and parameter sweep begins with one shared version, copyright, and GPL
-banner before mode-specific configuration or status output. Nested runs within a sweep do not repeat it. Help and
-usage diagnostics retain the separate usage preamble; preflight failures do not emit the runtime banner.
+banner before mode-specific configuration or status output. Nested runs within a sweep do not repeat it. Help output
+retains the separate usage preamble; parse and preflight failures emit concise single-line `Error: ...` diagnostics on
+stderr without dumping full usage text or the runtime banner.
 
 The numbered result sections below describe result-producing modes, including the standalone LLM profile.
 

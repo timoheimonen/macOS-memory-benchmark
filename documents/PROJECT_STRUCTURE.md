@@ -36,7 +36,7 @@ This document describes the layout of project files, organized by purpose. It is
 
 | File | Purpose |
 |---|---|
-| `main.cpp` | Program entry point; performs primary-mode conflict scan, dispatches dedicated LLM/GPU/core-to-core paths before the general parser, and runs the general standard/pattern/TLB and sweep pipelines; each standalone command boundary owns its output-session lifetime |
+| `main.cpp` | Program entry point; handles bare zero-argument help early before timer creation/mode scan, wraps mode selection and argument parsing in exception boundaries, dispatches dedicated LLM/GPU/core-to-core paths before the general parser, rejects modifier-only invocations with no primary mode before output-session setup, and runs the general standard/pattern/TLB and sweep pipelines; each standalone command boundary owns its output-session lifetime |
 
 ### Build and tooling
 
@@ -159,7 +159,7 @@ The benchmark subsystem owns the standard CPU pipeline, standalone TLB analysis,
 | `core_to_core_latency.h` | Public interface for the `--analyze-core2core` mode |
 | `core_to_core_latency_internal.h` | Internal runner interfaces not exposed outside the module |
 | `core_to_core_latency_runner.cpp` | Per-scenario calibration, 128-byte shared-state isolation, balanced loop scheduling, unpinned two-thread ping-pong execution, robust summaries, and in-memory result collection |
-| `core_to_core_latency_cli.cpp` | CLI argument parsing, direct/sweep output-session ownership, and entry point for the core-to-core mode |
+| `core_to_core_latency_cli.cpp` | Descriptor-driven CLI argument parsing (`cli_parser.h`), unified duplicate-sweep and direct-vs-sweep conflict validation, exception containment, direct/sweep output-session ownership, and entry point for the core-to-core mode |
 | `core_to_core_latency_json.h` / `.cpp` | Serializes schema-2 work plans, loop audit records, completion state, and results |
 | `core_to_core_sweep_runner.h` / `.cpp` | Core-to-core Cartesian sweeps, retained terminal envelopes, atomic file checkpoints, and lazy stdout checkpoints |
 
@@ -176,11 +176,12 @@ Core infrastructure for configuration, memory management, macOS system introspec
 | `config.h` | `BenchmarkConfig` structure for standard, pattern, standalone TLB, and their common sweep settings; core-to-core, GPU, and LLM use separate config types |
 | `constants.h` | Named constants for CPU/GPU/LLM memory limits, calibration, grid/dispatch/payload guardrails, buffer sizing, and latency access counts |
 | `version.h` | `SOFTVERSION` macro containing the semantic software-release provenance string |
-| `mode_selector.h` / `.cpp` | Pure primary-mode scan and conflict detection before mode-specific parsing; routes standard, pattern, TLB, core-to-core, GPU, and LLM deterministically while skipping one opaque output value |
-| `argument_parser.cpp` | Parses standard, pattern, and standalone TLB options into `BenchmarkConfig`; core-to-core, GPU, and LLM are pre-routed to dedicated parsers |
-| `config_validator.cpp` | Validates the parsed configuration; emits errors for out-of-range or conflicting settings |
+| `cli_parser.h` / `.cpp` | Shared descriptor-driven CLI option parser (`parse_cli_options`), centralized error formatter (`format_cli_parse_error`), `cli_program_name`, `extract_long_option_name`, `is_known_cli_value_option`, and LP64-safe `parse_strict_nonnegative_ulong` shared by all six primary modes |
+| `mode_selector.h` / `.cpp` | Pure primary-mode scan and conflict detection before mode-specific parsing; routes standard, pattern, TLB, core-to-core, GPU, and LLM deterministically (including `--mode=value`) while skipping one opaque value token for every known space-separated value-taking option across all six modes |
+| `argument_parser.cpp` | Single-pass descriptor-driven parser for standard, pattern, and standalone TLB options into `BenchmarkConfig` (resets config on entry, supports `--option=value`, accepts `-h`/`--help` in TLB mode, defers OS queries and thread capping until after syntactic parsing/help, and honors `ConfigTestHooks` in TLB mode); core-to-core, GPU, and LLM are pre-routed to dedicated parsers |
+| `config_validator.cpp` | Validates parsed standard, pattern, and TLB configurations; enforces required primary mode, incompatible-option checks (`--patterns`, `--only-bandwidth`, `--only-latency`), direct-vs-`--sweep` conflict checks, deferred thread capping (`warning_threads_capped`), and memory limits |
 | `buffer_calculator.cpp` | Derives buffer sizes for each cache/memory level from the validated configuration and detected system parameters |
-| `sweep_utils.h` / `.cpp` | Shared structural sweep parsing and overflow-safe Cartesian run counting used by standard, pattern, TLB, core-to-core, and LLM sweep parsers and runners |
+| `sweep_utils.h` / `.cpp` | Shared structural sweep parsing (using centralized `Messages::` reasons) and overflow-safe Cartesian run counting used by standard, pattern, TLB, core-to-core, and LLM sweep parsers and runners |
 
 #### src/core/signal/
 
@@ -267,7 +268,7 @@ Objective-C++ Metal backend so deterministic unit tests do not require GPU work.
 
 | File | Purpose |
 |---|---|
-| `gpu_bandwidth.h` / `.cpp` | Dedicated `GpuBandwidthConfig`, exact option-whitelist parser, GPU help, standalone output-session boundary, QoS/signal scope, console handoff, and terminal stdout emission |
+| `gpu_bandwidth.h` / `.cpp` | Dedicated `GpuBandwidthConfig`, shared descriptor-driven exact option-whitelist parser (`cli_parser.h`) with LP64-safe `--buffer-size` range handling, GPU help, standalone output-session boundary, QoS/signal scope, console handoff, and terminal stdout emission |
 | `gpu_work_plan.h` / `.cpp` | Pure read/write/copy pass limits, exact payload, seed derivation, cyclic order, calibration arithmetic, frozen 8192-threadgroup grid cap/geometry, and `gpu-work-plan-v1` identity |
 | `gpu_backend.h` / `.cpp` | Objective-C-free synchronous/noexcept backend contract, device/resource/phase/validation metadata, factory declaration, and status string mappings |
 | `gpu_runner.h` / `.cpp` | Backend-independent calibration, warmup/precondition/timing/validation orchestration, completion-wins interruption, counters, aggregates, resource lifecycle, and transport-neutral logical checkpoints with a file-scoped post-release replacement |
@@ -288,7 +289,7 @@ hot kernels. Capability failures remain explicit, and no unsupported Metal reque
 
 | File | Purpose |
 |---|---|
-| `llm_memory.h` / `.cpp` | Separate config/status foundation, strict exact-whitelist parser (including repeatable `--sweep` dimensions, conflict/combination preflight, and `--sweep-max-runs`), required/default worker/seed resolution, complete command boundary, direct and sweep dispatch (`run_llm_memory_collect` / `run_llm_memory_sweep`), backend factory ownership, peak-memory admission, QoS/signal scope, console output, and file/stdout transport orchestration |
+| `llm_memory.h` / `.cpp` | Separate config/status foundation, shared descriptor-driven exact-whitelist parser (`cli_parser.h`, including repeatable `--sweep` dimensions, conflict/combination preflight, and `--sweep-max-runs`), required/default worker/seed resolution, complete command boundary, direct and sweep dispatch (`run_llm_memory_collect` / `run_llm_memory_sweep`), backend factory ownership, peak-memory admission, QoS/signal scope, console output, and file/stdout transport orchestration |
 | `llm_kv_layout.h` / `.cpp` | Pure checked paged-KV geometry, block ownership, SplitMix64/Fisher–Yates permutation and little-endian table hash, exact physical/logical/padding/table/lookup/accounting math, and transient preparation estimates |
 | `llm_prefill.h` / `.cpp` | Checked prefill tile, causal-pair, payload, paged floor-sum lookup, token/block cost partition, versioned ownership evidence, write/checksum oracle, and semantic event-trace planning |
 | `llm_work_plan.h` / `.cpp` | Checked phase-applicable weight/KV geometry, payload/metadata/accounted math, memory budget, scenario limits, exact CPU ownership evidence, Metal segment/argument-buffer/resource/grid plans, and frozen methodology/component/plan identities |
@@ -376,13 +377,14 @@ installed. All test `.cpp` and `.mm` files are picked up automatically by the Ma
 
 | File | Suite name | Coverage focus |
 |---|---|---|
-| `test_config.cpp` | `ConfigTest` | Strict whole-token CLI/sweep parsing, validation, defaults, and derived buffer/access math |
+| `test_cli_parser.cpp` | `CliParserTest` | Shared descriptor-driven CLI option parsing (`--option=value`, opaque values, arity, missing/unexpected/unknown errors, single-dash rejection), `cli_program_name`, `format_cli_parse_error`, `extract_long_option_name`, `is_known_cli_value_option`, and LP64-safe `parse_strict_nonnegative_ulong` |
+| `test_config.cpp` | `ConfigTest` | General and TLB descriptor-driven CLI/sweep parsing (`--option=value`, duplicate flags, `--analyze-tlb --help`, LP64 `--buffer-size`, config reset, TLB `ConfigTestHooks`), validation (no-mode errors, `--patterns`/`--only-bandwidth`/`--only-latency` incompatibilities, direct+sweep conflicts, deferred thread capping), defaults, and derived buffer/access math |
 | `test_signal_handler.cpp` | `BenchmarkSignalMaskGuardTest` | Exact thread-mask restoration, caller-preserved blocked signals, and nested scope ownership |
-| `test_messages.cpp` | `Messages*Test` | Exact help and formatted console message contracts |
+| `test_messages.cpp` | `Messages*Test` | Exact help, CLI error/reason, and formatted console message contracts |
 | `test_memory_utils.cpp` | `MemoryUtilsTest` | Memory helpers: pointer-chase chain construction and verification |
 | `test_memory_manager.cpp` | `MemoryManagerTest` | Injected mmap/madvise policy, failures, and exact RAII unmapping |
 | `test_numeric_utils.cpp` | `NumericUtilsTest` | Overflow-safe arithmetic, duration calibration, pilot counts, and quantization boundaries |
-| `test_llm_memory_config.cpp` | `LlmMemoryConfigTest`, `LlmMemoryConfigIntegrationTest` | Exact standalone decode/prefill parsing including paged prefill, phase/layout rules and stable reasons, strict decimal errors, raw output values, help isolation, worker/seed resolution, geometry/work-limit preflight, incompatible options, repeatable LLM `--sweep` parsing/expansion/conflicts/preflight, and `run_llm_memory_collect`/sweep runner behavior |
+| `test_llm_memory_config.cpp` | `LlmMemoryConfigTest`, `LlmMemoryConfigIntegrationTest` | Exact standalone decode/prefill parsing (including `--option=value`, paged prefill, phase/layout rules and stable reasons), strict decimal errors, raw output values, help isolation, worker/seed resolution, geometry/work-limit preflight, incompatible options, repeatable LLM `--sweep` parsing/expansion/conflicts/preflight, and `run_llm_memory_collect`/sweep runner behavior |
 | `test_llm_memory_work_plan.cpp` | `LlmMemoryWorkPlanTest`, `LlmMemoryWorkPlanSystemCallsTest` | Production checked decode/prefill geometry and payloads, physical/padding/table/lookup/accounted math including paged-prefill `N+2*M`, deterministic permutation/hash, CPU token/block ownership, Metal cyclic block-owner scheduling and component identities, memory budget, descriptor/range/layout invariants, worker reduction, scenario caps/calibration, and cyclic order |
 | `test_llm_memory_executor.cpp` | `LlmMemoryExecutorTest` | CPU phase/layout dispatch, atomic mapping/table-preparation failure seams, contiguous and paged decode/prefill descriptor materialization, independent checksums, padding canaries, synchronized timing, QoS, cancellation, and fake-kernel validation |
 | `test_llm_memory_runner.cpp` | `LlmMemoryRunnerTest` | Fake-backend lifecycle and generic decode/prefill task seams, lifecycle unsupported/failure handling, common identity/timing/completion/validation acceptance, exact calibration/single-unit/freeze/frozen-warmup order, cyclic measurements, status/counter/aggregate semantics, interruption, release/checkpoint precedence, auxiliary budgeting, and runner exception boundaries |
@@ -395,10 +397,10 @@ installed. All test `.cpp` and `.mm` files are picked up automatically by the Ma
 | `test_benchmark_executor.cpp` | `BenchmarkExecutorTest` | Injected phase-preparation failures, continuous latency sampling, and hardware executor contracts |
 | `test_benchmark_runner.cpp` | `BenchmarkStatisticsCollectorTest`, `BenchmarkRunnerTest` | Status-bearing aggregation, schema-3 retained snapshots, checkpointing, interruption, and runner exception/failure seams |
 | `test_benchmark_work_plan.cpp` | `BenchmarkWorkPlanTest` | Exact payload/access planning, calibration, cyclic order, seed derivation, and duration classification |
-| `test_gpu_bandwidth.cpp` | `GpuBandwidthParserTest`, `GpuMemoryBudgetTest`, `GpuRunnerTest`, `GpuJsonTest` | Strict standalone parsing and output-option diagnostics, memory budgets, fake-backend calibration/execution/failure/interruption and file/stdout checkpoint semantics, counters, and schema-1 serialization |
+| `test_gpu_bandwidth.cpp` | `GpuBandwidthParserTest`, `GpuMemoryBudgetTest`, `GpuRunnerTest`, `GpuJsonTest` | Strict standalone parsing (`--option=value`, LP64 `--buffer-size`, explicit offending-token diagnostics), memory budgets, fake-backend calibration/execution/failure/interruption and file/stdout checkpoint semantics, counters, and schema-1 serialization |
 | `test_gpu_work_plan.cpp` | `GpuWorkPlanTest`, `GpuTimedAccumulatorOracleTest` | Cyclic order, seed domains, pass/payload caps, calibration, vector/tail/grid geometry, frozen identities, and timed-accumulator oracle behavior |
 | `test_gpu_metal_backend.cpp` | `GpuMetalBackendIntegrationTest` | Real-Metal capability/runtime compile, private/shared tracked resources, read/write/copy/tail correctness, timestamps, validation, and byte readback |
-| `test_mode_selector.cpp` | `ModeSelectorTest` | All six primary modes and aliases, complete pairwise conflict order, duplicate ownership, and opaque flag-shaped output targets |
+| `test_mode_selector.cpp` | `ModeSelectorTest` | All six primary modes and aliases, complete pairwise conflict order, `--mode=value` routing, null/`argc` safety, and opaque flag-shaped values skipped across all known space-separated value-taking options |
 | `test_hash_utils.cpp` | `HashUtilsTest` | CommonCrypto SHA-256 standard vectors and source-provenance helper behavior |
 | `test_analysis.cpp` | `AnalysisTest` | Injected TLB coordination, counters/status, boundary detection, validation, and paired analysis |
 | `test_json_schema.cpp` | `JsonSchemaTest` | Current standard schema-3 output structure, completion fields, and other mode schema contracts |
@@ -413,7 +415,7 @@ installed. All test `.cpp` and `.mm` files are picked up automatically by the Ma
 | `test_pattern_benchmark.cpp` | `PatternBenchmarkTest` | Pattern execution and statistics |
 | `test_pattern_work_plan.cpp` | `PatternWorkPlanTest` | Strided phases, worker reduction, random partitions, exact payload work, and calibration |
 | `test_core_to_core_messages.cpp` | `CoreToCoreMessagesTest` | Core-to-core console message strings |
-| `test_core_to_core_cli.cpp` | `CoreToCoreCliTest` | Core-to-core CLI argument parsing |
+| `test_core_to_core_cli.cpp` | `CoreToCoreCliTest` | Core-to-core CLI argument parsing (`--option=value`, duplicate flags, direct-vs-sweep conflicts, unified duplicate sweep-key diagnostics, config reset, and `argc == 0` safety) |
 | `test_core_to_core_runner.cpp` | `CoreToCoreRunnerTest` | Calibration, work planning, cyclic scenario order, pooled sample ranges, and initiator-startup failure cleanup |
 | `test_executable_cli.cpp` | `ExecutableCliIntegrationTest` | Executable-level CLI routing, current standard schema-3 direct/sweep payloads, split stdout/stderr capture, bounded child execution, sentinel artifact rules, explicit and automatic-calibration GPU/pattern contracts, bounded contiguous/paged direct and sweep LLM file/stdout/checkpoint contracts (CPU and Metal), and TLB/core-to-core end-to-end coverage |
 | `test_standard_kernels.cpp` | `StandardKernelIntegrationTest`, `PatternKernelIntegrationTest` | Real ARM64 standard/pattern kernel ABI, tails, boundaries, checksums, and multi-worker execution |

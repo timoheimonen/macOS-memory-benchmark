@@ -120,8 +120,12 @@ The standalone primary mode is `-M` / `--llm-memory`. Its exact whitelist is:
 ```
 
 Every required common and phase-specific option must occur exactly once (unless supplied through a matching `--sweep`
-key, which cannot be combined with that direct option). Optional non-sweep values and the mode/help selector may occur
-at most once; `-S` / `--sweep` is repeatable across distinct parameter keys, and duplicate keys are rejected.
+key, which cannot be combined with that direct option). Built on the shared descriptor-driven CLI parser
+(`src/core/config/cli_parser.h` / `.cpp`), long value-taking options accept both space-separated (`--weight-size-mb 64`,
+`--output -`) and inline (`--weight-size-mb=64`, `--output=-`, `--output=`, `--sweep=context-tokens=512,2048`) syntax,
+while inline values on boolean/mode flags (`--llm-memory=1`, `--help=1`) and single-dash inline forms (`-r=3`) are
+rejected. Optional non-sweep values and the mode/help selector may occur at most once; `-S` / `--sweep` is repeatable
+across distinct parameter keys, and duplicate keys are rejected (`sweep parameter specified more than once: <key>`).
 Sweep keys follow the same phase and layout guards as their direct flags: `context-tokens` is decode-only,
 `prompt-tokens` and `attention-query-tile-tokens` are prefill-only, and `kv-block-tokens` is paged-KV-only.
 Numeric input is a complete decimal token; counts are positive, while an explicit seed may be zero. All JSON-integer
@@ -130,7 +134,8 @@ configuration fields—and `--sweep-max-runs` when `--sweep` is active—are bou
 Query heads must be at least the KV-head count and divisible by it. `G` must be a positive power of two no greater than
 `UINT32_MAX`; it may exceed the active phase length. Phase/layout validation is order-independent.
 All other primary modes and all buffer/cache/latency/TLB/pattern/GPU,
-and `--non-cacheable` options are rejected.
+and `--non-cacheable` options are rejected with a concise single-line stderr diagnostic naming the offending option
+(`Unsupported option '<token>': ...`) without dumping usage text.
 
 Sweep execution preflight-validates the complete Cartesian product before run 0, reuses the single command base seed
 across every generated run, releases backend resources between consecutive runs, and writes the shared schema-1 sweep

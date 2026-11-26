@@ -181,7 +181,12 @@ checkpoints are required; see the [Machine-Readable CLI API](documents/API.md) s
 | `--llm-memory` | Standalone synthetic LLM memory profile: CPU or Metal decode/prefill with contiguous or paged KV. |
 | `--sweep <key=a,b>` | Cartesian parameter sweep for supported CPU, pattern, TLB, core-to-core, and LLM-memory modes; requires `--output`. GPU schema 1 does not support sweeps. |
 
-Primary modes are intentionally separate and accept different option sets. Use `memory_benchmark -h` or the [User Manual](documents/MANUAL.md) for defaults, valid combinations, and the complete option reference.
+Primary modes are intentionally separate and accept different option sets. All six primary modes share one
+descriptor-driven CLI parser: long value-taking options accept both space-separated (`--buffer-size 512`, `--output -`)
+and inline (`--buffer-size=512`, `--output=-`, `--sweep=buffer-size=128,256`) syntax, all six modes accept `-h`/`--help`,
+running `memory_benchmark` with no arguments shows help and exits `0`, and passing modifier options without a primary
+mode flag fails with a non-zero exit status. Use `memory_benchmark -h` or the [User Manual](documents/MANUAL.md) for
+defaults, valid combinations, and the complete option reference.
 
 LLM-memory requires explicit model and phase geometry. CPU and capability-gated Metal backends support decode and
 prefill with contiguous or deterministic paged KV; Metal rejects explicit `--threads` and never falls back to CPU.

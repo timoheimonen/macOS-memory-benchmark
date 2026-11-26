@@ -72,22 +72,30 @@ Recommendation:
 
 Main orchestration (`main.cpp`) follows this pipeline:
 
-`select_primary_benchmark_mode` scans all mode flags before mode-specific parsing, so a command containing multiple
-primary modes
-fails deterministically instead of being routed by the first token. Core-to-core uses `CoreToCoreLatencyConfig`; GPU uses
-`GpuBandwidthConfig`; LLM-memory uses `LlmMemoryConfig`; TLB uses a dedicated branch that populates `BenchmarkConfig`.
-GPU and LLM-memory are dispatched before the general timer/parser pipeline and never call general CPU config validation
-or buffer/access derivation. The numbered pipeline below
+`select_primary_benchmark_mode` scans all mode flags before mode-specific parsing, skipping one opaque value token for
+every known space-separated value-taking option across all six modes and recognizing `--mode=value`, so a command
+containing multiple primary modes fails deterministically instead of being routed by the first token and flag-shaped
+option values (such as `--benchmark --buffer-size -G` or `--benchmark --sweep -T`) do not trigger false mode conflicts.
+Core-to-core uses `CoreToCoreLatencyConfig`; GPU uses `GpuBandwidthConfig`; LLM-memory uses `LlmMemoryConfig`; TLB uses
+a dedicated branch that populates `BenchmarkConfig`. All six modes share the descriptor-driven CLI option scanner in
+`src/core/config/cli_parser.h` / `.cpp`.
+Running with no arguments (`argc <= 1`) prints help to stdout and exits `0` before timer creation or mode selection.
+`main.cpp` wraps mode selection and argument parsing to contain unexpected exceptions, dispatches GPU and LLM-memory
+before the general pipeline (never calling general CPU config validation or buffer/access derivation), and dispatches
+core-to-core to its dedicated command boundary. The numbered pipeline below
 applies to standard/pattern execution; TLB and general sweeps share its parse, output-session, validation, and
 final-output boundaries before entering their dedicated collectors/coordinators.
 
-1. Create high-resolution total-execution timer.
-2. Parse CLI arguments into `BenchmarkConfig` (`parse_arguments`) and finish human-facing help/no-mode handling.
+1. Parse CLI arguments into `BenchmarkConfig` (`parse_arguments`, single-pass via `parse_cli_options`) and finish
+   human-facing `-h`/`--help` handling before OS sysctl queries, cache detection, seed generation, or timer creation.
+2. Reject modifier-only invocations with no primary mode flag (`validate_config`) before creating `JsonOutputSession`,
+   returning `EXIT_FAILURE` with empty stdout and a centralized stderr error.
 3. Classify the raw output target. Standard/pattern/TLB commands and sweeps using `-` create a command-scoped
    `JsonOutputSession` that routes subsequent human `std::cout` output to stderr while retaining the original stdout
    buffer for final JSON.
-4. Validate configuration (`validate_config`) while the supported machine-output routing is active.
-5. Calculate derived sizes and counts:
+4. Validate configuration (`validate_config`) while the supported machine-output routing is active (including
+   incompatible-option checks, direct-vs-`--sweep` conflict checks, thread capping, and memory limits).
+5. Create high-resolution total-execution timer (when needed for execution) and calculate derived sizes and counts:
    - `calculate_buffer_sizes`
    - `calculate_access_counts` (fallback latency access counts)
    - `calculate_total_allocation_bytes`
@@ -234,26 +242,72 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 
 ## 6. CLI Parsing and Validation
 
-### 6.1 Parsing behavior (`argument_parser.cpp`)
+### 6.1 Parsing behavior (`cli_parser.cpp`, `mode_selector.cpp`, `argument_parser.cpp`)
 
-- Two-pass parse:
-  - First pass extracts `--cache-size` early.
-  - Second pass parses remaining options.
-- Strict integer parsing uses `std::from_chars`; parser validation may throw internally, but the function boundary
-  converts those failures to return codes.
-- Help (`-h`, `--help`) prints usage and exits successfully.
-- Standard/pattern/TLB output-target classification occurs only after successful parsing and help/no-mode handling.
-  Core-to-core classifies its target after its dedicated combined parse/preflight and help handling; GPU and LLM do the
-  same after their dedicated parser and help handling. For every result-producing direct command and supported sweep,
-  exact `-` is reserved for final stdout JSON. An empty value disables JSON for a direct command and is
-  missing/invalid for a sweep. Every
-  other non-empty value is a file target, including `./-` and flag-shaped names such as `-G`.
+- Shared descriptor-driven parsing (`src/core/config/cli_parser.h` / `.cpp`):
+  - All six primary modes (`--benchmark`, `--patterns`, `--analyze-tlb`, `--analyze-core2core`, `--gpu-bandwidth`, and
+    `--llm-memory`) share `parse_cli_options` over declarative `CliOptionSpec` tables.
+  - Long options that take values accept both space-separated (`--buffer-size 512`, `--output -`) and inline
+    `--option=value` forms (`--buffer-size=512`, `--output=-`, `--output=`, `--sweep=buffer-size=128,256`). Passing an
+    inline value to a boolean or mode flag (such as `--benchmark=1` or `--help=1`) is rejected as `UnexpectedValue`
+    (`Option --... does not take a value`). Single-dash short options remain space-separated one-character flags; legacy
+    single-dash long names (`-buffersize`) and single-dash inline forms (`-b=512`) are rejected as unknown options.
+  - All single-occurrence options (including primary mode selectors `-B`, `-P`, `-T`, `-C`, `-G`, `-M` and boolean flags
+    `-W`, `-L`, `-u`, `-h`) are uniformly rejected when duplicated across all six modes. Only `-S`/`--sweep` is
+    repeatable (once per distinct parameter key; duplicate keys fail with
+    `Messages::error_duplicate_sweep_parameter`, i.e., `sweep parameter specified more than once: <key>`).
+  - Mode pre-scan (`mode_selector.cpp`) uses `is_known_cli_value_option` and `extract_long_option_name` to skip one
+    opaque following value token for every known space-separated value-taking option across all six modes (so
+    flag-shaped values such as `--benchmark --buffer-size -G` or `--benchmark --sweep -T` route to the active mode and
+    report a value error rather than a false primary-mode conflict) and to route `--mode=value` to that mode for a clean
+    unexpected-value diagnostic.
+  - Every mode parser resets its config struct on entry, guards `argc == 0` and null `argv` entries via
+    `cli_program_name`, emits concise single-line `Error: ...` diagnostics on `stderr` through centralized `Messages::`
+    helpers without dumping full usage text on parse errors, and contains exceptions at parser/command boundaries.
+    Standalone whitelist modes (`--analyze-tlb`, `--analyze-core2core`, `--gpu-bandwidth`, `--llm-memory`) name the
+    offending option explicitly (`Unsupported option '<token>': ...`).
+- Single-pass general/TLB parse (`argument_parser.cpp`):
+  - The redundant `--cache-size` pre-scan pass is removed; options are scanned once via `parse_cli_options`.
+  - Strict integer parsing uses `std::from_chars` with centralized `Messages::reason_*` helpers; `--buffer-size` uses
+    LP64-safe `parse_strict_nonnegative_ulong` covering `[0, ULONG_MAX]` without `long long` truncation.
+  - OS `sysctl` queries, cache detection, seed generation, and thread capping are deferred until after syntactic parsing
+    and `-h`/`--help` handling; thread capping (`warning_threads_capped`) executes in `validate_config`. Standalone TLB
+    parsing honors `ConfigTestHooks` for system information just like the general branch.
+- Uniform `-h`/`--help` and no-mode behavior:
+  - All six modes (including `--analyze-tlb --help`) accept `-h`/`--help`. Across every mode, `--help` still runs full
+    syntactic, whitelist, duplicate, missing-value, and value-parse checks first, and once valid prints human-facing
+    help to stdout and exits `0` before required-option checks, semantic validation, OS queries, timer creation, seed
+    generation, or output-session setup (`--output - --help` and `--help --output -` remain human-facing help to stdout
+    across all six modes).
+  - Running with no arguments (`argc <= 1`) prints help to stdout and exits `0`. Running with modifier options but no
+    primary mode flag fails in validation before output-session setup with `EXIT_FAILURE`, empty stdout, and a
+    centralized stderr error (`error_only_flags_require_benchmark`, `error_seed_requires_supported_mode`, or
+    `error_missing_primary_mode`).
+- Standard/pattern/TLB output-target classification occurs only after successful parsing, `--help`, and primary-mode
+  checks. Core-to-core classifies its target after its dedicated combined parse/preflight and help handling; GPU and LLM
+  do the same after their dedicated parser and help handling. For every result-producing direct command and supported
+  sweep, exact `-` is reserved for final stdout JSON. An empty value disables JSON for a direct command and is
+  missing/invalid for a sweep. Every other non-empty value is a file target, including `./-` and flag-shaped names such
+  as `-G`.
 - `--latency-chain-mode` accepts string values and resolves to `LatencyChainMode` enum.
-- `--analyze-tlb` uses an early dedicated parse branch in `argument_parser.cpp`. It only allows optional `--output`, `--latency-stride-bytes`, `--latency-chain-mode`, `--tlb-density`, `--seed`, `--sweep`, and `--sweep-max-runs`. TLB sweep supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`; its default run guard is `16`, and `global-random` chain mode is rejected. One generated or user-provided seed drives the pure sweep planner, seeded cyclic Latin round scheduler, derived task seeds, layout-specific page-native chain permutations, and deterministic convergence bootstrap. Each task measures a verified one-node-per-page spread chain and an equal-cache-line packed control in the same round. A pilot calibrates whole-chain accesses toward the quick/standard/exhaustive target duration; rounds stop at the per-point CI-width target or profile maximum. Candidate buffers are admitted only when their predicted buffer-plus-scratch peak fits the available-memory budget. Full methodology and JSON contract: [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md).
-- `--analyze-core2core` uses dedicated mode parsing (outside `argument_parser.cpp`) and only allows optional `--output`,
-  `--count`, `--latency-samples`, `--sweep`, `--sweep-max-runs`, and `--help`. Its mode-specific loop default is `3`;
-  the general loop default remains `1`. Core-to-core sweep supports `count` and `latency-samples`, rejects duplicate
-  sweep keys, and atomically checkpoints a real-file combined output after every attempted run; an empty run plan or a
+- `--analyze-tlb` uses a dedicated descriptor-driven parse branch in `argument_parser.cpp`. It only allows optional
+  `--output`, `--latency-stride-bytes`, `--latency-chain-mode`, `--tlb-density`, `--seed`, `--sweep`,
+  `--sweep-max-runs`, and `-h`/`--help`. TLB sweep supports `latency-stride-bytes`, `latency-chain-mode`, and
+  `tlb-density`, rejects combining a direct option with `--sweep` for the same parameter, uses default run guard `16`,
+  and rejects `global-random` chain mode. One generated or user-provided seed drives the pure sweep planner, seeded
+  cyclic Latin round scheduler, derived task seeds, layout-specific page-native chain permutations, and deterministic
+  convergence bootstrap. Each task measures a verified one-node-per-page spread chain and an equal-cache-line packed
+  control in the same round. A pilot calibrates whole-chain accesses toward the quick/standard/exhaustive target
+  duration; rounds stop at the per-point CI-width target or profile maximum. Candidate buffers are admitted only when
+  their predicted buffer-plus-scratch peak fits the available-memory budget. Full methodology and JSON contract:
+  [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md).
+- `--analyze-core2core` uses dedicated mode parsing built on `cli_parser.h` (outside `argument_parser.cpp`) and only
+  allows optional `--output`, `--count`, `--latency-samples`, `--sweep`, `--sweep-max-runs`, and `-h`/`--help`. Its
+  mode-specific loop default is `3`; the general loop default remains `1`. Core-to-core sweep supports `count` and
+  `latency-samples`, rejects duplicate sweep keys via `Messages::error_duplicate_sweep_parameter`, rejects combining a
+  direct option (`--count` or `--latency-samples`) with `--sweep` for the same key via
+  `Messages::error_sweep_option_conflict`, wraps parser execution in exception containment at the command boundary, and
+  atomically checkpoints a real-file combined output after every attempted run; an empty run plan or a
   stop observed before a run checkpoints a terminal zero-attempt envelope. Stdout keeps the same state transitions but
   emits only the terminal envelope. Only a nested `status: "complete"` result with `measurements_complete: true`
   increments `completed_runs`.
@@ -263,21 +317,23 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   measured loops, and participates in a cyclic Latin-square scenario schedule. The result is effective acquire/release
   token-protocol round-trip time, not an isolated physical cache-line migration or coherence-fabric latency. Full
   methodology and JSON schema 2 contract: [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md).
-- `--gpu-bandwidth` uses a dedicated parser outside `argument_parser.cpp`. It accepts only `-G`/`--gpu-bandwidth`,
-  `-b`/`--buffer-size`, `-i`/`--iterations`, `-r`/`--count`, `--seed`, `-o`/`--output`, and
-  `-h`/`--help`. Duplicates, unknown/incompatible options, missing values, partial numeric tokens, non-positive
-  iterations/count, and signed seeds fail before Metal work. Defaults are 512 MB per buffer, three loops, generated
-  seed, and automatic passes. Buffer size must be at least 64 MB; checked MB→bytes overflow and explicit work guardrails
-  are resolved before backend creation. Copy's 2× payload makes its pass limit the strict CLI ceiling shared by all three
-  operations. GPU schema 1 rejects sweep options.
-- `--llm-memory` uses a dedicated parser outside `argument_parser.cpp`. It accepts only `-M`/`--llm-memory`, optional
-  `--llm-memory-backend <cpu|metal>`, the five
+- `--gpu-bandwidth` uses a dedicated parser built on `cli_parser.h` (outside `argument_parser.cpp`). It accepts only
+  `-G`/`--gpu-bandwidth`, `-b`/`--buffer-size`, `-i`/`--iterations`, `-r`/`--count`, `--seed`, `-o`/`--output`, and
+  `-h`/`--help`. Duplicates, unknown/incompatible options (named explicitly), unexpected inline values, missing values,
+  partial numeric tokens, non-positive iterations/count, and signed seeds fail before Metal work. Defaults are 512 MB
+  per buffer, three loops, generated seed, and automatic passes. `--buffer-size` uses LP64-safe `[0, ULONG_MAX]` range
+  parsing before enforcing the 64 MB minimum, checked MB→bytes overflow, and explicit work guardrails before backend
+  creation. Copy's 2× payload makes its pass limit the strict CLI ceiling shared by all three operations. GPU schema 1
+  rejects sweep options.
+- `--llm-memory` uses a dedicated parser built on `cli_parser.h` (outside `argument_parser.cpp`). It accepts only
+  `-M`/`--llm-memory`, optional `--llm-memory-backend <cpu|metal>`, the five
   required weight/layer/head inputs, phase and its context or prompt/tile geometry, optional KV width, batch,
   `--kv-layout`, `--kv-block-tokens`, threads, iterations, count, seed, output, `-S`/`--sweep`, `-X`/`--sweep-max-runs`,
   and help.
-  Duplicate/unknown/incompatible options, missing values, non-complete decimal tokens, zero size/count values, invalid
-  KV widths, invalid query/KV sharing, checked geometry overflow, impossible one-step payloads, and explicit scenario
-  work above the strictest limit fail before output-session creation. Output consumes exactly one opaque raw token.
+  Duplicate/unknown/incompatible options (named explicitly), unexpected inline values, missing values, non-complete
+  decimal tokens, zero size/count values, invalid KV widths, invalid query/KV sharing, checked geometry overflow,
+  impossible one-step payloads, and explicit scenario work above the strictest limit fail before output-session
+  creation. Output consumes exactly one opaque raw token (space-separated or inline `--output=...`).
   Help still completes the whitelist pass but returns before required/default/preparation work. All JSON integer
   configuration fields (`weight_size_mb`, `layer_count`, `query_head_count`, `kv_head_count`, `head_dimension`,
   `visible_context_tokens`, `prompt_tokens`, `attention_query_tile_tokens`, `kv_block_tokens`, `batch_size`,
@@ -306,12 +362,21 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 
 ### 6.2 Validation behavior (`config_validator.cpp`)
 
-Validation rejects incompatible flag combinations and invalid value states:
+Validation rejects missing primary modes, incompatible flag combinations, direct-vs-sweep conflicts, and invalid value states:
 
+- Missing primary mode (modifier options without `--benchmark`, `--patterns`, `--analyze-tlb`, `--analyze-core2core`,
+  `--gpu-bandwidth`, or `--llm-memory`): fails with `--seed` mode requirement, `--only-bandwidth`/`--only-latency`
+  benchmark requirement, or `A primary mode option is required (...)`.
 - `--only-bandwidth` and `--only-latency` are mutually exclusive.
-- `--patterns` cannot be combined with `--only-bandwidth` or `--only-latency`.
-- `--only-bandwidth` cannot be combined with `--cache-size` and cannot use latency-sample overrides.
-- `--only-latency` cannot be combined with `--iterations` override.
+- `--patterns` cannot be combined with `--only-bandwidth`, `--only-latency`, `--cache-size`, `--latency-samples`,
+  `--latency-stride-bytes`, `--latency-chain-mode`, or `--latency-tlb-locality-kb`.
+- `--only-bandwidth` cannot be combined with `--cache-size`, `--latency-samples`, `--latency-stride-bytes`,
+  `--latency-chain-mode`, or `--latency-tlb-locality-kb`.
+- `--only-latency` cannot be combined with `--iterations` or `--threads`.
+- Direct option + `--sweep` for the same parameter is rejected uniformly across general (`--benchmark`, `--patterns`)
+  and `--analyze-tlb` sweeps via `Cannot specify both --<opt> and --sweep <key>` (matching core-to-core and LLM modes).
+- Requested thread counts above detected cores are capped here (`warning_threads_capped`, honoring `ConfigTestHooks`)
+  after incompatibility checks pass, avoiding spurious warnings on rejected or `--help` invocations.
 
 Zero-disabling semantics (supported only in `--only-latency`):
 
@@ -1127,8 +1192,9 @@ Console rendering is centralized in `src/output/console` and message helpers in 
 Contract highlights:
 
 - Every successfully started direct mode and parameter sweep emits one shared version, copyright, and GPL banner
-  before mode-specific configuration or status output. Nested sweep runs do not repeat it. Help output and usage
-  diagnostics retain the separate usage preamble; preflight failures do not emit the runtime banner.
+  before mode-specific configuration or status output. Nested sweep runs do not repeat it. Help output retains the
+  separate usage preamble; parse and preflight failures emit concise single-line `Error: ...` diagnostics on stderr
+  without dumping full usage text or the runtime banner.
 - Result-producing CPU benchmark paths print applicable configuration and cache information before execution.
 - Per-loop results are printed in standard mode.
 - Pattern mode prints pattern table-style sections and derived efficiency indicators.
@@ -1455,7 +1521,8 @@ The supported process contract, including help and pre-result-failure exceptions
 This codebase uses boundary-aware mixed error handling:
 
 - Program orchestration and most modules: return codes (`EXIT_SUCCESS`/`EXIT_FAILURE`).
-- Argument parsing internals: exceptions for parsing/validation, converted to return codes at API boundary.
+- Argument parsing internals: shared descriptor-driven syntax parsing returns structured `CliParseResult` errors, and
+  value-validation exceptions are converted to return codes at parser and command boundaries.
 - Allocation internals: null smart-pointer returns for allocation failure.
 - Parse/preflight failures, the general pipeline's early timer failure, and TLB setup/allocation failures before result
   initialization have no schema-valid payload. A stdout target remains empty and the diagnostic/process failure are
@@ -1529,11 +1596,13 @@ Recommended validation commands:
 - Independent LLM schema-2 artifact and schema-1 sweep envelope contract and mutation tests: `make test-llm-verifier`
 - Integration-only: `make test-integration`
 - Full test set: `make test-all`
-- CLI help smoke check: `./memory_benchmark -h`
+- CLI help smoke checks: `./memory_benchmark -h`, `./memory_benchmark --analyze-tlb --help`
 - GPU help smoke check: `./memory_benchmark --gpu-bandwidth --help`
 - LLM help smoke check: `./memory_benchmark --llm-memory --help`
+- Deterministic CLI parser tests:
+  `./test_runner '--gtest_filter=CliParserTest.*:ModeSelectorTest.*:ConfigTest.*:CoreToCoreCliTest.*:GpuBandwidthParserTest.*:LlmMemoryConfigTest.*:Messages*Test.*'`
 - Deterministic LLM tests:
-  `./test_runner '--gtest_filter=ModeSelectorTest.*:LlmMemoryConfigTest.*:LlmMemoryWorkPlan*.*:LlmMemoryExecutorTest.*:LlmMemoryRunnerTest.*:LlmMemoryJsonTest.*:LlmMemoryOutputTest.*:SweepRunnerTest.*:Messages*Test.*'`
+  `./test_runner '--gtest_filter=CliParserTest.*:ModeSelectorTest.*:LlmMemoryConfigTest.*:LlmMemoryWorkPlan*.*:LlmMemoryExecutorTest.*:LlmMemoryRunnerTest.*:LlmMemoryJsonTest.*:LlmMemoryOutputTest.*:SweepRunnerTest.*:Messages*Test.*'`
 - Real LLM ARM64 and bounded executable transport contracts:
   `./test_runner '--gtest_filter=*LlmMemory*Integration*:*ExecutableCliIntegration*'`
 - LLM Metal decode and prefill for contiguous and paged KV:
@@ -1543,7 +1612,7 @@ Recommended validation commands:
   writes, Q=1/Q=P/remainder tiled-prefix scans, source-hash provenance, permutation-sensitive lookups,
   K/V-write and padding validation, multi-threadgroup work, and a bounded run crossing the 256 MiB segment boundary.
 - Deterministic GPU-focused tests:
-  `./test_runner --gtest_filter='GpuBandwidthParserTest.*:GpuMemoryBudgetTest.*:GpuRunnerTest.*:GpuJsonTest.*:GpuWorkPlanTest.*:GpuTimedAccumulatorOracleTest.*:ModeSelectorTest.*:HashUtilsTest.*'`
+  `./test_runner --gtest_filter='CliParserTest.*:GpuBandwidthParserTest.*:GpuMemoryBudgetTest.*:GpuRunnerTest.*:GpuJsonTest.*:GpuWorkPlanTest.*:GpuTimedAccumulatorOracleTest.*:ModeSelectorTest.*:HashUtilsTest.*'`
 - Real Metal contract: `./test_runner '--gtest_filter=GpuMetalBackendIntegrationTest.*'`; unsupported hardware may skip
   this integration suite but does not replace deterministic unsupported-path coverage. On a supported host, sandbox
   `metal-device-unavailable` skips require narrowly scoped unsandboxed probes and applicable real-device gates, as
@@ -1591,6 +1660,8 @@ file. Verification does not prove original process success, physical traffic, or
   - `src/llm_memory/llm_output.cpp`
   - `src/llm_memory/llm_environment.mm`
 - Config parse/validate/derive:
+  - `src/core/config/cli_parser.h`
+  - `src/core/config/cli_parser.cpp`
   - `src/core/config/mode_selector.cpp`
   - `src/core/config/argument_parser.cpp`
   - `src/core/config/config_validator.cpp`

@@ -113,10 +113,13 @@ buffers, and `maxBufferLength >= 256 MiB`. The selected MSL 2.3 source must comp
 the runtime layout probe must pass. Capability absence produces terminal `unsupported` evidence; compiler, pipeline,
 resource, or task failures produce terminal `failed`/`invalid` evidence and never authorize CPU fallback.
 
-The sentinel is classified from the raw option value before path normalization:
+The sentinel is classified from the raw option value before path normalization. Long value-taking options accept both
+space-separated (`--output -`, `--buffer-size 512`) and inline (`--output=-`, `--output=`, `--buffer-size=512`,
+`--sweep=buffer-size=128,256`) syntax across all six modes, while boolean and primary-mode flags reject inline values
+and single-dash short options remain space-separated one-character flags:
 
-- `--output -` selects stdout JSON;
-- an empty value disables JSON for a direct command, as does omitting `--output`;
+- `--output -` (or `--output=-`) selects stdout JSON;
+- an empty value (such as `--output ""` or `--output=`) disables JSON for a direct command, as does omitting `--output`;
 - an empty value in a sweep is a missing/invalid required output target;
 - every other non-empty value is a file target, including `./-` and flag-shaped names such as `-G`, `-T`,
   `--analyze-tlb`, `-k`, and `--cache-size`; therefore
@@ -131,9 +134,15 @@ After successful parsing and mode selection, a supported machine-output command 
 - clients consume object keys by name and do not rely on textual key order.
 
 Argument parsing and preflight validation can fail before a result state exists. Those failures return a non-zero process
-status, write the centralized diagnostic to stderr, and leave stdout empty. Help is deliberately human-facing: `--help`
-prints normal help to stdout and does not promise JSON when the selected parser accepts that combination. The standalone
-TLB whitelist rejects `--analyze-tlb --help`; use `--help` without that mode flag.
+status, write a concise single-line centralized diagnostic (`Error: ...`) to stderr without dumping full usage text, and
+leave stdout empty. Passing modifier options without a primary mode flag (for example `--only-bandwidth`, `--seed 42`, or
+`--threads 1`) likewise fails before output-session creation with a non-zero status, empty stdout, and a centralized
+stderr error; only bare `memory_benchmark` with no arguments prints help to stdout and exits `0`. Help is deliberately
+human-facing and is accepted uniformly across all six primary modes, including `--analyze-tlb --help`: `-h`/`--help`
+still runs full syntactic, whitelist, duplicate, missing-value, and value-parse validation first, then prints normal help
+to stdout and exits `0` before required-option checks, semantic validation, OS queries, timer creation, seed generation,
+or output-session setup. `--output - --help` (and `--help --output -` or `--output=- --help`) remains human-facing help
+to stdout and does not promise JSON across all six modes.
 
 Some runtime setup failures also occur before a schema-valid payload exists. The general command's or any sweep runner's
 early timer-creation failure, TLB setup, memory-budget, or allocation failures before analysis-state initialization, a GPU
