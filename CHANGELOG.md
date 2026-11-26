@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.64.1] - 2026-11-25
+## [0.65.0] - 2026-11-26
 
 ### Added
   - **Cartesian `--sweep` support for `--llm-memory`**: Added repeatable `-S`/`--sweep <key=a,b>` and `-X`/`--sweep-max-runs <count>` support to standalone CPU and Metal LLM profiles. Supported sweep keys are `context-tokens` (decode), `prompt-tokens` and `attention-query-tile-tokens` (prefill), and `kv-block-tokens` (paged KV). Combining a direct flag and `--sweep` for the same parameter is rejected as a conflict, non-empty `--output <target>` (file or exact `-` stdout) is required, and every generated Cartesian run configuration is preflight-validated before execution. Runs execute sequentially through the shared schema-1 sweep envelope (`base_mode: "llm_memory"`) with nested schema-2 payloads under `runs[].result`, per-run resource cleanup, and live JSON peak-memory admission.
@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
   - **CLI help and reference documentation updated**: Updated general and LLM help, `README.md`, `documents/API.md`, `documents/MANUAL.md`, `documents/LLM_MEMORY_PROFILE_WHITEPAPER.md`, `documents/CAPABILITIES.md`, `documents/PARAMETER_MATRIX.md`, `documents/PROJECT_STRUCTURE.md`, and `documents/TECHNICAL_SPECIFICATION.md` to document LLM sweep options, conflict rules, schema-1 envelope classification, and verifier support.
+  - **Test suite consolidated without losing contract coverage**: Pruned redundant internal-detail and cross-layer duplicate tests and merged repetitive suites into table-driven coverage (`694` to `428` GTest cases, keeping real ARM64 assembly, Metal GPU, oracle, and CLI mode/transport contracts intact with unchanged Apple M4 `llvm-cov` function coverage).
+
+### Fixed
+  - **Independent verifier handles clamped worker counts and small contexts**: Separated requested vs. effective worker counts in `verify_llm_result.py` when thread count exceeds available units and aligned small-context per-worker checksum reconstruction with the producer's active-worker partitioning.
+  - **Metal paged prefill supports non-unit block remainders**: Fixed paged-prefill finalization and schema-2 `decode_append_offset_in_last_block` null handling when `prompt_tokens % kv_block_tokens != 1`.
 
 ## [0.64.0] - 2026-09-06
 
