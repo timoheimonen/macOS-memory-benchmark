@@ -107,15 +107,19 @@ static_assert(!std::is_move_assignable_v<JsonOutputSession>);
 
 }  // namespace
 
-TEST(JsonOutputTargetTest, ClassifiesDisabledStdoutAndLiteralFileTargetsBeforePathResolution) {
+TEST(JsonOutputTargetTest, ClassifiesTargetsAndPreservesFilePathPolicies) {
   const auto directory = std::filesystem::current_path();
   struct TargetCase {
     const char* raw;
     JsonOutputKind kind;
+    bool absolute;
   };
-  for (const TargetCase& entry :
-       {TargetCase{"", JsonOutputKind::Disabled}, TargetCase{"-", JsonOutputKind::Stdout},
-        TargetCase{"./-", JsonOutputKind::File}, TargetCase{"nested/result-with-dashes.json", JsonOutputKind::File}}) {
+  for (const TargetCase& entry : {TargetCase{"", JsonOutputKind::Disabled, false},
+                                  TargetCase{"-", JsonOutputKind::Stdout, false},
+                                  TargetCase{"./-", JsonOutputKind::File, false},
+                                  TargetCase{"nested/result-with-dashes.json", JsonOutputKind::File, false},
+                                  TargetCase{"nested/../result.json", JsonOutputKind::File, false},
+                                  TargetCase{"/tmp/result.json", JsonOutputKind::File, true}}) {
     for (JsonFilePathPolicy policy :
          {JsonFilePathPolicy::ResolveAgainstCurrentDirectory, JsonFilePathPolicy::PreserveRaw}) {
       SCOPED_TRACE(entry.raw);
@@ -123,37 +127,13 @@ TEST(JsonOutputTargetTest, ClassifiesDisabledStdoutAndLiteralFileTargetsBeforePa
       const JsonOutputTarget target = make_json_output_target(entry.raw, policy);
       EXPECT_EQ(target.kind, entry.kind);
       EXPECT_EQ(target.raw_value, entry.raw);
-      const std::filesystem::path expected = entry.kind != JsonOutputKind::File ? std::filesystem::path{}
-                                             : policy == JsonFilePathPolicy::PreserveRaw
-                                                 ? std::filesystem::path(entry.raw)
-                                                 : directory / entry.raw;
+      const std::filesystem::path expected =
+          entry.kind != JsonOutputKind::File
+              ? std::filesystem::path{}
+              : (entry.absolute || policy == JsonFilePathPolicy::PreserveRaw) ? std::filesystem::path(entry.raw)
+                                                                              : directory / entry.raw;
       EXPECT_EQ(target.file_path, expected);
     }
-  }
-}
-
-TEST(JsonOutputTargetTest, FilePathPoliciesPreserveTheirExistingSemantics) {
-  const std::string relative = "nested/../result.json";
-  const JsonOutputTarget resolved = make_json_output_target(
-      relative, JsonFilePathPolicy::ResolveAgainstCurrentDirectory);
-  EXPECT_EQ(resolved.kind, JsonOutputKind::File);
-  EXPECT_EQ(resolved.raw_value, relative);
-  EXPECT_EQ(resolved.file_path,
-            std::filesystem::current_path() / std::filesystem::path(relative));
-
-  const JsonOutputTarget preserved = make_json_output_target(
-      relative, JsonFilePathPolicy::PreserveRaw);
-  EXPECT_EQ(preserved.kind, JsonOutputKind::File);
-  EXPECT_EQ(preserved.raw_value, relative);
-  EXPECT_EQ(preserved.file_path, std::filesystem::path(relative));
-
-  const std::filesystem::path absolute = "/tmp/result.json";
-  for (JsonFilePathPolicy policy : {
-           JsonFilePathPolicy::ResolveAgainstCurrentDirectory,
-           JsonFilePathPolicy::PreserveRaw,
-       }) {
-    EXPECT_EQ(make_json_output_target(absolute.string(), policy).file_path,
-              absolute);
   }
 }
 
@@ -193,74 +173,76 @@ TEST(JsonOutputSessionTest, DisabledAndStdoutCheckpointsAreLazyWithoutFilePersis
   }
 }
 
-TEST(JsonOutputSessionTest,
-     StdoutCheckpointIsLazyAndFinalJsonBypassesHumanRoutingOnce) {
-  const nlohmann::ordered_json payload = {
-      {"status", "complete"}, {"nested", {{"value", 42}}}};
-  std::ostringstream stdout_capture;
-  std::ostringstream stderr_capture;
-  size_t builder_calls = 0;
-  int checkpoint_result = EXIT_FAILURE;
-  int final_result = EXIT_FAILURE;
-  JsonOutputKind kind = JsonOutputKind::Disabled;
-  bool persists_checkpoints = true;
-  bool routing_installed = false;
-  bool routing_restored = false;
-
+TEST(JsonOutputSessionTest, StdoutRoutingBypassesHumanOutputOnceAndRestoresOnUnwind) {
   {
-    ScopedStreamBuffers capture(stdout_capture.rdbuf(), stderr_capture.rdbuf());
-    std::streambuf* installed_stdout = std::cout.rdbuf();
+    SCOPED_TRACE("normal-final-write");
+    const nlohmann::ordered_json payload = {{"status", "complete"}, {"nested", {{"value", 42}}}};
+    std::ostringstream stdout_capture;
+    std::ostringstream stderr_capture;
+    size_t builder_calls = 0;
+    int checkpoint_result = EXIT_FAILURE;
+    int final_result = EXIT_FAILURE;
+    JsonOutputKind kind = JsonOutputKind::Disabled;
+    bool persists_checkpoints = true;
+    bool routing_installed = false;
+    bool routing_restored = false;
+
     {
-      JsonOutputSession session(make_json_output_target("-"));
-      kind = session.kind();
-      persists_checkpoints = session.persists_checkpoints();
-      routing_installed = std::cout.rdbuf() == std::cerr.rdbuf();
-      std::cout << "human transcript\n";
-      checkpoint_result = session.checkpoint([&]() -> nlohmann::ordered_json {
-        ++builder_calls;
-        throw std::runtime_error("stdout checkpoint builder must stay lazy");
-      });
-      final_result = session.write_final(payload, true);
+      ScopedStreamBuffers capture(stdout_capture.rdbuf(), stderr_capture.rdbuf());
+      std::streambuf* installed_stdout = std::cout.rdbuf();
+      {
+        JsonOutputSession session(make_json_output_target("-"));
+        kind = session.kind();
+        persists_checkpoints = session.persists_checkpoints();
+        routing_installed = std::cout.rdbuf() == std::cerr.rdbuf();
+        std::cout << "human transcript\n";
+        checkpoint_result = session.checkpoint([&]() -> nlohmann::ordered_json {
+          ++builder_calls;
+          throw std::runtime_error("stdout checkpoint builder must stay lazy");
+        });
+        final_result = session.write_final(payload, true);
+      }
+      routing_restored = std::cout.rdbuf() == installed_stdout;
     }
-    routing_restored = std::cout.rdbuf() == installed_stdout;
+
+    EXPECT_EQ(kind, JsonOutputKind::Stdout);
+    EXPECT_FALSE(persists_checkpoints);
+    EXPECT_TRUE(routing_installed);
+    EXPECT_TRUE(routing_restored);
+    EXPECT_EQ(checkpoint_result, EXIT_SUCCESS);
+    EXPECT_EQ(final_result, EXIT_SUCCESS);
+    EXPECT_EQ(builder_calls, 0u);
+    EXPECT_EQ(stdout_capture.str(), payload.dump(2) + "\n");
+    EXPECT_EQ(nlohmann::ordered_json::parse(stdout_capture.str()), payload);
+    EXPECT_EQ(stderr_capture.str(), "human transcript\n");
+    EXPECT_EQ(stdout_capture.str().find("Results saved"), std::string::npos);
   }
-
-  EXPECT_EQ(kind, JsonOutputKind::Stdout);
-  EXPECT_FALSE(persists_checkpoints);
-  EXPECT_TRUE(routing_installed);
-  EXPECT_TRUE(routing_restored);
-  EXPECT_EQ(checkpoint_result, EXIT_SUCCESS);
-  EXPECT_EQ(final_result, EXIT_SUCCESS);
-  EXPECT_EQ(builder_calls, 0u);
-  EXPECT_EQ(stdout_capture.str(), payload.dump(2) + "\n");
-  EXPECT_EQ(nlohmann::ordered_json::parse(stdout_capture.str()), payload);
-  EXPECT_EQ(stderr_capture.str(), "human transcript\n");
-  EXPECT_EQ(stdout_capture.str().find("Results saved"), std::string::npos);
-}
-
-TEST(JsonOutputSessionTest, RoutingRestoresOriginalStdoutDuringExceptionUnwind) {
-  std::ostringstream stdout_capture;
-  std::ostringstream stderr_capture;
-  bool caught = false;
-  bool routing_restored = false;
 
   {
-    ScopedStreamBuffers capture(stdout_capture.rdbuf(), stderr_capture.rdbuf());
-    std::streambuf* installed_stdout = std::cout.rdbuf();
-    try {
-      JsonOutputSession session(make_json_output_target("-"));
-      std::cout << "human before exception\n";
-      throw std::runtime_error("injected command exception");
-    } catch (const std::runtime_error&) {
-      caught = true;
-    }
-    routing_restored = std::cout.rdbuf() == installed_stdout;
-  }
+    SCOPED_TRACE("exception-unwind");
+    std::ostringstream stdout_capture;
+    std::ostringstream stderr_capture;
+    bool caught = false;
+    bool routing_restored = false;
 
-  EXPECT_TRUE(caught);
-  EXPECT_TRUE(routing_restored);
-  EXPECT_TRUE(stdout_capture.str().empty());
-  EXPECT_EQ(stderr_capture.str(), "human before exception\n");
+    {
+      ScopedStreamBuffers capture(stdout_capture.rdbuf(), stderr_capture.rdbuf());
+      std::streambuf* installed_stdout = std::cout.rdbuf();
+      try {
+        JsonOutputSession session(make_json_output_target("-"));
+        std::cout << "human before exception\n";
+        throw std::runtime_error("injected command exception");
+      } catch (const std::runtime_error&) {
+        caught = true;
+      }
+      routing_restored = std::cout.rdbuf() == installed_stdout;
+    }
+
+    EXPECT_TRUE(caught);
+    EXPECT_TRUE(routing_restored);
+    EXPECT_TRUE(stdout_capture.str().empty());
+    EXPECT_EQ(stderr_capture.str(), "human before exception\n");
+  }
 }
 
 TEST(JsonOutputSessionTest, FileCheckpointsUseAtomicWriterAndRetainCadence) {
@@ -307,16 +289,17 @@ TEST(JsonOutputSessionTest, FileCheckpointsUseAtomicWriterAndRetainCadence) {
   EXPECT_TRUE(stderr_capture.str().empty());
 }
 
-TEST(JsonOutputSessionTest, FailedStdoutWriteOrFlushReturnsExactFailureWithoutThrowing) {
+TEST(JsonOutputSessionTest, WriteFlushSerializationAndBuilderFailuresAreContained) {
   WriteFailingStreamBuffer write_failure;
   FlushFailingStreamBuffer flush_failure;
-  struct FailureCase {
+  struct StreamFailureCase {
     const char* name;
     std::streambuf* buffer;
     std::string reason;
   };
-  for (const FailureCase& entry : {FailureCase{"write", &write_failure, Messages::json_stdout_reason_write_failed()},
-                                   FailureCase{"flush", &flush_failure, Messages::json_stdout_reason_flush_failed()}}) {
+  for (const StreamFailureCase& entry :
+       {StreamFailureCase{"write", &write_failure, Messages::json_stdout_reason_write_failed()},
+        StreamFailureCase{"flush", &flush_failure, Messages::json_stdout_reason_flush_failed()}}) {
     SCOPED_TRACE(entry.name);
     std::ostringstream stderr_capture;
     int result = EXIT_SUCCESS;
@@ -329,66 +312,57 @@ TEST(JsonOutputSessionTest, FailedStdoutWriteOrFlushReturnsExactFailureWithoutTh
     EXPECT_EQ(stderr_capture.str(),
               Messages::error_prefix() + Messages::error_json_stdout_write_failed(entry.reason) + "\n");
   }
-}
-
-TEST(JsonOutputSessionTest, SerializationExceptionCannotEscapeBoundary) {
-  nlohmann::ordered_json payload;
-  payload["invalid_utf8"] = std::string(1, static_cast<char>(0xff));
-  std::string expected_details;
-  try {
-    (void)payload.dump(2);
-  } catch (const std::exception& error) {
-    expected_details = error.what();
-  }
-  ASSERT_FALSE(expected_details.empty());
-
-  std::ostringstream stdout_capture;
-  std::ostringstream stderr_capture;
-  int result = EXIT_SUCCESS;
 
   {
-    ScopedStreamBuffers capture(stdout_capture.rdbuf(), stderr_capture.rdbuf());
-    JsonOutputSession session(make_json_output_target("-"));
-    EXPECT_NO_THROW(result = session.write_final(payload));
+    SCOPED_TRACE("serialization-exception");
+    nlohmann::ordered_json payload;
+    payload["invalid_utf8"] = std::string(1, static_cast<char>(0xff));
+    std::string expected_details;
+    try {
+      (void)payload.dump(2);
+    } catch (const std::exception& error) {
+      expected_details = error.what();
+    }
+    ASSERT_FALSE(expected_details.empty());
+
+    std::ostringstream stdout_capture;
+    std::ostringstream stderr_capture;
+    int result = EXIT_SUCCESS;
+    {
+      ScopedStreamBuffers capture(stdout_capture.rdbuf(), stderr_capture.rdbuf());
+      JsonOutputSession session(make_json_output_target("-"));
+      EXPECT_NO_THROW(result = session.write_final(payload));
+    }
+    EXPECT_EQ(result, EXIT_FAILURE);
+    EXPECT_TRUE(stdout_capture.str().empty());
+    EXPECT_EQ(stderr_capture.str(),
+              Messages::error_prefix() + Messages::error_json_stdout_write_failed(expected_details) + "\n");
   }
-
-  EXPECT_EQ(result, EXIT_FAILURE);
-  EXPECT_TRUE(stdout_capture.str().empty());
-  EXPECT_EQ(stderr_capture.str(),
-            Messages::error_prefix() +
-                Messages::error_json_stdout_write_failed(expected_details) +
-                "\n");
-}
-
-TEST(JsonOutputSessionTest, FileCheckpointBuilderExceptionIsContained) {
-  TemporaryDirectory temporary("builder_exception");
-  const std::filesystem::path target_path = temporary.path() / "result.json";
-  std::ostringstream stdout_capture;
-  std::ostringstream stderr_capture;
-  int result = EXIT_SUCCESS;
 
   {
-    ScopedStreamBuffers capture(stdout_capture.rdbuf(), stderr_capture.rdbuf());
-    JsonOutputSession session(make_json_output_target(
-        target_path.string(), JsonFilePathPolicy::PreserveRaw));
-    EXPECT_NO_THROW(result = session.checkpoint(
-                        []() -> nlohmann::ordered_json {
-                          throw std::runtime_error("injected builder exception");
-                        },
-                        false));
+    SCOPED_TRACE("file-builder-exception");
+    TemporaryDirectory temporary("builder_exception");
+    const std::filesystem::path target_path = temporary.path() / "result.json";
+    std::ostringstream stdout_capture;
+    std::ostringstream stderr_capture;
+    int result = EXIT_SUCCESS;
+    {
+      ScopedStreamBuffers capture(stdout_capture.rdbuf(), stderr_capture.rdbuf());
+      JsonOutputSession session(make_json_output_target(target_path.string(), JsonFilePathPolicy::PreserveRaw));
+      EXPECT_NO_THROW(result = session.checkpoint(
+                          []() -> nlohmann::ordered_json { throw std::runtime_error("injected builder exception"); },
+                          false));
+    }
+    EXPECT_EQ(result, EXIT_FAILURE);
+    EXPECT_FALSE(std::filesystem::exists(target_path));
+    EXPECT_TRUE(stdout_capture.str().empty());
+    EXPECT_EQ(stderr_capture.str(),
+              Messages::error_prefix() +
+                  Messages::error_file_write_failed(
+                      target_path.string(),
+                      Messages::error_json_payload_construction_failed("injected builder exception")) +
+                  "\n");
   }
-
-  EXPECT_EQ(result, EXIT_FAILURE);
-  EXPECT_FALSE(std::filesystem::exists(target_path));
-  EXPECT_TRUE(stdout_capture.str().empty());
-  EXPECT_EQ(
-      stderr_capture.str(),
-      Messages::error_prefix() +
-          Messages::error_file_write_failed(
-              target_path.string(),
-              Messages::error_json_payload_construction_failed(
-                  "injected builder exception")) +
-          "\n");
 }
 
 TEST(JsonOutputSessionTest, FileObservationsCountWriterEntryAfterBuilderAndOnlySuccessfulReturns) {

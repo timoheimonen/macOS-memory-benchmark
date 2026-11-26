@@ -134,112 +134,166 @@ TlbMeasurementRecord make_paired_tlb_record(TlbMeasurementPass pass,
   return record;
 }
 
+struct TlbSchemaFixture {
+  BenchmarkConfig config;
+  std::string cpu_name = "test-cpu";
+  std::vector<size_t> localities_bytes = {16 * Constants::BYTES_PER_KB};
+  std::vector<TlbSweepPoint> sweep_points = {{0, 1, 1, 16 * Constants::BYTES_PER_KB, 64, 256, "base",
+                                              16 * Constants::BYTES_PER_KB, 16 * Constants::BYTES_PER_KB}};
+  std::vector<TlbMeasurementRecord> measurement_records;
+  TlbBoundaryDetection l1_boundary;
+  TlbBoundaryDetection l2_boundary;
+  PrivateCacheKneeDetection private_cache_knee;
+
+  TlbAnalysisJsonContext make_context(const std::string& status, bool conclusions_valid) const {
+    return TlbAnalysisJsonContext{
+        config,
+        cpu_name,
+        4,
+        6,
+        16384,
+        131072,
+        1024 * 1024,
+        64,
+        2,
+        1000,
+        16 * Constants::BYTES_PER_KB,
+        512 * Constants::BYTES_PER_MB,
+        1024,
+        true,
+        status,
+        1,
+        1,
+        1,
+        1,
+        conclusions_valid,
+        conclusions_valid,
+        sweep_points,
+        measurement_records,
+        localities_bytes,
+        l1_boundary,
+        l2_boundary,
+        private_cache_knee,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        false,
+        0,
+        0,
+        true,
+        false,
+        3.0,
+    };
+  }
+};
+
 }  // namespace
 
-TEST(JsonSchemaTest, BenchmarkSchemaV3IncludesCompletionAndNullableMeasurements) {
-  const TemporaryJsonFile output_file("benchmark_v3");
-  BenchmarkConfig config;
-  config.output_file = output_file.path().string();
-  config.run_benchmark = true;
-  config.only_bandwidth = true;
-  config.buffer_size = 4096;
-  config.buffer_size_mb = 1;
-  config.benchmark_seed = 18446744073709551615ULL;
-  config.user_specified_benchmark_seed = true;
+TEST(JsonSchemaTest, BenchmarkSchemaV3CompletionNullableAndAggregateContract) {
+  EXPECT_EQ(Constants::BENCHMARK_JSON_SCHEMA_VERSION, 3);
 
-  BenchmarkResults loop;
-  loop.status = BenchmarkRunStatus::Partial;
-  loop.status_reason = "interrupted by user";
-  loop.loop_index = 0;
-  loop.planned_phases = 1;
-  loop.completed_phases = 0;
-  loop.planned_measurements = 3;
-  loop.completed_measurements = 1;
-  loop.planned_phase_order = {"main-bandwidth"};
-  loop.realized_phase_order = {"main-bandwidth"};
-  set_measurement_value(loop.main_read_bandwidth, 12.5, 0.150);
-  loop.main_read_bandwidth.target = "main-memory";
-  loop.main_read_bandwidth.operation = "read";
-  loop.main_read_bandwidth.work_policy = "automatic-duration-calibration";
-  loop.main_read_bandwidth.automatic_calibration = true;
-  loop.main_read_bandwidth.duration_within_target = true;
-  loop.main_read_bandwidth.duration_quality = "within-target-window";
-  loop.main_read_bandwidth.pilot_elapsed_seconds = 0.010;
-  loop.main_read_bandwidth.buffer_size_bytes = 4096;
-  loop.main_read_bandwidth.passes = 16;
-  loop.main_read_bandwidth.exact_payload_bytes = 65536;
-  loop.main_read_bandwidth.requested_threads = 4;
-  loop.main_read_bandwidth.effective_threads = 4;
-  loop.main_read_bandwidth.created_workers = 4;
-  loop.main_read_bandwidth.qos_outcome = "applied-to-all-workers";
-  loop.main_read_bandwidth.qos_successful_workers = 4;
-  set_measurement_unavailable(loop.main_write_bandwidth,
-                              BenchmarkMeasurementStatus::Interrupted,
-                              "interrupted during measured operation");
+  {
+    SCOPED_TRACE("nullable-and-populated-file");
+    const TemporaryJsonFile output_file("benchmark_v3");
+    BenchmarkConfig config;
+    config.output_file = output_file.path().string();
+    config.run_benchmark = true;
+    config.only_bandwidth = true;
+    config.buffer_size = 4096;
+    config.buffer_size_mb = 1;
+    config.benchmark_seed = 18446744073709551615ULL;
+    config.user_specified_benchmark_seed = true;
 
-  BenchmarkStatistics stats;
-  stats.status = BenchmarkRunStatus::Partial;
-  stats.status_reason = "interrupted by user";
-  stats.planned_loops = 2;
-  stats.completed_loops = 0;
-  stats.planned_measurements = 6;
-  stats.completed_measurements = 1;
-  stats.loop_results.push_back(loop);
+    BenchmarkResults loop;
+    loop.status = BenchmarkRunStatus::Partial;
+    loop.status_reason = "interrupted by user";
+    loop.loop_index = 0;
+    loop.planned_phases = 1;
+    loop.completed_phases = 0;
+    loop.planned_measurements = 3;
+    loop.completed_measurements = 1;
+    loop.planned_phase_order = {"main-bandwidth"};
+    loop.realized_phase_order = {"main-bandwidth"};
+    set_measurement_value(loop.main_read_bandwidth, 12.5, 0.150);
+    loop.main_read_bandwidth.target = "main-memory";
+    loop.main_read_bandwidth.operation = "read";
+    loop.main_read_bandwidth.work_policy = "automatic-duration-calibration";
+    loop.main_read_bandwidth.automatic_calibration = true;
+    loop.main_read_bandwidth.duration_within_target = true;
+    loop.main_read_bandwidth.duration_quality = "within-target-window";
+    loop.main_read_bandwidth.pilot_elapsed_seconds = 0.010;
+    loop.main_read_bandwidth.buffer_size_bytes = 4096;
+    loop.main_read_bandwidth.passes = 16;
+    loop.main_read_bandwidth.exact_payload_bytes = 65536;
+    loop.main_read_bandwidth.requested_threads = 4;
+    loop.main_read_bandwidth.effective_threads = 4;
+    loop.main_read_bandwidth.created_workers = 4;
+    loop.main_read_bandwidth.qos_outcome = "applied-to-all-workers";
+    loop.main_read_bandwidth.qos_successful_workers = 4;
+    set_measurement_unavailable(loop.main_write_bandwidth, BenchmarkMeasurementStatus::Interrupted,
+                                "interrupted during measured operation");
 
-  for (bool populated : {true, false}) {
-    SCOPED_TRACE(populated);
-    if (!populated) {
-      config.only_latency = true;
-      stats = BenchmarkStatistics{};
+    BenchmarkStatistics stats;
+    stats.status = BenchmarkRunStatus::Partial;
+    stats.status_reason = "interrupted by user";
+    stats.planned_loops = 2;
+    stats.completed_loops = 0;
+    stats.planned_measurements = 6;
+    stats.completed_measurements = 1;
+    stats.loop_results.push_back(loop);
+
+    for (bool populated : {true, false}) {
+      SCOPED_TRACE(populated);
+      if (!populated) {
+        config.only_latency = true;
+        stats = BenchmarkStatistics{};
+      }
+      ASSERT_EQ(save_results_to_json(config, stats, 1.0), EXIT_SUCCESS);
+      const nlohmann::json output = read_json_file(config.output_file);
+      EXPECT_EQ(output["configuration"]["benchmark_schema_version"], Constants::BENCHMARK_JSON_SCHEMA_VERSION);
+      EXPECT_EQ(output["configuration"]["methodology_version"], "benchmark-v2-calibrated-seeded-balanced");
+      EXPECT_DOUBLE_EQ(output["configuration"]["latency_calibration_window_max_seconds"], 0.300);
+      EXPECT_EQ(output["configuration"]["benchmark_seed"], "18446744073709551615");
+      EXPECT_EQ(output["configuration"]["output_file"], config.output_file);
+      EXPECT_EQ(output[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::BENCHMARK_JSON_MODE_NAME);
+      EXPECT_TRUE(output[JsonKeys::CONFIGURATION].contains(JsonKeys::LATENCY_CHAIN_MODE));
+      if (!populated) {
+        EXPECT_FALSE(output.contains(JsonKeys::MAIN_MEMORY));
+        EXPECT_FALSE(output.contains(JsonKeys::CACHE));
+        continue;
+      }
+      EXPECT_EQ(output["status"], "partial");
+      EXPECT_FALSE(output["results_complete"].get<bool>());
+      EXPECT_FALSE(output["conclusions_valid"].get<bool>());
+      EXPECT_EQ(output["planned_loops"], 2u);
+      ASSERT_EQ(output["loops"].size(), 1u);
+      const nlohmann::json measurements = output["loops"][0]["measurements"];
+      EXPECT_EQ(measurements["main_read_bandwidth"]["status"], "measured");
+      EXPECT_DOUBLE_EQ(measurements["main_read_bandwidth"]["value"].get<double>(), 12.5);
+      EXPECT_EQ(measurements["main_read_bandwidth"]["passes"], 16u);
+      EXPECT_EQ(measurements["main_read_bandwidth"]["qos_outcome"], "applied-to-all-workers");
+      EXPECT_EQ(measurements["main_read_bandwidth"]["qos_successful_workers"], 4u);
+      EXPECT_EQ(measurements["main_read_bandwidth"]["created_workers"], 4);
+      EXPECT_EQ(measurements["main_write_bandwidth"]["status"], "interrupted");
+      EXPECT_TRUE(measurements["main_write_bandwidth"]["value"].is_null());
+      EXPECT_EQ(output["main_memory"]["bandwidth"]["read_gb_s"]["value"], 12.5);
+      EXPECT_TRUE(output["main_memory"]["bandwidth"]["write_gb_s"]["value"].is_null());
     }
-    ASSERT_EQ(save_results_to_json(config, stats, 1.0), EXIT_SUCCESS);
-    const nlohmann::json output = read_json_file(config.output_file);
-    EXPECT_EQ(output["configuration"]["benchmark_schema_version"], Constants::BENCHMARK_JSON_SCHEMA_VERSION);
-    EXPECT_EQ(output["configuration"]["methodology_version"], "benchmark-v2-calibrated-seeded-balanced");
-    EXPECT_DOUBLE_EQ(output["configuration"]["latency_calibration_window_max_seconds"], 0.300);
-    EXPECT_EQ(output["configuration"]["benchmark_seed"], "18446744073709551615");
-    EXPECT_EQ(output["configuration"]["output_file"], config.output_file);
-    EXPECT_EQ(output[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::BENCHMARK_JSON_MODE_NAME);
-    EXPECT_TRUE(output[JsonKeys::CONFIGURATION].contains(JsonKeys::LATENCY_CHAIN_MODE));
-    if (!populated) {
-      EXPECT_FALSE(output.contains(JsonKeys::MAIN_MEMORY));
-      EXPECT_FALSE(output.contains(JsonKeys::CACHE));
-      continue;
-    }
-    EXPECT_EQ(output["status"], "partial");
-    EXPECT_FALSE(output["results_complete"].get<bool>());
-    EXPECT_FALSE(output["conclusions_valid"].get<bool>());
-    EXPECT_EQ(output["planned_loops"], 2u);
-    ASSERT_EQ(output["loops"].size(), 1u);
-    const nlohmann::json measurements = output["loops"][0]["measurements"];
-    EXPECT_EQ(measurements["main_read_bandwidth"]["status"], "measured");
-    EXPECT_DOUBLE_EQ(measurements["main_read_bandwidth"]["value"].get<double>(), 12.5);
-    EXPECT_EQ(measurements["main_read_bandwidth"]["passes"], 16u);
-    EXPECT_EQ(measurements["main_read_bandwidth"]["qos_outcome"], "applied-to-all-workers");
-    EXPECT_EQ(measurements["main_read_bandwidth"]["qos_successful_workers"], 4u);
-    EXPECT_EQ(measurements["main_read_bandwidth"]["created_workers"], 4);
-    EXPECT_EQ(measurements["main_write_bandwidth"]["status"], "interrupted");
-    EXPECT_TRUE(measurements["main_write_bandwidth"]["value"].is_null());
-    EXPECT_EQ(output["main_memory"]["bandwidth"]["read_gb_s"]["value"], 12.5);
-    EXPECT_TRUE(output["main_memory"]["bandwidth"]["write_gb_s"]["value"].is_null());
   }
-}
 
-TEST(JsonSchemaTest, BenchmarkSchemaV3SerializesExactCompletionContract) {
   struct StatusCase {
     BenchmarkRunStatus status;
     const char* expected_status;
     bool expected_complete;
   };
-  const std::vector<StatusCase> status_cases = {
-      {BenchmarkRunStatus::Complete, "complete", true},
-      {BenchmarkRunStatus::Partial, "partial", false},
-      {BenchmarkRunStatus::Interrupted, "interrupted", false},
-      {BenchmarkRunStatus::Failed, "failed", false},
-  };
-
-  EXPECT_EQ(Constants::BENCHMARK_JSON_SCHEMA_VERSION, 3);
-  for (const StatusCase& status_case : status_cases) {
+  for (const StatusCase& status_case : {StatusCase{BenchmarkRunStatus::Complete, "complete", true},
+                                        StatusCase{BenchmarkRunStatus::Partial, "partial", false},
+                                        StatusCase{BenchmarkRunStatus::Interrupted, "interrupted", false},
+                                        StatusCase{BenchmarkRunStatus::Failed, "failed", false}}) {
     SCOPED_TRACE(status_case.expected_status);
     BenchmarkConfig config;
     BenchmarkStatistics stats;
@@ -250,354 +304,281 @@ TEST(JsonSchemaTest, BenchmarkSchemaV3SerializesExactCompletionContract) {
     stats.completed_measurements = 1;
 
     const nlohmann::json output = build_results_json(config, stats, 1.0);
-    EXPECT_EQ(output["configuration"]["benchmark_schema_version"],
-              Constants::BENCHMARK_JSON_SCHEMA_VERSION);
+    EXPECT_EQ(output["configuration"]["benchmark_schema_version"], Constants::BENCHMARK_JSON_SCHEMA_VERSION);
     ASSERT_TRUE(output["configuration"]["output_file"].is_string());
     EXPECT_EQ(output["configuration"]["output_file"], "");
     EXPECT_EQ(output["status"], status_case.expected_status);
     ASSERT_TRUE(output["results_complete"].is_boolean());
     ASSERT_TRUE(output["conclusions_valid"].is_boolean());
-    EXPECT_EQ(output["results_complete"].get<bool>(),
-              status_case.expected_complete);
-    EXPECT_EQ(output["conclusions_valid"].get<bool>(),
-              output["results_complete"].get<bool>());
+    EXPECT_EQ(output["results_complete"].get<bool>(), status_case.expected_complete);
+    EXPECT_EQ(output["conclusions_valid"].get<bool>(), output["results_complete"].get<bool>());
+  }
+
+  {
+    SCOPED_TRACE("aggregate-median-cv-mad");
+    BenchmarkConfig config;
+    config.only_bandwidth = true;
+    config.buffer_size = 4096;
+    BenchmarkStatistics stats;
+    stats.status = BenchmarkRunStatus::Complete;
+    stats.planned_loops = 3;
+    stats.completed_loops = 3;
+    stats.planned_measurements = 9;
+    stats.completed_measurements = 9;
+    for (size_t index = 0; index < 3; ++index) {
+      BenchmarkResults loop;
+      loop.status = BenchmarkRunStatus::Complete;
+      loop.loop_index = index;
+      const double value = index == 0 ? 10.0 : index == 1 ? 20.0 : 100.0;
+      set_measurement_value(loop.main_read_bandwidth, value, 0.150);
+      loop.main_read_bandwidth.duration_within_target = true;
+      stats.loop_results.push_back(loop);
+    }
+
+    const nlohmann::json output = build_results_json(config, stats, 1.0);
+    const nlohmann::json aggregate = output["main_memory"]["bandwidth"]["read_gb_s"];
+    EXPECT_DOUBLE_EQ(aggregate["value"].get<double>(), 20.0);
+    EXPECT_EQ(aggregate["headline_semantics"], "median-p50-across-loop-headlines");
+    EXPECT_TRUE(aggregate["statistics"].contains("coefficient_of_variation_pct"));
+    EXPECT_TRUE(aggregate["statistics"].contains("median_absolute_deviation"));
+    EXPECT_DOUBLE_EQ(aggregate["statistics"]["median_absolute_deviation"].get<double>(), 10.0);
   }
 }
 
-TEST(JsonSchemaTest, BenchmarkAggregateHeadlineUsesMedianAndReportsCvAndMad) {
-  BenchmarkConfig config;
-  config.only_bandwidth = true;
-  config.buffer_size = 4096;
-  BenchmarkStatistics stats;
-  stats.status = BenchmarkRunStatus::Complete;
-  stats.planned_loops = 3;
-  stats.completed_loops = 3;
-  stats.planned_measurements = 9;
-  stats.completed_measurements = 9;
-  for (size_t index = 0; index < 3; ++index) {
-    BenchmarkResults loop;
-    loop.status = BenchmarkRunStatus::Complete;
-    loop.loop_index = index;
-    const double value = index == 0 ? 10.0 : index == 1 ? 20.0 : 100.0;
-    set_measurement_value(loop.main_read_bandwidth, value, 0.150);
-    loop.main_read_bandwidth.duration_within_target = true;
-    stats.loop_results.push_back(loop);
+TEST(JsonSchemaTest, PatternSchemaV3CompletionAndMethodologyContract) {
+  {
+    SCOPED_TRACE("not-started-exporter");
+    const TemporaryJsonFile output_file("patterns_schema");
+    BenchmarkConfig config;
+    config.output_file = output_file.path().string();
+    config.pattern_seed = 42;
+    config.user_specified_pattern_seed = true;
+
+    PatternStatistics stats;
+    ASSERT_EQ(save_pattern_results_to_json(config, stats, 2.0), EXIT_SUCCESS);
+
+    const nlohmann::json output_json = read_json_file(config.output_file);
+    EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::PATTERNS_JSON_MODE_NAME);
+    EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["pattern_schema_version"], 3);
+    EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["methodology_version"], "pattern-v2-phase-calibrated-seeded");
+    EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["pattern_seed"], "42");
+    EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["thread_selection_policy"], "detected-core-count-default");
+    EXPECT_EQ(output_json["status"], "not-started");
+    EXPECT_FALSE(output_json["results_complete"].get<bool>());
+    EXPECT_FALSE(output_json.contains(JsonKeys::PATTERNS));
   }
 
-  const nlohmann::json output = build_results_json(config, stats, 1.0);
-  const nlohmann::json aggregate =
-      output["main_memory"]["bandwidth"]["read_gb_s"];
-  EXPECT_DOUBLE_EQ(aggregate["value"].get<double>(), 20.0);
-  EXPECT_EQ(aggregate["headline_semantics"],
-            "median-p50-across-loop-headlines");
-  EXPECT_TRUE(aggregate["statistics"].contains(
-      "coefficient_of_variation_pct"));
-  EXPECT_TRUE(aggregate["statistics"].contains(
-      "median_absolute_deviation"));
-  EXPECT_DOUBLE_EQ(
-      aggregate["statistics"]["median_absolute_deviation"].get<double>(),
-      10.0);
-}
+  {
+    SCOPED_TRACE("completion-status-contract");
+    BenchmarkConfig config;
+    config.loop_count = 1;
+    PatternStatistics statistics;
+    initialize_pattern_statistics(statistics, 1);
+    PatternResults loop;
+    for (PatternMeasurement& measurement : loop.measurements) {
+      measurement.status = PatternMeasurementStatus::Skipped;
+      measurement.status_reason = "intentional test skip";
+    }
+    collect_pattern_loop_result(statistics, std::move(loop));
 
-TEST(JsonSchemaTest, PatternExporterIncludesPatternsMode) {
-  const TemporaryJsonFile output_file("patterns_schema");
-  BenchmarkConfig config;
-  config.output_file = output_file.path().string();
-  config.pattern_seed = 42;
-  config.user_specified_pattern_seed = true;
+    nlohmann::json output = build_pattern_results_json(config, statistics, 1.0);
+    EXPECT_EQ(output["status"], "complete");
+    EXPECT_EQ(output["status_reason"], "");
+    EXPECT_EQ(output["planned_loops"], 1u);
+    EXPECT_EQ(output["completed_loops"], 1u);
+    EXPECT_EQ(output["planned_measurements"], 21u);
+    EXPECT_EQ(output["completed_measurements"], 21u);
+    EXPECT_TRUE(output["results_complete"].get<bool>());
+    EXPECT_TRUE(output.contains(JsonKeys::PATTERNS));
 
-  PatternStatistics stats;
-  ASSERT_EQ(save_pattern_results_to_json(config, stats, 2.0), EXIT_SUCCESS);
-
-  const nlohmann::json output_json = read_json_file(config.output_file);
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::PATTERNS_JSON_MODE_NAME);
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["pattern_schema_version"], 3);
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["methodology_version"],
-            "pattern-v2-phase-calibrated-seeded");
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["pattern_seed"], "42");
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["thread_selection_policy"],
-            "detected-core-count-default");
-  EXPECT_EQ(output_json["status"], "not-started");
-  EXPECT_FALSE(output_json["results_complete"].get<bool>());
-  EXPECT_FALSE(output_json.contains(JsonKeys::PATTERNS));
-}
-
-TEST(JsonSchemaTest, PatternSchemaV3SerializesExactCompletionContract) {
-  BenchmarkConfig config;
-  config.loop_count = 1;
-  PatternStatistics statistics;
-  initialize_pattern_statistics(statistics, 1);
-  PatternResults loop;
-  for (PatternMeasurement& measurement : loop.measurements) {
-    measurement.status = PatternMeasurementStatus::Skipped;
-    measurement.status_reason = "intentional test skip";
-  }
-  collect_pattern_loop_result(statistics, std::move(loop));
-
-  nlohmann::json output = build_pattern_results_json(config, statistics, 1.0);
-  EXPECT_EQ(output["status"], "complete");
-  EXPECT_EQ(output["status_reason"], "");
-  EXPECT_EQ(output["planned_loops"], 1u);
-  EXPECT_EQ(output["completed_loops"], 1u);
-  EXPECT_EQ(output["planned_measurements"], 21u);
-  EXPECT_EQ(output["completed_measurements"], 21u);
-  EXPECT_TRUE(output["results_complete"].get<bool>());
-  EXPECT_TRUE(output.contains(JsonKeys::PATTERNS));
-
-  initialize_pattern_statistics(statistics, 2);
-  statistics.status = PatternRunStatus::Failed;
-  statistics.status_reason =
-      Messages::pattern_reason_buffers_allocation_failed();
-  output = build_pattern_results_json(config, statistics, 0.0);
-  EXPECT_EQ(output["status"], "failed");
-  EXPECT_EQ(output["status_reason"],
-            Messages::pattern_reason_buffers_allocation_failed());
-  EXPECT_EQ(output["planned_loops"], 2u);
-  EXPECT_EQ(output["completed_loops"], 0u);
-  EXPECT_EQ(output["planned_measurements"], 42u);
-  EXPECT_EQ(output["completed_measurements"], 0u);
-  EXPECT_FALSE(output["results_complete"].get<bool>());
-  EXPECT_FALSE(output.contains(JsonKeys::PATTERNS));
-
-  statistics.status = PatternRunStatus::Partial;
-  statistics.status_reason = "pattern loop incomplete";
-  statistics.completed_loops = 1;
-  statistics.completed_measurements = 21;
-  output = build_pattern_results_json(config, statistics, 0.5);
-  EXPECT_EQ(output["status"], "partial");
-  EXPECT_EQ(output["status_reason"], "pattern loop incomplete");
-  EXPECT_EQ(output["planned_loops"], 2u);
-  EXPECT_EQ(output["completed_loops"], 1u);
-  EXPECT_EQ(output["planned_measurements"], 42u);
-  EXPECT_EQ(output["completed_measurements"], 21u);
-  EXPECT_FALSE(output["results_complete"].get<bool>());
-
-  statistics.status = PatternRunStatus::Interrupted;
-  statistics.status_reason = "stop requested";
-  output = build_pattern_results_json(config, statistics, 0.6);
-  EXPECT_EQ(output["status"], "interrupted");
-  EXPECT_EQ(output["status_reason"], "stop requested");
-  EXPECT_EQ(output["planned_loops"], 2u);
-  EXPECT_EQ(output["completed_loops"], 1u);
-  EXPECT_EQ(output["planned_measurements"], 42u);
-  EXPECT_EQ(output["completed_measurements"], 21u);
-  EXPECT_FALSE(output["results_complete"].get<bool>());
-}
-
-TEST(JsonSchemaTest, PatternMeasurementsIncludeStatusAndMethodologyMetadata) {
-  const TemporaryJsonFile output_file("patterns_metadata");
-  BenchmarkConfig config;
-  config.output_file = output_file.path().string();
-  config.pattern_seed = 18446744073709551615ULL;
-  config.user_specified_pattern_seed = true;
-
-  PatternResults loop;
-  for (PatternMeasurement& measurement : loop.measurements) {
-    measurement.status = PatternMeasurementStatus::Skipped;
-    measurement.status_reason = "intentional test skip";
-  }
-  PatternMeasurement measured;
-  measured.status = PatternMeasurementStatus::Measured;
-  measured.status_reason.clear();
-  measured.bandwidth_gb_s = 12.5;
-  measured.elapsed_seconds = 0.150;
-  measured.pilot_elapsed_seconds = 0.010;
-  measured.access_size_bytes = 32;
-  measured.requested_threads = 4;
-  measured.effective_threads = 4;
-  measured.accesses_per_pass = 100;
-  measured.min_accesses_per_pass = 100;
-  measured.max_accesses_per_pass = 100;
-  measured.passes = 10;
-  measured.total_accesses = 1000;
-  measured.total_payload_bytes = 32000;
-  measured.distinct_address_count = 100;
-  measured.logical_working_set_bytes = 4096;
-  measured.native_page_size_bytes = 16384;
-  measured.automatic_calibration = true;
-  measured.benchmark_loop_index = 3;
-  measured.pattern_order_index = 2;
-  set_pattern_measurement(loop, PatternKind::SequentialForward,
-                          PatternOperation::Read, measured);
-
-  PatternMeasurement phased = measured;
-  phased.stride_bytes = Constants::PATTERN_STRIDE_CACHE_LINE;
-  phased.accesses_per_pass = 2;
-  phased.min_accesses_per_pass = 1;
-  phased.max_accesses_per_pass = 2;
-  phased.phase_period_passes = 2;
-  set_pattern_measurement(loop, PatternKind::Strided64,
-                          PatternOperation::Read, std::move(phased));
-
-  for (PatternOperation operation : {PatternOperation::Read, PatternOperation::Write,
-                                     PatternOperation::Copy}) {
-    PatternMeasurement skipped;
-    skipped.status = PatternMeasurementStatus::Skipped;
-    skipped.status_reason = "buffer cannot provide a valid stride transition";
-    skipped.access_size_bytes = 32;
-    skipped.stride_bytes = Constants::PATTERN_STRIDE_SUPERPAGE_2MB;
-    skipped.requested_threads = 4;
-    skipped.native_page_size_bytes = 16384;
-    set_pattern_measurement(loop, PatternKind::Strided2MiB, operation,
-                            std::move(skipped));
+    struct IncompletePatternCase {
+      PatternRunStatus status;
+      const char* expected_status;
+      std::string reason;
+      size_t completed_loops;
+      size_t completed_measurements;
+      double elapsed;
+      bool check_no_patterns_key;
+    };
+    const IncompletePatternCase incomplete_cases[] = {
+        {PatternRunStatus::Failed, "failed", Messages::pattern_reason_buffers_allocation_failed(), 0, 0, 0.0, true},
+        {PatternRunStatus::Partial, "partial", "pattern loop incomplete", 1, 21, 0.5, false},
+        {PatternRunStatus::Interrupted, "interrupted", "stop requested", 1, 21, 0.6, false},
+    };
+    initialize_pattern_statistics(statistics, 2);
+    for (const IncompletePatternCase& entry : incomplete_cases) {
+      SCOPED_TRACE(entry.expected_status);
+      statistics.status = entry.status;
+      statistics.status_reason = entry.reason;
+      statistics.completed_loops = entry.completed_loops;
+      statistics.completed_measurements = entry.completed_measurements;
+      output = build_pattern_results_json(config, statistics, entry.elapsed);
+      EXPECT_EQ(output["status"], entry.expected_status);
+      EXPECT_EQ(output["status_reason"], entry.reason);
+      EXPECT_EQ(output["planned_loops"], 2u);
+      EXPECT_EQ(output["completed_loops"], entry.completed_loops);
+      EXPECT_EQ(output["planned_measurements"], 42u);
+      EXPECT_EQ(output["completed_measurements"], entry.completed_measurements);
+      EXPECT_FALSE(output["results_complete"].get<bool>());
+      if (entry.check_no_patterns_key) {
+        EXPECT_FALSE(output.contains(JsonKeys::PATTERNS));
+      }
+    }
   }
 
-  PatternMeasurement random = measured;
-  random.has_seed = true;
-  random.seed = config.pattern_seed;
-  set_pattern_measurement(loop, PatternKind::Random, PatternOperation::Read,
-                          std::move(random));
+  {
+    SCOPED_TRACE("measured-phased-skipped-random-metadata");
+    const TemporaryJsonFile output_file("patterns_metadata");
+    BenchmarkConfig config;
+    config.output_file = output_file.path().string();
+    config.pattern_seed = 18446744073709551615ULL;
+    config.user_specified_pattern_seed = true;
 
-  PatternStatistics statistics;
-  initialize_pattern_statistics(statistics, 1);
-  collect_pattern_loop_result(statistics, std::move(loop));
+    PatternResults loop;
+    for (PatternMeasurement& measurement : loop.measurements) {
+      measurement.status = PatternMeasurementStatus::Skipped;
+      measurement.status_reason = "intentional test skip";
+    }
+    PatternMeasurement measured;
+    measured.status = PatternMeasurementStatus::Measured;
+    measured.status_reason.clear();
+    measured.bandwidth_gb_s = 12.5;
+    measured.elapsed_seconds = 0.150;
+    measured.pilot_elapsed_seconds = 0.010;
+    measured.access_size_bytes = 32;
+    measured.requested_threads = 4;
+    measured.effective_threads = 4;
+    measured.accesses_per_pass = 100;
+    measured.min_accesses_per_pass = 100;
+    measured.max_accesses_per_pass = 100;
+    measured.passes = 10;
+    measured.total_accesses = 1000;
+    measured.total_payload_bytes = 32000;
+    measured.distinct_address_count = 100;
+    measured.logical_working_set_bytes = 4096;
+    measured.native_page_size_bytes = 16384;
+    measured.automatic_calibration = true;
+    measured.benchmark_loop_index = 3;
+    measured.pattern_order_index = 2;
+    set_pattern_measurement(loop, PatternKind::SequentialForward, PatternOperation::Read, measured);
 
-  ASSERT_EQ(save_pattern_results_to_json(config, statistics, 1.0), EXIT_SUCCESS);
-  const nlohmann::json output = read_json_file(config.output_file);
-  const nlohmann::json forward =
-      output[JsonKeys::PATTERNS][JsonKeys::SEQUENTIAL_FORWARD];
-  EXPECT_EQ(forward["methodology_version"],
-            "pattern-v2-phase-calibrated-seeded");
-  EXPECT_EQ(forward["warmup_semantics"], "steady-state-same-shape");
-  const nlohmann::json read =
-      forward[JsonKeys::BANDWIDTH][JsonKeys::READ_GB_S];
-  EXPECT_EQ(read["status"], "measured");
-  EXPECT_DOUBLE_EQ(read["value_gb_s"].get<double>(), 12.5);
-  EXPECT_DOUBLE_EQ(
-      read["statistics"]["median_absolute_deviation"].get<double>(), 0.0);
-  ASSERT_EQ(read["measurements"].size(), 1u);
-  EXPECT_EQ(read["measurements"][0]["passes"], 10u);
-  EXPECT_EQ(read["measurements"][0]["accesses_per_pass_semantics"],
-            "constant-count");
-  EXPECT_EQ(read["measurements"][0]["total_payload_bytes"], 32000u);
-  EXPECT_EQ(read["measurements"][0]["benchmark_loop_index"], 3u);
-  EXPECT_EQ(read["measurements"][0]["pattern_order_index"], 2u);
-  EXPECT_EQ(output[JsonKeys::CONFIGURATION]["pattern_execution_order_policy"],
-            "cyclic-latin-square-across-count-loops");
-  const nlohmann::json phased_json =
-      output[JsonKeys::PATTERNS][JsonKeys::STRIDED_64][JsonKeys::BANDWIDTH]
-            [JsonKeys::READ_GB_S]["measurements"][0];
-  EXPECT_EQ(phased_json["accesses_per_pass_semantics"], "phase-zero-count");
-  EXPECT_EQ(phased_json["min_accesses_per_pass"], 1u);
-  EXPECT_EQ(phased_json["max_accesses_per_pass"], 2u);
-  EXPECT_EQ(phased_json["phase_period_passes"], 2u);
+    PatternMeasurement phased = measured;
+    phased.stride_bytes = Constants::PATTERN_STRIDE_CACHE_LINE;
+    phased.accesses_per_pass = 2;
+    phased.min_accesses_per_pass = 1;
+    phased.max_accesses_per_pass = 2;
+    phased.phase_period_passes = 2;
+    set_pattern_measurement(loop, PatternKind::Strided64, PatternOperation::Read, std::move(phased));
 
-  const nlohmann::json skipped = output[JsonKeys::PATTERNS][JsonKeys::STRIDED_2MB]
-      [JsonKeys::BANDWIDTH][JsonKeys::READ_GB_S];
-  EXPECT_EQ(skipped["status"], "skipped");
-  EXPECT_TRUE(skipped["value_gb_s"].is_null());
-  EXPECT_EQ(skipped["measurements"][0]["accesses_per_pass_semantics"],
-            "phase-zero-count");
-  EXPECT_FALSE(output[JsonKeys::PATTERNS][JsonKeys::STRIDED_2MB]
-                   ["large_page_backing_verified"]
-                       .get<bool>());
+    for (PatternOperation operation : {PatternOperation::Read, PatternOperation::Write, PatternOperation::Copy}) {
+      PatternMeasurement skipped;
+      skipped.status = PatternMeasurementStatus::Skipped;
+      skipped.status_reason = "buffer cannot provide a valid stride transition";
+      skipped.access_size_bytes = 32;
+      skipped.stride_bytes = Constants::PATTERN_STRIDE_SUPERPAGE_2MB;
+      skipped.requested_threads = 4;
+      skipped.native_page_size_bytes = 16384;
+      set_pattern_measurement(loop, PatternKind::Strided2MiB, operation, std::move(skipped));
+    }
 
-  const nlohmann::json random_json =
-      output[JsonKeys::PATTERNS][JsonKeys::RANDOM];
-  EXPECT_EQ(random_json["seed"], "18446744073709551615");
+    PatternMeasurement random = measured;
+    random.has_seed = true;
+    random.seed = config.pattern_seed;
+    set_pattern_measurement(loop, PatternKind::Random, PatternOperation::Read, std::move(random));
+
+    PatternStatistics statistics;
+    initialize_pattern_statistics(statistics, 1);
+    collect_pattern_loop_result(statistics, std::move(loop));
+
+    ASSERT_EQ(save_pattern_results_to_json(config, statistics, 1.0), EXIT_SUCCESS);
+    const nlohmann::json output = read_json_file(config.output_file);
+    const nlohmann::json forward = output[JsonKeys::PATTERNS][JsonKeys::SEQUENTIAL_FORWARD];
+    EXPECT_EQ(forward["methodology_version"], "pattern-v2-phase-calibrated-seeded");
+    EXPECT_EQ(forward["warmup_semantics"], "steady-state-same-shape");
+    const nlohmann::json read = forward[JsonKeys::BANDWIDTH][JsonKeys::READ_GB_S];
+    EXPECT_EQ(read["status"], "measured");
+    EXPECT_DOUBLE_EQ(read["value_gb_s"].get<double>(), 12.5);
+    EXPECT_DOUBLE_EQ(read["statistics"]["median_absolute_deviation"].get<double>(), 0.0);
+    ASSERT_EQ(read["measurements"].size(), 1u);
+    EXPECT_EQ(read["measurements"][0]["passes"], 10u);
+    EXPECT_EQ(read["measurements"][0]["accesses_per_pass_semantics"], "constant-count");
+    EXPECT_EQ(read["measurements"][0]["total_payload_bytes"], 32000u);
+    EXPECT_EQ(read["measurements"][0]["benchmark_loop_index"], 3u);
+    EXPECT_EQ(read["measurements"][0]["pattern_order_index"], 2u);
+    EXPECT_EQ(output[JsonKeys::CONFIGURATION]["pattern_execution_order_policy"],
+              "cyclic-latin-square-across-count-loops");
+    const nlohmann::json phased_json =
+        output[JsonKeys::PATTERNS][JsonKeys::STRIDED_64][JsonKeys::BANDWIDTH][JsonKeys::READ_GB_S]["measurements"][0];
+    EXPECT_EQ(phased_json["accesses_per_pass_semantics"], "phase-zero-count");
+    EXPECT_EQ(phased_json["min_accesses_per_pass"], 1u);
+    EXPECT_EQ(phased_json["max_accesses_per_pass"], 2u);
+    EXPECT_EQ(phased_json["phase_period_passes"], 2u);
+
+    const nlohmann::json skipped =
+        output[JsonKeys::PATTERNS][JsonKeys::STRIDED_2MB][JsonKeys::BANDWIDTH][JsonKeys::READ_GB_S];
+    EXPECT_EQ(skipped["status"], "skipped");
+    EXPECT_TRUE(skipped["value_gb_s"].is_null());
+    EXPECT_EQ(skipped["measurements"][0]["accesses_per_pass_semantics"], "phase-zero-count");
+    EXPECT_FALSE(output[JsonKeys::PATTERNS][JsonKeys::STRIDED_2MB]["large_page_backing_verified"].get<bool>());
+    EXPECT_EQ(output[JsonKeys::PATTERNS][JsonKeys::RANDOM]["seed"], "18446744073709551615");
+  }
 }
 
 TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   constexpr uint64_t kConfigSeed = 18446744073709551615ULL;
   constexpr uint64_t kFirstTaskSeed = 18446744073709551613ULL;
   const TemporaryJsonFile output_file("tlb_schema");
-  BenchmarkConfig config;
-  config.output_file = output_file.path().string();
-  config.tlb_sweep_density = TlbSweepDensity::High;
-  config.tlb_seed = kConfigSeed;
-  config.user_specified_tlb_seed = true;
-  config.main_thread_qos_requested = true;
-  config.main_thread_qos_applied = true;
-  config.main_thread_qos_code = 0;
+  TlbSchemaFixture fixture;
+  fixture.config.output_file = output_file.path().string();
+  fixture.config.tlb_sweep_density = TlbSweepDensity::High;
+  fixture.config.tlb_seed = kConfigSeed;
+  fixture.config.user_specified_tlb_seed = true;
+  fixture.config.main_thread_qos_requested = true;
+  fixture.config.main_thread_qos_applied = true;
+  fixture.config.main_thread_qos_code = 0;
 
-  const std::string cpu_name = "test-cpu";
-  const std::vector<size_t> localities_bytes = {16 * Constants::BYTES_PER_KB};
-  const std::vector<TlbSweepPoint> sweep_points = {{
-      0, 1, 1, 16 * Constants::BYTES_PER_KB, 64, 256, "base",
-      16 * Constants::BYTES_PER_KB, 16 * Constants::BYTES_PER_KB}};
-  std::vector<TlbMeasurementRecord> measurement_records = {
-      make_paired_tlb_record(TlbMeasurementPass::Base,
-                             0,
-                             16 * Constants::BYTES_PER_KB,
-                             0,
-                             0,
-                             kFirstTaskSeed,
-                             15.0),
-      make_paired_tlb_record(TlbMeasurementPass::Base,
-                             0,
-                             16 * Constants::BYTES_PER_KB,
-                             1,
-                             0,
-                             101,
-                             15.1),
-      make_paired_tlb_record(TlbMeasurementPass::Validation,
-                             2,
-                             16 * Constants::BYTES_PER_KB,
-                             0,
-                             0,
-                             300,
-                             14.9),
-      make_paired_tlb_record(TlbMeasurementPass::Validation,
-                             2,
-                             16 * Constants::BYTES_PER_KB,
-                             1,
-                             0,
-                             301,
-                             15.0),
-      make_paired_tlb_record(TlbMeasurementPass::LargeLocality,
-                             1,
-                             512 * Constants::BYTES_PER_MB,
-                             0,
-                             0,
-                             200,
-                             95.0),
-      make_paired_tlb_record(TlbMeasurementPass::LargeLocality,
-                             1,
-                             512 * Constants::BYTES_PER_MB,
-                             1,
-                             0,
-                             201,
-                             100.0),
-      make_paired_tlb_record(TlbMeasurementPass::LargeLocality,
-                             1,
-                             512 * Constants::BYTES_PER_MB,
-                             2,
-                             0,
-                             202,
-                             101.0),
+  fixture.measurement_records = {
+      make_paired_tlb_record(TlbMeasurementPass::Base, 0, 16 * Constants::BYTES_PER_KB, 0, 0, kFirstTaskSeed, 15.0),
+      make_paired_tlb_record(TlbMeasurementPass::Base, 0, 16 * Constants::BYTES_PER_KB, 1, 0, 101, 15.1),
+      make_paired_tlb_record(TlbMeasurementPass::Validation, 2, 16 * Constants::BYTES_PER_KB, 0, 0, 300, 14.9),
+      make_paired_tlb_record(TlbMeasurementPass::Validation, 2, 16 * Constants::BYTES_PER_KB, 1, 0, 301, 15.0),
+      make_paired_tlb_record(TlbMeasurementPass::LargeLocality, 1, 512 * Constants::BYTES_PER_MB, 0, 0, 200, 95.0),
+      make_paired_tlb_record(TlbMeasurementPass::LargeLocality, 1, 512 * Constants::BYTES_PER_MB, 1, 0, 201, 100.0),
+      make_paired_tlb_record(TlbMeasurementPass::LargeLocality, 1, 512 * Constants::BYTES_PER_MB, 2, 0, 202, 101.0),
   };
-  measurement_records[4].paired.packed.latency_ns = 94.0;
-  measurement_records[4].paired.translation_delta_ns = 1.0;
-  measurement_records[5].paired.packed.latency_ns = 90.0;
-  measurement_records[5].paired.translation_delta_ns = 10.0;
-  measurement_records[6].paired.packed.latency_ns = 100.0;
-  measurement_records[6].paired.translation_delta_ns = 1.0;
-  TlbBoundaryDetection l1_boundary;
-  l1_boundary.detected = true;
-  l1_boundary.boundary_index = 0;
-  l1_boundary.boundary_locality_bytes = 16 * Constants::BYTES_PER_KB;
-  l1_boundary.bracket_lower_bytes = 8 * Constants::BYTES_PER_KB;
-  l1_boundary.bracket_upper_bytes = 16 * Constants::BYTES_PER_KB;
-  l1_boundary.overlaps_private_cache_knee = true;
-  l1_boundary.confidence = "Medium";
-  l1_boundary.discovery.available = true;
-  l1_boundary.discovery.passed = true;
-  l1_boundary.discovery.effect_ns = 2.0;
-  l1_boundary.discovery.minimum_effect_ns = 0.5;
-  l1_boundary.discovery.noise_floor_ns = 0.1;
-  l1_boundary.discovery.effect_ci = {1.5, 2.5, 30, 2000};
-  l1_boundary.discovery.persistence_points_passed = 2;
-  l1_boundary.validation = l1_boundary.discovery;
+  fixture.measurement_records[4].paired.packed.latency_ns = 94.0;
+  fixture.measurement_records[4].paired.translation_delta_ns = 1.0;
+  fixture.measurement_records[5].paired.packed.latency_ns = 90.0;
+  fixture.measurement_records[5].paired.translation_delta_ns = 10.0;
+  fixture.measurement_records[6].paired.packed.latency_ns = 100.0;
+  fixture.measurement_records[6].paired.translation_delta_ns = 1.0;
+
+  fixture.l1_boundary.detected = true;
+  fixture.l1_boundary.boundary_index = 0;
+  fixture.l1_boundary.boundary_locality_bytes = 16 * Constants::BYTES_PER_KB;
+  fixture.l1_boundary.bracket_lower_bytes = 8 * Constants::BYTES_PER_KB;
+  fixture.l1_boundary.bracket_upper_bytes = 16 * Constants::BYTES_PER_KB;
+  fixture.l1_boundary.overlaps_private_cache_knee = true;
+  fixture.l1_boundary.confidence = "Medium";
+  fixture.l1_boundary.discovery.available = true;
+  fixture.l1_boundary.discovery.passed = true;
+  fixture.l1_boundary.discovery.effect_ns = 2.0;
+  fixture.l1_boundary.discovery.minimum_effect_ns = 0.5;
+  fixture.l1_boundary.discovery.noise_floor_ns = 0.1;
+  fixture.l1_boundary.discovery.effect_ci = {1.5, 2.5, 30, 2000};
+  fixture.l1_boundary.discovery.persistence_points_passed = 2;
+  fixture.l1_boundary.validation = fixture.l1_boundary.discovery;
+
   TlbBoundaryCandidate accepted_candidate;
   accepted_candidate.accepted = true;
   accepted_candidate.boundary_index = 0;
   accepted_candidate.boundary_locality_bytes = 16 * Constants::BYTES_PER_KB;
   accepted_candidate.bracket_lower_bytes = 8 * Constants::BYTES_PER_KB;
   accepted_candidate.bracket_upper_bytes = 16 * Constants::BYTES_PER_KB;
-  accepted_candidate.discovery = l1_boundary.discovery;
-  accepted_candidate.validation = l1_boundary.validation;
-  l1_boundary.candidates.push_back(accepted_candidate);
-  TlbBoundaryDetection l2_boundary;
+  accepted_candidate.discovery = fixture.l1_boundary.discovery;
+  accepted_candidate.validation = fixture.l1_boundary.validation;
+  fixture.l1_boundary.candidates.push_back(accepted_candidate);
+
   TlbBoundaryCandidate rejected_candidate;
   rejected_candidate.boundary_index = 1;
   rejected_candidate.boundary_locality_bytes = 32 * Constants::BYTES_PER_KB;
@@ -606,126 +587,72 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   rejected_candidate.discovery.available = true;
   rejected_candidate.discovery.effect_ns = 1.0;
   rejected_candidate.discovery.minimum_effect_ns = 0.5;
-  rejected_candidate.discovery.rejection_reason =
-      "persistence-not-confirmed";
-  rejected_candidate.validation.rejection_reason =
-      "discovery-not-accepted";
-  l2_boundary.candidates.push_back(rejected_candidate);
-  const PrivateCacheKneeDetection private_cache_knee;
-  const TlbRuntimeProfile runtime_profile = {
-      "exhaustive", 2, 4, 20 * 1000 * 1000ULL, 32, 5 * 1000 * 1000,
-      0.15, 1000};
-  const TlbWorkEstimate base_work_estimate = estimate_tlb_work(
-      1, 1050 * Constants::BYTES_PER_MB, 1, runtime_profile);
-  const std::vector<TlbPassExecutionSummary> pass_summaries = {
+  rejected_candidate.discovery.rejection_reason = "persistence-not-confirmed";
+  rejected_candidate.validation.rejection_reason = "discovery-not-accepted";
+  fixture.l2_boundary.candidates.push_back(rejected_candidate);
+
+  TlbAnalysisJsonContext context = fixture.make_context("complete", true);
+  context.l1_entries = 248;
+  context.l2_entries = 2048;
+  context.l1_entries_min = 240;
+  context.l1_entries_max = 256;
+  context.l2_entries_min = 2000;
+  context.l2_entries_max = 2048;
+  context.fine_sweep_added_points = 6;
+  context.private_cache_interference_elevated = true;
+  context.private_cache_to_l1_distance_bytes = 4 * Constants::BYTES_PER_MB;
+  context.private_cache_to_l1_distance_pages = 256;
+  context.page_walk_comparison_completed = true;
+  context.runtime_profile = {"exhaustive", 2, 4, 20 * 1000 * 1000ULL, 32, 5 * 1000 * 1000, 0.15, 1000};
+  context.available_memory_mb = 4096;
+  context.memory_budget_mb = 1228;
+  context.estimated_peak_memory_bytes = 1050 * Constants::BYTES_PER_MB;
+  context.base_work_estimate = estimate_tlb_work(1, 1050 * Constants::BYTES_PER_MB, 1, context.runtime_profile);
+  context.pass_summaries = {
       {TlbMeasurementPass::Base, 1, 2, true, true},
       {TlbMeasurementPass::Validation, 1, 2, true, true},
       {TlbMeasurementPass::LargeLocality, 1, 2, true, true},
   };
 
-  const TlbAnalysisJsonContext context = {
-      config,
-      cpu_name,
-      4,
-      6,
-      16384,
-      131072,
-      1024 * 1024,
-      64,
-      2,
-      1000,
-      16 * Constants::BYTES_PER_KB,
-      512 * Constants::BYTES_PER_MB,
-      1024,
-      true,
-      "complete",
-      1,
-      1,
-      1,
-      1,
-      true,
-      true,
-      sweep_points,
-      measurement_records,
-      localities_bytes,
-      l1_boundary,
-      l2_boundary,
-      private_cache_knee,
-      248,
-      2048,
-      240,
-      256,
-      2000,
-      2048,
-      6,
-      true,
-      4 * Constants::BYTES_PER_MB,
-      256,
-      true,
-      true,
-      3.0,
-      runtime_profile,
-      4096,
-      1228,
-      1050 * Constants::BYTES_PER_MB,
-      0,
-      "",
-      base_work_estimate,
-      pass_summaries,
-  };
-
   ASSERT_EQ(save_tlb_analysis_to_json(context), EXIT_SUCCESS);
-  const nlohmann::json output_json = read_json_file(config.output_file);
+  const nlohmann::json output_json = read_json_file(fixture.config.output_file);
 
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::MODE], Constants::TLB_ANALYSIS_JSON_MODE_NAME);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::PERFORMANCE_CORES], 4);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::EFFICIENCY_CORES], 6);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["schema_version"], 4);
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["methodology_version"],
-            "page-native-paired-adaptive-validated-v4");
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["boundary_signal"],
-            "translation_delta_ns");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["methodology_version"], "page-native-paired-adaptive-validated-v4");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["boundary_signal"], "translation_delta_ns");
   EXPECT_NE(output_json[JsonKeys::CONFIGURATION]["latency_interpretation"]
                 .get<std::string>()
                 .find("not direct DRAM latency"),
             std::string::npos);
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["seed"],
-            "18446744073709551615");
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["seed_encoding"],
-            "uint64-decimal-string");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["seed"], "18446744073709551615");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["seed_encoding"], "uint64-decimal-string");
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["seed_source"], "user");
-  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["seed_derivation"].contains(
-      "measurement_task"));
-  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["seed_derivation"].contains(
-      "chain_layout"));
+  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["seed_derivation"].contains("measurement_task"));
+  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["seed_derivation"].contains("chain_layout"));
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["main_thread_qos"]["requested"]);
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["main_thread_qos"]["applied"]);
-  EXPECT_FALSE(output_json[JsonKeys::CONFIGURATION].contains(
-      JsonKeys::LATENCY_SAMPLE_COUNT));
-  EXPECT_FALSE(output_json[JsonKeys::CONFIGURATION].contains(
-      "buffer_locked"));
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["schedule_policy"],
-            "seeded-cyclic-latin");
+  EXPECT_FALSE(output_json[JsonKeys::CONFIGURATION].contains(JsonKeys::LATENCY_SAMPLE_COUNT));
+  EXPECT_FALSE(output_json[JsonKeys::CONFIGURATION].contains("buffer_locked"));
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["schedule_policy"], "seeded-cyclic-latin");
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["latency_chain_mode_requested"], "auto");
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains(JsonKeys::LATENCY_CHAIN_MODE));
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::LATENCY_CHAIN_MODE], "random-box");
-  EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["chain_mode_comparability"]
-                  .get<std::string>()
-                  .find("identical effective chain mode") != std::string::npos);
+  EXPECT_NE(output_json[JsonKeys::CONFIGURATION]["chain_mode_comparability"]
+                .get<std::string>()
+                .find("identical effective chain mode"),
+            std::string::npos);
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains(JsonKeys::TLB_DENSITY));
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION][JsonKeys::TLB_DENSITY], "high");
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION].contains("fine_sweep_added_points"));
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["runtime_profile"],
-            "exhaustive");
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["adaptive_rounds"]["minimum"],
-            2);
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["adaptive_rounds"]["maximum"],
-            4);
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["memory_budget"]["budget_mb"],
-            1228);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["runtime_profile"], "exhaustive");
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["adaptive_rounds"]["minimum"], 2);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["adaptive_rounds"]["maximum"], 4);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["memory_budget"]["budget_mb"], 1228);
   EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["buffer_lock"]["errno"], 0);
-  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["base_work_estimate"]["point_count"],
-            1);
+  EXPECT_EQ(output_json[JsonKeys::CONFIGURATION]["base_work_estimate"]["point_count"], 1);
   EXPECT_TRUE(output_json[JsonKeys::CONFIGURATION]["base_work_estimate"].contains(
       "maximum_pilot_accesses_per_measurement"));
   EXPECT_TRUE(output_json["tlb_analysis"].contains("private_cache_knee"));
@@ -737,205 +664,97 @@ TEST(JsonSchemaTest, TlbAnalysisExporterIncludesModeAndCoreCounts) {
   EXPECT_TRUE(output_json["tlb_analysis"]["l1_tlb_detection"]["candidates"][0]["accepted"]);
   EXPECT_FALSE(output_json["tlb_analysis"]["l2_tlb_detection"]["detected"]);
   EXPECT_EQ(output_json["tlb_analysis"]["l2_tlb_detection"]["candidates"].size(), 1u);
-  EXPECT_EQ(output_json["tlb_analysis"]["l2_tlb_detection"]["candidates"][0]
-                       ["discovery"]["rejection_reason"],
+  EXPECT_EQ(output_json["tlb_analysis"]["l2_tlb_detection"]["candidates"][0]["discovery"]["rejection_reason"],
             "persistence-not-confirmed");
   EXPECT_TRUE(output_json["tlb_analysis"]["l1_tlb_detection"]["overlaps_private_cache_knee"]);
-  EXPECT_EQ(output_json["tlb_analysis"]["status"], "complete");
-  EXPECT_EQ(output_json["tlb_analysis"]["planned_points"], 1);
-  EXPECT_EQ(output_json["tlb_analysis"]["measured_points"], 1);
-  EXPECT_EQ(output_json["tlb_analysis"]["validation_planned_points"], 1);
-  EXPECT_EQ(output_json["tlb_analysis"]["validation_measured_points"], 1);
-  EXPECT_TRUE(output_json["tlb_analysis"]["validation_required"]);
-  EXPECT_EQ(output_json["tlb_analysis"]["validation_status"], "complete");
-  EXPECT_TRUE(output_json["tlb_analysis"]["validation_complete"]);
-  EXPECT_EQ(output_json["tlb_analysis"]
-                       ["minimum_planned_base_validation_pairs"],
-            4);
-  EXPECT_EQ(output_json["tlb_analysis"]
-                       ["maximum_planned_base_validation_pairs"],
-            8);
-  EXPECT_EQ(output_json["tlb_analysis"]["planned_base_validation_pairs"],
-            8);
-  EXPECT_EQ(output_json["tlb_analysis"]
-                       ["planned_base_validation_raw_measurements"],
-            16);
-  EXPECT_EQ(output_json["tlb_analysis"]
-                       ["completed_base_validation_measurement_records"],
-            4);
-  EXPECT_EQ(output_json["tlb_analysis"]["completed_base_validation_pairs"],
-            4);
-  EXPECT_EQ(output_json["tlb_analysis"]
-                       ["completed_base_validation_raw_measurements"],
-            8);
-  EXPECT_EQ(output_json["tlb_analysis"]
-                       ["completed_large_locality_measurement_records"],
-            3);
-  EXPECT_EQ(output_json["tlb_analysis"]["completed_large_locality_pairs"],
-            3);
-  EXPECT_EQ(output_json["tlb_analysis"]
-                       ["completed_large_locality_raw_measurements"],
-            6);
-  EXPECT_EQ(output_json["tlb_analysis"]["total_completed_measurement_records"],
-            7);
-  EXPECT_EQ(output_json["tlb_analysis"]["total_completed_measurement_pairs"],
-            7);
-  EXPECT_EQ(output_json["tlb_analysis"]["total_completed_raw_measurements"],
-            14);
-  EXPECT_EQ(output_json["tlb_analysis"]["measurement_counter_scope"]
-                       ["total"],
-            "all serialized measurement passes");
-  EXPECT_TRUE(output_json["tlb_analysis"]["conclusions_valid"]);
-  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"].size(), 7u);
-  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"][0]["pass"], "base");
-  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"][0]
-                       ["seed"],
-            "18446744073709551613");
-  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"][0]
-                       ["paired_control"]["spread"]["seed"],
-            "18446744073709551614");
-  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"][0]
-                       ["paired_control"]["packed"]["seed"],
-            "18446744073709551615");
-  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"][2]["pass"],
-            "validation");
-  EXPECT_TRUE(output_json["tlb_analysis"]["measurement_records"][0]
-                         ["paired_control"]["available"]);
-  EXPECT_DOUBLE_EQ(output_json["tlb_analysis"]["measurement_records"][0]
-                              ["paired_control"]["translation_delta_ns"],
-                   5.0);
-  EXPECT_EQ(output_json["tlb_analysis"]["measurement_records"][0]
-                       ["paired_control"]["spread"]["access_count"],
-            1000000);
-  ASSERT_EQ(output_json["tlb_analysis"]["pass_summaries"].size(), 3u);
-  EXPECT_TRUE(output_json["tlb_analysis"]["pass_summaries"][0]["converged"]);
-  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["requested_pages"], 1);
-  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["actual_pages"], 1);
-  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["pointer_nodes"], 1);
-  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]
-                       ["spread_pointers_per_page_max"],
-            1);
-  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]
-                       ["packed_pointers_per_page_max"],
-            1);
-  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["actual_unique_cache_lines"], 1);
-  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]
-                       ["active_cache_line_footprint_bytes"],
-            Constants::CACHE_LINE_SIZE_BYTES);
-  EXPECT_TRUE(output_json["tlb_analysis"]["sweep"][0]
-                         ["short_cycle_diagnostic"]);
-  EXPECT_DOUBLE_EQ(output_json["tlb_analysis"]["sweep"][0]
-                              ["translation_delta_p50_ns"],
-                   5.0);
-  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["measurements"].size(), 4u);
-  EXPECT_EQ(output_json["tlb_analysis"]["sweep"][0]["measurements"][1]["round_index"], 1);
-  EXPECT_TRUE(output_json["tlb_analysis"]["sweep"][0].contains(
-      "validation_translation_deltas_ns"));
-  const nlohmann::json spread_chain =
-      output_json["tlb_analysis"]["sweep"][0]["spread_chain"];
-  EXPECT_EQ(spread_chain["pointer_nodes"], 1);
-  EXPECT_EQ(spread_chain["pointers_per_page_max"], 1);
-  ASSERT_TRUE(output_json["tlb_analysis"].contains(
-      "large_locality_paired_comparison"));
-  const nlohmann::json paired_large =
-      output_json["tlb_analysis"]["large_locality_paired_comparison"];
+  const nlohmann::json& tlb = output_json["tlb_analysis"];
+  EXPECT_EQ(tlb["status"], "complete");
+  EXPECT_EQ(tlb["planned_points"], 1);
+  EXPECT_EQ(tlb["measured_points"], 1);
+  EXPECT_EQ(tlb["validation_planned_points"], 1);
+  EXPECT_EQ(tlb["validation_measured_points"], 1);
+  EXPECT_TRUE(tlb["validation_required"]);
+  EXPECT_EQ(tlb["validation_status"], "complete");
+  EXPECT_TRUE(tlb["validation_complete"]);
+  EXPECT_EQ(tlb["minimum_planned_base_validation_pairs"], 4);
+  EXPECT_EQ(tlb["maximum_planned_base_validation_pairs"], 8);
+  EXPECT_EQ(tlb["planned_base_validation_pairs"], 8);
+  EXPECT_EQ(tlb["planned_base_validation_raw_measurements"], 16);
+  EXPECT_EQ(tlb["completed_base_validation_measurement_records"], 4);
+  EXPECT_EQ(tlb["completed_base_validation_pairs"], 4);
+  EXPECT_EQ(tlb["completed_base_validation_raw_measurements"], 8);
+  EXPECT_EQ(tlb["completed_large_locality_measurement_records"], 3);
+  EXPECT_EQ(tlb["completed_large_locality_pairs"], 3);
+  EXPECT_EQ(tlb["completed_large_locality_raw_measurements"], 6);
+  EXPECT_EQ(tlb["total_completed_measurement_records"], 7);
+  EXPECT_EQ(tlb["total_completed_measurement_pairs"], 7);
+  EXPECT_EQ(tlb["total_completed_raw_measurements"], 14);
+  EXPECT_EQ(tlb["measurement_counter_scope"]["total"], "all serialized measurement passes");
+  EXPECT_TRUE(tlb["conclusions_valid"]);
+  EXPECT_EQ(tlb["measurement_records"].size(), 7u);
+  EXPECT_EQ(tlb["measurement_records"][0]["pass"], "base");
+  EXPECT_EQ(tlb["measurement_records"][0]["seed"], "18446744073709551613");
+  EXPECT_EQ(tlb["measurement_records"][0]["paired_control"]["spread"]["seed"], "18446744073709551614");
+  EXPECT_EQ(tlb["measurement_records"][0]["paired_control"]["packed"]["seed"], "18446744073709551615");
+  EXPECT_EQ(tlb["measurement_records"][2]["pass"], "validation");
+  EXPECT_TRUE(tlb["measurement_records"][0]["paired_control"]["available"]);
+  EXPECT_DOUBLE_EQ(tlb["measurement_records"][0]["paired_control"]["translation_delta_ns"], 5.0);
+  EXPECT_EQ(tlb["measurement_records"][0]["paired_control"]["spread"]["access_count"], 1000000);
+  ASSERT_EQ(tlb["pass_summaries"].size(), 3u);
+  EXPECT_TRUE(tlb["pass_summaries"][0]["converged"]);
+  const nlohmann::json& sweep0 = tlb["sweep"][0];
+  EXPECT_EQ(sweep0["requested_pages"], 1);
+  EXPECT_EQ(sweep0["actual_pages"], 1);
+  EXPECT_EQ(sweep0["pointer_nodes"], 1);
+  EXPECT_EQ(sweep0["spread_pointers_per_page_max"], 1);
+  EXPECT_EQ(sweep0["packed_pointers_per_page_max"], 1);
+  EXPECT_EQ(sweep0["actual_unique_cache_lines"], 1);
+  EXPECT_EQ(sweep0["active_cache_line_footprint_bytes"], Constants::CACHE_LINE_SIZE_BYTES);
+  EXPECT_TRUE(sweep0["short_cycle_diagnostic"]);
+  EXPECT_DOUBLE_EQ(sweep0["translation_delta_p50_ns"], 5.0);
+  EXPECT_EQ(sweep0["measurements"].size(), 4u);
+  EXPECT_EQ(sweep0["measurements"][1]["round_index"], 1);
+  EXPECT_TRUE(sweep0.contains("validation_translation_deltas_ns"));
+  EXPECT_EQ(sweep0["spread_chain"]["pointer_nodes"], 1);
+  EXPECT_EQ(sweep0["spread_chain"]["pointers_per_page_max"], 1);
+  ASSERT_TRUE(tlb.contains("large_locality_paired_comparison"));
+  const nlohmann::json& paired_large = tlb["large_locality_paired_comparison"];
   EXPECT_TRUE(paired_large["available"]);
   EXPECT_DOUBLE_EQ(paired_large["spread_p50_ns"], 100.0);
   EXPECT_DOUBLE_EQ(paired_large["packed_p50_ns"], 94.0);
   EXPECT_DOUBLE_EQ(paired_large["translation_delta_p50_ns"], 1.0);
   EXPECT_NE(paired_large["translation_delta_p50_ns"].get<double>(),
-            paired_large["spread_p50_ns"].get<double>() -
-                paired_large["packed_p50_ns"].get<double>());
+            paired_large["spread_p50_ns"].get<double>() - paired_large["packed_p50_ns"].get<double>());
   EXPECT_EQ(paired_large["spread_actual_pages"], 32768);
   EXPECT_EQ(paired_large["packed_actual_pages"], 128);
   EXPECT_EQ(paired_large["unique_cache_lines"], 32768);
-  EXPECT_EQ(paired_large["active_cache_line_footprint_bytes"],
-            2 * Constants::BYTES_PER_MB);
+  EXPECT_EQ(paired_large["active_cache_line_footprint_bytes"], 2 * Constants::BYTES_PER_MB);
   EXPECT_EQ(paired_large["pointer_nodes"], 32768);
   EXPECT_EQ(paired_large["measurements"].size(), 3u);
-  EXPECT_NE(paired_large["interpretation"].get<std::string>().find(
-                "not DRAM latency"),
-            std::string::npos);
+  EXPECT_NE(paired_large["interpretation"].get<std::string>().find("not DRAM latency"), std::string::npos);
 }
 
 TEST(JsonSchemaTest, TlbAnalysisBuilderCoversStatusesAndExporterHandlesUnavailableComparison) {
   const TemporaryJsonFile incomplete_output("tlb_page_walk_incomplete");
   const TemporaryJsonFile fallback_output("tlb_256mb_fallback");
-  BenchmarkConfig config;
-  config.output_file = incomplete_output.path().string();
-
-  const std::string cpu_name = "test-cpu";
-  const std::vector<size_t> localities_bytes = {16 * Constants::BYTES_PER_KB};
-  const std::vector<TlbSweepPoint> sweep_points = {{
-      0, 1, 1, 16 * Constants::BYTES_PER_KB, 64, 256, "base",
-      16 * Constants::BYTES_PER_KB, 16 * Constants::BYTES_PER_KB}};
-  const std::vector<TlbMeasurementRecord> measurement_records = {
-      make_paired_tlb_record(TlbMeasurementPass::Base,
-                             0,
-                             16 * Constants::BYTES_PER_KB,
-                             0,
-                             0,
-                             100,
-                             15.0),
+  TlbSchemaFixture fixture;
+  fixture.config.output_file = incomplete_output.path().string();
+  fixture.measurement_records = {
+      make_paired_tlb_record(TlbMeasurementPass::Base, 0, 16 * Constants::BYTES_PER_KB, 0, 0, 100, 15.0),
   };
-  const TlbBoundaryDetection l1_boundary;
-  const TlbBoundaryDetection l2_boundary;
-  const PrivateCacheKneeDetection private_cache_knee;
 
-  TlbAnalysisJsonContext context = {
-      config,
-      cpu_name,
-      4,
-      6,
-      16384,
-      131072,
-      1024 * 1024,
-      64,
-      2,
-      1000,
-      16 * Constants::BYTES_PER_KB,
-      512 * Constants::BYTES_PER_MB,
-      1024,
-      true,
-      "interrupted",
-      2,
-      1,
-      1,
-      0,
-      false,
-      false,
-      sweep_points,
-      measurement_records,
-      localities_bytes,
-      l1_boundary,
-      l2_boundary,
-      private_cache_knee,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      false,
-      0,
-      0,
-      true,
-      false,
-      3.0,
-  };
+  TlbAnalysisJsonContext context = fixture.make_context("interrupted", false);
+  context.planned_points = 2;
+  context.measured_points = 1;
+  context.validation_planned_points = 1;
+  context.validation_measured_points = 0;
 
   struct StatusCase {
     const char* status;
     bool conclusions_valid;
   };
-  const std::vector<StatusCase> status_cases = {
-      {"complete", true},
-      {"partial", false},
-      {"interrupted", false},
-      {"error", false},
-  };
-  for (const StatusCase& status_case : status_cases) {
+  for (const StatusCase& status_case : {StatusCase{"complete", true}, StatusCase{"partial", false},
+                                        StatusCase{"interrupted", false}, StatusCase{"error", false}}) {
     SCOPED_TRACE(status_case.status);
     context.analysis_status = status_case.status;
     context.conclusions_valid = status_case.conclusions_valid;
@@ -943,8 +762,7 @@ TEST(JsonSchemaTest, TlbAnalysisBuilderCoversStatusesAndExporterHandlesUnavailab
     const nlohmann::ordered_json& analysis = payload["tlb_analysis"];
 
     EXPECT_EQ(analysis["status"], status_case.status);
-    EXPECT_EQ(analysis["conclusions_valid"],
-              status_case.conclusions_valid);
+    EXPECT_EQ(analysis["conclusions_valid"], status_case.conclusions_valid);
     EXPECT_FALSE(analysis.contains("status_reason"));
     if (!status_case.conclusions_valid) {
       EXPECT_FALSE(analysis["l1_tlb_detection"]["detected"]);
@@ -955,11 +773,9 @@ TEST(JsonSchemaTest, TlbAnalysisBuilderCoversStatusesAndExporterHandlesUnavailab
 
   context.analysis_status = "interrupted";
   context.conclusions_valid = false;
-
   ASSERT_EQ(save_tlb_analysis_to_json(context), EXIT_SUCCESS);
-  const nlohmann::json output_json = read_json_file(config.output_file);
-  const nlohmann::json paired_large =
-      output_json["tlb_analysis"]["large_locality_paired_comparison"];
+  const nlohmann::json output_json = read_json_file(fixture.config.output_file);
+  const nlohmann::json paired_large = output_json["tlb_analysis"]["large_locality_paired_comparison"];
 
   EXPECT_EQ(output_json["tlb_analysis"]["status"], "interrupted");
   EXPECT_FALSE(output_json["tlb_analysis"]["conclusions_valid"]);
@@ -967,16 +783,13 @@ TEST(JsonSchemaTest, TlbAnalysisBuilderCoversStatusesAndExporterHandlesUnavailab
   EXPECT_EQ(output_json["tlb_analysis"]["validation_status"], "not-run");
   EXPECT_FALSE(output_json["tlb_analysis"]["validation_complete"]);
   EXPECT_FALSE(output_json["tlb_analysis"]["l1_tlb_detection"]["detected"]);
-  EXPECT_NE(output_json["tlb_analysis"]["l1_tlb_detection"]["reason"]
-                .get<std::string>()
-                .find("suppressed"),
+  EXPECT_NE(output_json["tlb_analysis"]["l1_tlb_detection"]["reason"].get<std::string>().find("suppressed"),
             std::string::npos);
   EXPECT_FALSE(paired_large["available"]);
   EXPECT_FALSE(paired_large.contains("translation_delta_p50_ns"));
-  EXPECT_NE(paired_large["reason"].get<std::string>().find("incomplete"),
-            std::string::npos);
+  EXPECT_NE(paired_large["reason"].get<std::string>().find("incomplete"), std::string::npos);
 
-  config.output_file = fallback_output.path().string();
+  fixture.config.output_file = fallback_output.path().string();
   context.analysis_status = "complete";
   context.conclusions_valid = true;
   context.validation_planned_points = 0;
@@ -985,36 +798,28 @@ TEST(JsonSchemaTest, TlbAnalysisBuilderCoversStatusesAndExporterHandlesUnavailab
   context.selected_buffer_mb = 256;
   context.can_measure_page_walk_penalty = false;
   ASSERT_EQ(save_tlb_analysis_to_json(context), EXIT_SUCCESS);
-  const nlohmann::json fallback_json = read_json_file(config.output_file);
-  const nlohmann::json fallback_large =
-      fallback_json["tlb_analysis"]["large_locality_paired_comparison"];
+  const nlohmann::json fallback_json = read_json_file(fixture.config.output_file);
+  const nlohmann::json fallback_large = fallback_json["tlb_analysis"]["large_locality_paired_comparison"];
   EXPECT_FALSE(fallback_json["tlb_analysis"]["validation_required"]);
-  EXPECT_EQ(fallback_json["tlb_analysis"]["validation_status"],
-            "not-required");
+  EXPECT_EQ(fallback_json["tlb_analysis"]["validation_status"], "not-required");
   EXPECT_TRUE(fallback_json["tlb_analysis"]["validation_complete"]);
   EXPECT_FALSE(fallback_large["available"]);
-  EXPECT_NE(fallback_large["reason"].get<std::string>().find("512 MiB"),
-            std::string::npos);
+  EXPECT_NE(fallback_large["reason"].get<std::string>().find("512 MiB"), std::string::npos);
 }
 
-TEST(JsonSchemaTest,
-     CoreToCoreBuilderRetainsFailedAndInterruptedIncompleteState) {
+TEST(JsonSchemaTest, CoreToCoreV2AuditTrailAndIncompleteStates) {
   struct StatusCase {
     const char* command_status;
     CoreToCoreMeasurementStatus scenario_status;
   };
-  const StatusCase status_cases[] = {
-      {"failed", CoreToCoreMeasurementStatus::Failed},
-      {"interrupted", CoreToCoreMeasurementStatus::Interrupted},
-  };
-
-  CoreToCoreLatencyConfig config;
-  config.loop_count = 2;
-  config.latency_sample_count = 1;
   const std::string cpu_name = "test-cpu";
 
-  for (const StatusCase& status_case : status_cases) {
+  for (const StatusCase& status_case : {StatusCase{"failed", CoreToCoreMeasurementStatus::Failed},
+                                        StatusCase{"interrupted", CoreToCoreMeasurementStatus::Interrupted}}) {
     SCOPED_TRACE(status_case.command_status);
+    CoreToCoreLatencyConfig config;
+    config.loop_count = 2;
+    config.latency_sample_count = 1;
     CoreToCoreLatencyScenarioResult scenario;
     scenario.scenario_name = Constants::CORE_TO_CORE_SCENARIO_NO_AFFINITY;
     scenario.status = status_case.scenario_status;
@@ -1022,15 +827,11 @@ TEST(JsonSchemaTest,
     scenario.planned_loops = 2;
     scenario.completed_loops = 1;
     const std::vector<CoreToCoreLatencyScenarioResult> scenarios = {scenario};
-    const CoreToCoreLatencyJsonContext context = {
-        config, cpu_name, 4, 6, 20000, 1000000, 2000, scenarios, 1.5,
-        status_case.command_status, 6, 1};
+    const CoreToCoreLatencyJsonContext context = {config, cpu_name, 4,   6,  20000, 1000000,
+                                                  2000,   scenarios, 1.5, status_case.command_status, 6, 1};
 
-    const nlohmann::ordered_json payload =
-        build_core_to_core_latency_json(context);
-    const nlohmann::ordered_json& result =
-        payload["core_to_core_latency"];
-
+    const nlohmann::ordered_json payload = build_core_to_core_latency_json(context);
+    const nlohmann::ordered_json& result = payload["core_to_core_latency"];
     EXPECT_EQ(payload[JsonKeys::CONFIGURATION]["schema_version"], 2);
     EXPECT_EQ(result["status"], status_case.command_status);
     EXPECT_EQ(result["planned_measurements"], 6u);
@@ -1038,74 +839,70 @@ TEST(JsonSchemaTest,
     EXPECT_FALSE(result["measurements_complete"]);
     EXPECT_FALSE(result["affinity_hint_comparison_interpretable"]);
     ASSERT_EQ(result["scenarios"].size(), 1u);
-    EXPECT_EQ(result["scenarios"][0]["status"],
-              core_to_core_measurement_status_to_string(
-                  status_case.scenario_status));
+    EXPECT_EQ(result["scenarios"][0]["status"], core_to_core_measurement_status_to_string(status_case.scenario_status));
     EXPECT_EQ(result["scenarios"][0]["planned_loops"], 2u);
     EXPECT_EQ(result["scenarios"][0]["completed_loops"], 1u);
   }
-}
 
-TEST(JsonSchemaTest, CoreToCoreV2SerializesCalibratedBalancedAuditTrail) {
-  CoreToCoreLatencyConfig config;
-  config.loop_count = 1;
-  config.latency_sample_count = 2;
+  {
+    SCOPED_TRACE("complete-audit-trail");
+    CoreToCoreLatencyConfig config;
+    config.loop_count = 1;
+    config.latency_sample_count = 2;
 
-  ThreadHintStatus initiator_hint;
-  initiator_hint.qos_applied = true;
-  initiator_hint.affinity_requested = true;
-  initiator_hint.affinity_applied = true;
-  initiator_hint.affinity_tag = 1;
-  ThreadHintStatus responder_hint = initiator_hint;
+    ThreadHintStatus initiator_hint;
+    initiator_hint.qos_applied = true;
+    initiator_hint.affinity_requested = true;
+    initiator_hint.affinity_applied = true;
+    initiator_hint.affinity_tag = 1;
+    ThreadHintStatus responder_hint = initiator_hint;
 
-  CoreToCoreLoopRecord loop_record;
-  loop_record.loop_index = 0;
-  loop_record.order_position = 1;
-  loop_record.status = CoreToCoreMeasurementStatus::Measured;
-  loop_record.round_trip_ns = 70.0;
-  loop_record.headline_elapsed_seconds = 0.250;
-  loop_record.duration_quality = "within-target-window";
-  loop_record.sample_start_index = 0;
-  loop_record.completed_sample_windows = 2;
-  loop_record.initiator_hint = initiator_hint;
-  loop_record.responder_hint = responder_hint;
+    CoreToCoreLoopRecord loop_record;
+    loop_record.loop_index = 0;
+    loop_record.order_position = 1;
+    loop_record.status = CoreToCoreMeasurementStatus::Measured;
+    loop_record.round_trip_ns = 70.0;
+    loop_record.headline_elapsed_seconds = 0.250;
+    loop_record.duration_quality = "within-target-window";
+    loop_record.sample_start_index = 0;
+    loop_record.completed_sample_windows = 2;
+    loop_record.initiator_hint = initiator_hint;
+    loop_record.responder_hint = responder_hint;
 
-  CoreToCoreLatencyScenarioResult scenario;
-  scenario.scenario_name = Constants::CORE_TO_CORE_SCENARIO_SAME_AFFINITY;
-  scenario.loop_round_trip_ns = {70.0};
-  scenario.sample_round_trip_ns = {69.0, 71.0};
-  scenario.initiator_hint = initiator_hint;
-  scenario.responder_hint = responder_hint;
-  scenario.work_plan = {true, 100000, 0.007, 70.0, 350000, 3500000, 14000};
-  scenario.loop_records = {loop_record};
-  scenario.status = CoreToCoreMeasurementStatus::Measured;
-  scenario.planned_loops = 1;
-  scenario.completed_loops = 1;
+    CoreToCoreLatencyScenarioResult scenario;
+    scenario.scenario_name = Constants::CORE_TO_CORE_SCENARIO_SAME_AFFINITY;
+    scenario.loop_round_trip_ns = {70.0};
+    scenario.sample_round_trip_ns = {69.0, 71.0};
+    scenario.initiator_hint = initiator_hint;
+    scenario.responder_hint = responder_hint;
+    scenario.work_plan = {true, 100000, 0.007, 70.0, 350000, 3500000, 14000};
+    scenario.loop_records = {loop_record};
+    scenario.status = CoreToCoreMeasurementStatus::Measured;
+    scenario.planned_loops = 1;
+    scenario.completed_loops = 1;
 
-  const std::string cpu_name = "test-cpu";
-  const std::vector<CoreToCoreLatencyScenarioResult> scenarios = {scenario};
-  const CoreToCoreLatencyJsonContext context = {
-      config, cpu_name, 4, 6, 20000, 1000000, 2000, scenarios, 1.5,
-      "complete", 1, 1};
+    const std::vector<CoreToCoreLatencyScenarioResult> scenarios = {scenario};
+    const CoreToCoreLatencyJsonContext context = {config, cpu_name, 4,   6,  20000, 1000000,
+                                                  2000,   scenarios, 1.5, "complete", 1, 1};
 
-  const nlohmann::json output = build_core_to_core_latency_json(context);
-  EXPECT_EQ(output[JsonKeys::CONFIGURATION]["schema_version"], 2);
-  EXPECT_EQ(output[JsonKeys::CONFIGURATION]["methodology_version"],
-            "core2core-v3-calibrated-balanced-auditable-128b-isolation");
-  EXPECT_EQ(output[JsonKeys::CONFIGURATION]["scenario_schedule"],
-            "cyclic-latin-square-across-count-loops");
-  EXPECT_EQ(output[JsonKeys::CONFIGURATION]["calibration_warmup_round_trips"],
-            Constants::CORE_TO_CORE_CALIBRATION_WARMUP_ROUND_TRIPS);
+    const nlohmann::json output = build_core_to_core_latency_json(context);
+    EXPECT_EQ(output[JsonKeys::CONFIGURATION]["schema_version"], 2);
+    EXPECT_EQ(output[JsonKeys::CONFIGURATION]["methodology_version"],
+              "core2core-v3-calibrated-balanced-auditable-128b-isolation");
+    EXPECT_EQ(output[JsonKeys::CONFIGURATION]["scenario_schedule"], "cyclic-latin-square-across-count-loops");
+    EXPECT_EQ(output[JsonKeys::CONFIGURATION]["calibration_warmup_round_trips"],
+              Constants::CORE_TO_CORE_CALIBRATION_WARMUP_ROUND_TRIPS);
 
-  const nlohmann::json result = output["core_to_core_latency"];
-  EXPECT_EQ(result["status"], "complete");
-  EXPECT_TRUE(result["measurements_complete"]);
-  EXPECT_TRUE(result["affinity_hint_comparison_interpretable"]);
-  const nlohmann::json scenario_json = result["scenarios"][0];
-  EXPECT_EQ(scenario_json["headline_round_trip_ns"], 70.0);
-  EXPECT_EQ(scenario_json["work_plan"]["headline_round_trips"], 3500000u);
-  EXPECT_EQ(scenario_json["loop_records"][0]["order_position"], 1u);
-  EXPECT_EQ(scenario_json["loop_records"][0]["sample_window_range"]["count"], 2u);
+    const nlohmann::json result = output["core_to_core_latency"];
+    EXPECT_EQ(result["status"], "complete");
+    EXPECT_TRUE(result["measurements_complete"]);
+    EXPECT_TRUE(result["affinity_hint_comparison_interpretable"]);
+    const nlohmann::json scenario_json = result["scenarios"][0];
+    EXPECT_EQ(scenario_json["headline_round_trip_ns"], 70.0);
+    EXPECT_EQ(scenario_json["work_plan"]["headline_round_trips"], 3500000u);
+    EXPECT_EQ(scenario_json["loop_records"][0]["order_position"], 1u);
+    EXPECT_EQ(scenario_json["loop_records"][0]["sample_window_range"]["count"], 2u);
+  }
 }
 
 TEST(JsonSchemaTest, CoreToCoreBuilderSerializesOneWayValuesAndThreadHints) {

@@ -80,25 +80,22 @@ std::string expected_invalid_value(const std::string& option, const std::string&
 
 }  // namespace
 
-TEST(ConfigTest, ParsesEquivalentLongAndShortOptions) {
+TEST(ConfigTest, ParsesAliasesExplicitOptionsAndHelpFlag) {
   struct ValidAliasCase {
     const char* label;
     std::vector<std::string> arguments;
   };
-
-  const ValidAliasCase cases[] = {
+  const ValidAliasCase alias_cases[] = {
       {"long",
        {"program", "--benchmark", "--buffer-size", "1024", "--iterations", "500", "--count", "3", "--threads", "1",
         "--latency-samples", "17", "--output", "results.json", "--non-cacheable"}},
       {"short",
        {"program", "-B", "-b", "1024", "-i", "500", "-r", "3", "-t", "1", "-n", "17", "-o", "results.json", "-u"}},
   };
-
-  for (const ValidAliasCase& test_case : cases) {
+  for (const ValidAliasCase& test_case : alias_cases) {
     SCOPED_TRACE(test_case.label);
     BenchmarkConfig config;
     const CapturedParseResult parsed = parse_capturing_stderr(test_case.arguments, config);
-
     ASSERT_EQ(parsed.result, EXIT_SUCCESS);
     EXPECT_TRUE(config.run_benchmark);
     EXPECT_FALSE(config.run_patterns);
@@ -111,6 +108,48 @@ TEST(ConfigTest, ParsesEquivalentLongAndShortOptions) {
     EXPECT_TRUE(config.user_specified_latency_samples);
     EXPECT_EQ(config.output_file, "results.json");
     EXPECT_TRUE(config.use_non_cacheable);
+  }
+
+  struct ExplicitCase {
+    const char* option;
+    const char* value;
+    std::function<void(const BenchmarkConfig&)> verify;
+  };
+  const ExplicitCase explicit_cases[] = {
+      {"--cache-size", "0",
+       [](const BenchmarkConfig& config) {
+         EXPECT_EQ(config.custom_cache_size_kb_ll, 0);
+         EXPECT_TRUE(config.use_custom_cache_size);
+       }},
+      {"--buffer-size", "0", [](const BenchmarkConfig& config) { EXPECT_EQ(config.buffer_size_mb, 0u); }},
+      {"--latency-tlb-locality-kb", "16",
+       [](const BenchmarkConfig& config) {
+         EXPECT_EQ(config.latency_tlb_locality_bytes, 16u * Constants::BYTES_PER_KB);
+       }},
+      {"--latency-tlb-locality-kb", "0",
+       [](const BenchmarkConfig& config) { EXPECT_EQ(config.latency_tlb_locality_bytes, 0u); }},
+      {"--latency-stride-bytes", "64",
+       [](const BenchmarkConfig& config) { EXPECT_EQ(config.latency_stride_bytes, 64u); }},
+      {"--latency-chain-mode", "same-random-in-box",
+       [](const BenchmarkConfig& config) {
+         EXPECT_EQ(config.latency_chain_mode, LatencyChainMode::SameRandomInBoxIncreasingBox);
+       }},
+  };
+  for (const ExplicitCase& test_case : explicit_cases) {
+    SCOPED_TRACE(std::string(test_case.option) + " " + test_case.value);
+    BenchmarkConfig config;
+    const CapturedParseResult parsed = parse_capturing_stderr({"program", test_case.option, test_case.value}, config);
+    ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+    EXPECT_TRUE(parsed.stderr_output.empty());
+    test_case.verify(config);
+  }
+
+  {
+    SCOPED_TRACE("help-flag");
+    BenchmarkConfig config;
+    const char* argv[] = {"program", "-h"};
+    EXPECT_EQ(parse_arguments(2, const_cast<char**>(argv), config), EXIT_SUCCESS);
+    EXPECT_TRUE(config.help_printed);
   }
 }
 
@@ -133,7 +172,7 @@ TEST(ConfigTest, ParseSweepValid) {
   EXPECT_EQ(config.sweep_max_runs, 4u);
 }
 
-TEST(ConfigTest, ParseFlagShapedOutputTargetsRemainOpaqueAcrossGeneralModes) {
+TEST(ConfigTest, ParseFlagShapedOutputTargetsAndPrescanBoundaries) {
   struct ModeCase {
     const char* option;
     bool patterns;
@@ -175,9 +214,7 @@ TEST(ConfigTest, ParseFlagShapedOutputTargetsRemainOpaqueAcrossGeneralModes) {
       }
     }
   }
-}
 
-TEST(ConfigTest, ParseOutputPrescanSkipsExactlyOneFlagShapedValue) {
   struct BoundaryCase {
     const char* label;
     std::vector<std::string> arguments;
@@ -188,14 +225,13 @@ TEST(ConfigTest, ParseOutputPrescanSkipsExactlyOneFlagShapedValue) {
   };
 
   const BoundaryCase cases[] = {
-      {"real TLB option after output value", {"program", "--output", "-T", "--analyze-tlb"}, "-T", true, false,
-       -1},
-      {"real TLB option before output value", {"program", "-T", "--output", "--analyze-tlb"}, "--analyze-tlb",
-       true, false, -1},
-      {"real cache option after output value",
-       {"program", "--output", "-k", "--cache-size", "256", "--benchmark"}, "-k", false, true, 256},
-      {"real cache option before output value",
-       {"program", "-k", "256", "--benchmark", "--output", "--cache-size"}, "--cache-size", false, true, 256},
+      {"real TLB option after output value", {"program", "--output", "-T", "--analyze-tlb"}, "-T", true, false, -1},
+      {"real TLB option before output value", {"program", "-T", "--output", "--analyze-tlb"}, "--analyze-tlb", true,
+       false, -1},
+      {"real cache option after output value", {"program", "--output", "-k", "--cache-size", "256", "--benchmark"},
+       "-k", false, true, 256},
+      {"real cache option before output value", {"program", "-k", "256", "--benchmark", "--output", "--cache-size"},
+       "--cache-size", false, true, 256},
   };
 
   for (const BoundaryCase& test_case : cases) {
@@ -217,14 +253,81 @@ TEST(ConfigTest, ParseOutputPrescanSkipsExactlyOneFlagShapedValue) {
   }
 }
 
-TEST(ConfigTest, ParseMissingValuesUseNormalParserDiagnostics) {
+TEST(ConfigTest, RejectsMissingDuplicateAndSemanticOptionErrors) {
   for (const char* option : {"--output", "--cache-size", "--iterations"}) {
-    SCOPED_TRACE(option);
+    SCOPED_TRACE(std::string("missing ") + option);
     BenchmarkConfig config;
     const CapturedParseResult parsed = parse_capturing_stderr({"program", "--benchmark", option}, config);
     EXPECT_EQ(parsed.result, EXIT_FAILURE);
     EXPECT_EQ(parsed.stderr_output.find(Messages::error_prefix() + Messages::error_missing_value(option) + "\n"), 0u)
         << parsed.stderr_output;
+  }
+
+  struct DuplicateOptionCase {
+    const char* option;
+    const char* first_value;
+    const char* second_value;
+  };
+  const DuplicateOptionCase duplicate_cases[] = {
+      {"--iterations", "1", "2"},
+      {"--buffer-size", "1", "2"},
+      {"--count", "1", "2"},
+      {"--latency-samples", "1", "2"},
+      {"--latency-stride-bytes", "64", "128"},
+      {"--latency-chain-mode", "auto", "global-random"},
+      {"--latency-tlb-locality-kb", "16", "32"},
+      {"--threads", "1", "2"},
+      {"--output", "-T", "second.json"},
+      {"--cache-size", "256", "512"},
+      {"--seed", "42", "43"},
+  };
+  for (const DuplicateOptionCase& test_case : duplicate_cases) {
+    for (const char* mode : {"--benchmark", "--patterns"}) {
+      SCOPED_TRACE(test_case.option);
+      SCOPED_TRACE(mode);
+      BenchmarkConfig config;
+      const CapturedParseResult parsed = parse_capturing_stderr(
+          {"program", mode, test_case.option, test_case.first_value, test_case.option, test_case.second_value}, config);
+      EXPECT_EQ(parsed.result, EXIT_FAILURE);
+      EXPECT_EQ(parsed.stderr_output.find(Messages::error_prefix() +
+                                          Messages::error_duplicate_option(test_case.option) + "\n"),
+                0u)
+          << parsed.stderr_output;
+    }
+  }
+
+  struct SemanticInvalidCase {
+    const char* option;
+    const char* value;
+    std::string reason;
+  };
+  const SemanticInvalidCase semantic_cases[] = {
+      {"--cache-size", "8",
+       Messages::error_cache_size_invalid(Constants::MIN_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB,
+                                          Constants::MAX_CACHE_SIZE_KB / 1024)},
+      {"--cache-size", "1100000",
+       Messages::error_cache_size_invalid(Constants::MIN_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB,
+                                          Constants::MAX_CACHE_SIZE_KB / 1024)},
+      {"--latency-stride-bytes", "0",
+       Messages::error_latency_stride_invalid(0, 1, std::numeric_limits<long long>::max())},
+      {"--latency-chain-mode", "unknown-mode", Messages::error_latency_chain_mode_invalid()},
+      {"--latency-tlb-locality-kb", "-1",
+       Messages::error_latency_tlb_locality_invalid(
+           -1, static_cast<long long>(std::numeric_limits<size_t>::max() / Constants::BYTES_PER_KB))},
+      {"--threads", "0", Messages::error_threads_invalid(0, 1, std::numeric_limits<int>::max())},
+      {"--latency-samples", "0", Messages::error_latency_samples_invalid(0, 1, std::numeric_limits<int>::max())},
+      {"-unknown", "value", ""},
+  };
+  for (const SemanticInvalidCase& test_case : semantic_cases) {
+    SCOPED_TRACE(test_case.option);
+    SCOPED_TRACE(test_case.value);
+    BenchmarkConfig config;
+    const CapturedParseResult parsed = parse_capturing_stderr({"program", test_case.option, test_case.value}, config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    const std::string diagnostic = test_case.reason.empty()
+                                       ? Messages::error_prefix() + Messages::error_unknown_option(test_case.option)
+                                       : expected_invalid_value(test_case.option, test_case.value, test_case.reason);
+    EXPECT_EQ(parsed.stderr_output.find(diagnostic + "\n"), 0u) << parsed.stderr_output;
   }
 }
 
@@ -280,15 +383,17 @@ TEST(ConfigTest, RejectsMalformedNumericTokensWithCentralizedErrors) {
   }
 }
 
-TEST(ConfigTest, RejectsMalformedSweepListsAndNumericValues) {
+TEST(ConfigTest, RejectsMalformedAndOutOfDomainSweepValues) {
   struct InvalidSweepCase {
-    const char* specification;
-    const char* reason;
+    std::string specification;
+    std::string reason;
     bool analyze_tlb;
   };
 
   constexpr const char* kInvalidSignedReason =
       "must be an integer without whitespace, a plus sign, or trailing characters";
+  const long long max_locality_kb =
+      static_cast<long long>(std::numeric_limits<size_t>::max() / Constants::BYTES_PER_KB);
   const InvalidSweepCase cases[] = {
       {"latency-samples=100,200", "unsupported sweep parameter: latency-samples", false},
       {"buffer-size=1,,2", "sweep value list cannot contain empty values", false},
@@ -298,33 +403,6 @@ TEST(ConfigTest, RejectsMalformedSweepListsAndNumericValues) {
       {"latency-tlb-locality-kb=16x", kInvalidSignedReason, false},
       {"latency-stride-bytes=64x", kInvalidSignedReason, false},
       {"latency-stride-bytes=64x", kInvalidSignedReason, true},
-  };
-
-  for (const InvalidSweepCase& test_case : cases) {
-    SCOPED_TRACE(test_case.specification);
-    std::vector<std::string> arguments = {"program"};
-    arguments.push_back(test_case.analyze_tlb ? "--analyze-tlb" : "--benchmark");
-    arguments.push_back("--sweep");
-    arguments.push_back(test_case.specification);
-
-    BenchmarkConfig config;
-    const CapturedParseResult parsed = parse_capturing_stderr(arguments, config);
-    EXPECT_EQ(parsed.result, EXIT_FAILURE);
-    EXPECT_NE(parsed.stderr_output.find(expected_invalid_value("--sweep", test_case.specification, test_case.reason)),
-              std::string::npos);
-  }
-}
-
-TEST(ConfigTest, RejectsSweepValuesOutsideSemanticDomains) {
-  struct InvalidSweepCase {
-    std::string specification;
-    std::string reason;
-    bool analyze_tlb;
-  };
-
-  const long long max_locality_kb =
-      static_cast<long long>(std::numeric_limits<size_t>::max() / Constants::BYTES_PER_KB);
-  const InvalidSweepCase cases[] = {
       {"buffer-size=-1", Messages::error_buffersize_invalid(-1, std::numeric_limits<unsigned long>::max()), false},
       {"cache-size=8",
        Messages::error_cache_size_invalid(Constants::MIN_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB,
@@ -342,7 +420,6 @@ TEST(ConfigTest, RejectsSweepValuesOutsideSemanticDomains) {
     SCOPED_TRACE(test_case.specification);
     std::vector<std::string> arguments = {"program", test_case.analyze_tlb ? "--analyze-tlb" : "--benchmark", "--sweep",
                                           test_case.specification};
-
     BenchmarkConfig config;
     const CapturedParseResult parsed = parse_capturing_stderr(arguments, config);
     EXPECT_EQ(parsed.result, EXIT_FAILURE);
@@ -444,85 +521,11 @@ TEST(ConfigTest, ValidateAnalyzeTlbStrideBoundsForDirectAndSweepModes) {
   }
 }
 
-TEST(ConfigTest, ParseSemanticErrorsHaveExactDiagnostics) {
-  struct InvalidCase {
-    const char* option;
-    const char* value;
-    std::string reason;
-  };
-  const InvalidCase cases[] = {
-      {"--cache-size", "8",
-       Messages::error_cache_size_invalid(Constants::MIN_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB,
-                                          Constants::MAX_CACHE_SIZE_KB / 1024)},
-      {"--cache-size", "1100000",
-       Messages::error_cache_size_invalid(Constants::MIN_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB,
-                                          Constants::MAX_CACHE_SIZE_KB / 1024)},
-      {"--latency-stride-bytes", "0",
-       Messages::error_latency_stride_invalid(0, 1, std::numeric_limits<long long>::max())},
-      {"--latency-chain-mode", "unknown-mode", Messages::error_latency_chain_mode_invalid()},
-      {"--latency-tlb-locality-kb", "-1",
-       Messages::error_latency_tlb_locality_invalid(
-           -1, static_cast<long long>(std::numeric_limits<size_t>::max() / Constants::BYTES_PER_KB))},
-      {"--threads", "0", Messages::error_threads_invalid(0, 1, std::numeric_limits<int>::max())},
-      {"--latency-samples", "0", Messages::error_latency_samples_invalid(0, 1, std::numeric_limits<int>::max())},
-      {"-unknown", "value", ""},
-  };
-  for (const InvalidCase& test_case : cases) {
-    SCOPED_TRACE(test_case.option);
-    SCOPED_TRACE(test_case.value);
-    BenchmarkConfig config;
-    const CapturedParseResult parsed = parse_capturing_stderr({"program", test_case.option, test_case.value}, config);
-    EXPECT_EQ(parsed.result, EXIT_FAILURE);
-    const std::string diagnostic = test_case.reason.empty()
-                                       ? Messages::error_prefix() + Messages::error_unknown_option(test_case.option)
-                                       : expected_invalid_value(test_case.option, test_case.value, test_case.reason);
-    EXPECT_EQ(parsed.stderr_output.find(diagnostic + "\n"), 0u) << parsed.stderr_output;
-  }
-}
-
-// Test parsing cache size zero (validated later; allowed only with --only-latency)
-TEST(ConfigTest, ParseExplicitMemoryAndLatencyOptions) {
-  struct ValidCase {
-    const char* option;
-    const char* value;
-    std::function<void(const BenchmarkConfig&)> verify;
-  };
-  const ValidCase cases[] = {
-      {"--cache-size", "0",
-       [](const BenchmarkConfig& config) {
-         EXPECT_EQ(config.custom_cache_size_kb_ll, 0);
-         EXPECT_TRUE(config.use_custom_cache_size);
-       }},
-      {"--buffer-size", "0", [](const BenchmarkConfig& config) { EXPECT_EQ(config.buffer_size_mb, 0u); }},
-      {"--latency-tlb-locality-kb", "16",
-       [](const BenchmarkConfig& config) {
-         EXPECT_EQ(config.latency_tlb_locality_bytes, 16u * Constants::BYTES_PER_KB);
-       }},
-      {"--latency-tlb-locality-kb", "0",
-       [](const BenchmarkConfig& config) { EXPECT_EQ(config.latency_tlb_locality_bytes, 0u); }},
-      {"--latency-stride-bytes", "64",
-       [](const BenchmarkConfig& config) { EXPECT_EQ(config.latency_stride_bytes, 64u); }},
-      {"--latency-chain-mode", "same-random-in-box",
-       [](const BenchmarkConfig& config) {
-         EXPECT_EQ(config.latency_chain_mode, LatencyChainMode::SameRandomInBoxIncreasingBox);
-       }},
-  };
-  for (const ValidCase& test_case : cases) {
-    SCOPED_TRACE(std::string(test_case.option) + " " + test_case.value);
-    BenchmarkConfig config;
-    const CapturedParseResult parsed = parse_capturing_stderr({"program", test_case.option, test_case.value}, config);
-    ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
-    EXPECT_TRUE(parsed.stderr_output.empty());
-    test_case.verify(config);
-  }
-}
-
-TEST(ConfigTest, ParseAnalyzeTlbStandaloneAppliesSafeDefaultsAndGeneratedSeed) {
+TEST(ConfigTest, ParseAnalyzeTlbDefaultsExplicitAndInvalidOptions) {
   for (const char* option : {"-T", "--analyze-tlb"}) {
     SCOPED_TRACE(option);
     BenchmarkConfig config;
     const CapturedParseResult parsed = parse_capturing_stderr({"program", option}, config);
-
     EXPECT_EQ(parsed.result, EXIT_SUCCESS);
     EXPECT_TRUE(config.analyze_tlb);
     EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::Medium);
@@ -531,15 +534,13 @@ TEST(ConfigTest, ParseAnalyzeTlbStandaloneAppliesSafeDefaultsAndGeneratedSeed) {
     EXPECT_FALSE(config.user_specified_tlb_seed);
     EXPECT_TRUE(parsed.stderr_output.empty()) << parsed.stderr_output;
   }
-}
 
-TEST(ConfigTest, ParseAnalyzeTlbExplicitOptions) {
   struct ValidCase {
     const char* option;
     const char* value;
     std::function<void(const BenchmarkConfig&)> verify;
   };
-  const ValidCase cases[] = {
+  const ValidCase valid_cases[] = {
       {"--sweep-max-runs", "24", [](const BenchmarkConfig& config) { EXPECT_EQ(config.sweep_max_runs, 24u); }},
       {"--seed", "18446744073709551615",
        [](const BenchmarkConfig& config) {
@@ -559,7 +560,7 @@ TEST(ConfigTest, ParseAnalyzeTlbExplicitOptions) {
       {"--tlb-density", "high",
        [](const BenchmarkConfig& config) { EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::High); }},
   };
-  for (const ValidCase& test_case : cases) {
+  for (const ValidCase& test_case : valid_cases) {
     SCOPED_TRACE(std::string(test_case.option) + " " + test_case.value);
     BenchmarkConfig config;
     const CapturedParseResult parsed =
@@ -569,14 +570,12 @@ TEST(ConfigTest, ParseAnalyzeTlbExplicitOptions) {
     EXPECT_TRUE(config.analyze_tlb);
     test_case.verify(config);
   }
-}
 
-TEST(ConfigTest, ParseAnalyzeTlbRejectsInvalidOptionsWithExactDiagnostics) {
   struct InvalidCase {
     std::vector<std::string> options;
     std::string diagnostic;
   };
-  const InvalidCase cases[] = {
+  const InvalidCase invalid_cases[] = {
       {{"--buffer-size", "512"}, Messages::error_analyze_tlb_must_be_used_alone()},
       {{"--seed", "42", "--seed", "43"}, Messages::error_duplicate_option("--seed")},
       {{"--latency-chain-mode", "global-random"}, Messages::error_analyze_tlb_global_random_unsupported()},
@@ -589,7 +588,7 @@ TEST(ConfigTest, ParseAnalyzeTlbRejectsInvalidOptionsWithExactDiagnostics) {
       {{"--latency-stride-bytes", "65"}, Messages::error_latency_stride_alignment(65, sizeof(void*))},
       {{"--output"}, Messages::error_missing_value("--output")},
   };
-  for (const InvalidCase& test_case : cases) {
+  for (const InvalidCase& test_case : invalid_cases) {
     SCOPED_TRACE(testing::PrintToString(test_case.options));
     std::vector<std::string> arguments = {"program", "--analyze-tlb"};
     arguments.insert(arguments.end(), test_case.options.begin(), test_case.options.end());
@@ -624,54 +623,6 @@ TEST(ConfigTest, ParseStandardAndPatternSeedsAndThreadCounts) {
       }
     }
   }
-}
-
-TEST(ConfigTest, ParseDuplicateValueOptionsRejected) {
-  struct DuplicateOptionCase {
-    const char* option;
-    const char* first_value;
-    const char* second_value;
-  };
-
-  const DuplicateOptionCase cases[] = {
-      {"--iterations", "1", "2"},
-      {"--buffer-size", "1", "2"},
-      {"--count", "1", "2"},
-      {"--latency-samples", "1", "2"},
-      {"--latency-stride-bytes", "64", "128"},
-      {"--latency-chain-mode", "auto", "global-random"},
-      {"--latency-tlb-locality-kb", "16", "32"},
-      {"--threads", "1", "2"},
-      {"--output", "-T", "second.json"},
-      {"--cache-size", "256", "512"},
-      {"--seed", "42", "43"},
-  };
-
-  for (const DuplicateOptionCase& test_case : cases) {
-    for (const char* mode : {"--benchmark", "--patterns"}) {
-      SCOPED_TRACE(test_case.option);
-      SCOPED_TRACE(mode);
-      BenchmarkConfig config;
-      const CapturedParseResult parsed = parse_capturing_stderr(
-          {"program", mode, test_case.option, test_case.first_value, test_case.option, test_case.second_value}, config);
-      EXPECT_EQ(parsed.result, EXIT_FAILURE);
-      EXPECT_EQ(parsed.stderr_output.find(Messages::error_prefix() +
-                                          Messages::error_duplicate_option(test_case.option) + "\n"),
-                0u)
-          << parsed.stderr_output;
-    }
-  }
-}
-
-// Test parsing help flag
-TEST(ConfigTest, ParseHelpFlag) {
-  BenchmarkConfig config;
-  const char* argv[] = {"program", "-h"};
-  int argc = 2;
-
-  int result = parse_arguments(argc, const_cast<char**>(argv), config);
-  EXPECT_EQ(result, EXIT_SUCCESS);  // Help returns SUCCESS
-  EXPECT_TRUE(config.help_printed);
 }
 
 TEST(ConfigTest, ValidateParsedIncompatibleFlagsWithExactDiagnostics) {
@@ -718,7 +669,7 @@ TEST(ConfigTest, ValidateParsedIncompatibleFlagsWithExactDiagnostics) {
   }
 }
 
-TEST(ConfigTest, CalculateBufferSizesMatchesExactStandardAndCustomCases) {
+TEST(ConfigTest, CalculateBufferSizesAndAccessCounts) {
   struct BufferSizeCase {
     bool use_custom_cache_size;
     size_t l1_cache_size;
@@ -728,85 +679,66 @@ TEST(ConfigTest, CalculateBufferSizesMatchesExactStandardAndCustomCases) {
     size_t expected_l2_buffer_size;
     size_t expected_custom_buffer_size;
   };
-
   constexpr size_t kL1Size = 128 * Constants::BYTES_PER_KB;
   constexpr size_t kL2Size = 4 * Constants::BYTES_PER_MB;
   constexpr size_t kCustomSize = 256 * Constants::BYTES_PER_KB;
-  const BufferSizeCase cases[] = {
+  const BufferSizeCase buffer_cases[] = {
       {false, kL1Size, kL2Size, 0, kL1Size, kL2Size, 0},
       {true, 0, 0, kCustomSize, 0, 0, kCustomSize},
   };
-
-  for (const BufferSizeCase& test_case : cases) {
+  for (const BufferSizeCase& test_case : buffer_cases) {
     SCOPED_TRACE(test_case.use_custom_cache_size ? "custom" : "standard");
     BenchmarkConfig config;
     config.use_custom_cache_size = test_case.use_custom_cache_size;
     config.l1_cache_size = test_case.l1_cache_size;
     config.l2_cache_size = test_case.l2_cache_size;
     config.custom_cache_size_bytes = test_case.custom_cache_size;
-
     calculate_buffer_sizes(config);
-
     EXPECT_EQ(config.l1_buffer_size, test_case.expected_l1_buffer_size);
     EXPECT_EQ(config.l2_buffer_size, test_case.expected_l2_buffer_size);
     EXPECT_EQ(config.custom_buffer_size, test_case.expected_custom_buffer_size);
   }
-}
 
-TEST(ConfigTest, CalculateAccessCountsUsesExactLinearScaling) {
   struct AccessCountCase {
     unsigned long buffer_size_mb;
     size_t expected_accesses;
   };
-
-  const AccessCountCase cases[] = {
+  const AccessCountCase access_cases[] = {
       {256, Constants::BASE_LATENCY_ACCESSES / 2},
       {Constants::DEFAULT_BUFFER_SIZE_MB, Constants::BASE_LATENCY_ACCESSES},
       {1024, Constants::BASE_LATENCY_ACCESSES * 2},
   };
-
-  for (const AccessCountCase& test_case : cases) {
+  for (const AccessCountCase& test_case : access_cases) {
     SCOPED_TRACE(test_case.buffer_size_mb);
     BenchmarkConfig config;
     config.buffer_size_mb = test_case.buffer_size_mb;
-
     calculate_access_counts(config);
-
     EXPECT_EQ(config.lat_num_accesses, test_case.expected_accesses);
   }
 }
 
-// Test validate_config rejects mutually exclusive flags
-
-// Test mode-aware per-buffer capping based on required main buffer count
 TEST(ConfigTest, ValidateConfigModeAwareBufferCap) {
   auto expected_cap = [](const BenchmarkConfig& cfg, unsigned long required_main_buffers) {
     unsigned long cap = cfg.max_total_allowed_mb / required_main_buffers;
-    if (cap < Constants::MINIMUM_LIMIT_MB_PER_BUFFER) {
-      cap = Constants::MINIMUM_LIMIT_MB_PER_BUFFER;
-    }
-    return cap;
+    return cap < Constants::MINIMUM_LIMIT_MB_PER_BUFFER ? Constants::MINIMUM_LIMIT_MB_PER_BUFFER : cap;
   };
-
-  BenchmarkConfig full;
-  full.run_benchmark = true;
-  full.buffer_size_mb = std::numeric_limits<unsigned long>::max();
-  EXPECT_EQ(validate_config(full), EXIT_SUCCESS);
-  EXPECT_EQ(full.buffer_size_mb, expected_cap(full, 2));
-
-  BenchmarkConfig bw_only;
-  bw_only.run_benchmark = true;
-  bw_only.only_bandwidth = true;
-  bw_only.buffer_size_mb = std::numeric_limits<unsigned long>::max();
-  EXPECT_EQ(validate_config(bw_only), EXIT_SUCCESS);
-  EXPECT_EQ(bw_only.buffer_size_mb, expected_cap(bw_only, 2));
-
-  BenchmarkConfig lat_only;
-  lat_only.run_benchmark = true;
-  lat_only.only_latency = true;
-  lat_only.buffer_size_mb = std::numeric_limits<unsigned long>::max();
-  EXPECT_EQ(validate_config(lat_only), EXIT_SUCCESS);
-  EXPECT_EQ(lat_only.buffer_size_mb, expected_cap(lat_only, 1));
+  struct CapCase {
+    const char* name;
+    bool only_bw;
+    bool only_lat;
+    unsigned long required_buffers;
+  };
+  for (const CapCase& entry :
+       {CapCase{"full", false, false, 2}, CapCase{"bw-only", true, false, 2}, CapCase{"lat-only", false, true, 1}}) {
+    SCOPED_TRACE(entry.name);
+    BenchmarkConfig cfg;
+    cfg.run_benchmark = true;
+    cfg.only_bandwidth = entry.only_bw;
+    cfg.only_latency = entry.only_lat;
+    cfg.buffer_size_mb = std::numeric_limits<unsigned long>::max();
+    EXPECT_EQ(validate_config(cfg), EXIT_SUCCESS);
+    EXPECT_EQ(cfg.buffer_size_mb, expected_cap(cfg, entry.required_buffers));
+  }
 }
 
 TEST(ConfigTest, ValidateConfigLatencyTargetCombinations) {
@@ -843,7 +775,7 @@ TEST(ConfigTest, ValidateConfigLatencyTargetCombinations) {
   }
 }
 
-TEST(ConfigTest, ValidateConfigLatencyLocalityAndStrideConstraints) {
+TEST(ConfigTest, ValidateConfigLatencyLocalityAndAnalyzeTlbIsolation) {
   struct LocalityCase {
     size_t stride;
     size_t locality;
@@ -877,15 +809,14 @@ TEST(ConfigTest, ValidateConfigLatencyLocalityAndStrideConstraints) {
     EXPECT_EQ(result, test_case.diagnostic.empty() ? EXIT_SUCCESS : EXIT_FAILURE);
     EXPECT_EQ(diagnostic, test_case.diagnostic.empty() ? "" : Messages::error_prefix() + test_case.diagnostic + "\n");
   }
-}
 
-TEST(ConfigTest, ValidateConfigAnalyzeTlbSkipsUnrelatedStandardModeRules) {
-  BenchmarkConfig config;
-  config.analyze_tlb = true;
-  config.only_bandwidth = true;
-  config.only_latency = true;
-  config.latency_stride_bytes = Constants::LATENCY_STRIDE_BYTES;
-
-  int result = validate_config(config);
-  EXPECT_EQ(result, EXIT_SUCCESS);
+  {
+    SCOPED_TRACE("analyze-tlb-skips-standard-rules");
+    BenchmarkConfig config;
+    config.analyze_tlb = true;
+    config.only_bandwidth = true;
+    config.only_latency = true;
+    config.latency_stride_bytes = Constants::LATENCY_STRIDE_BYTES;
+    EXPECT_EQ(validate_config(config), EXIT_SUCCESS);
+  }
 }

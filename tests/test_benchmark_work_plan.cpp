@@ -25,32 +25,66 @@
 #include "core/config/constants.h"
 #include "output/console/messages/messages_api.h"
 
-TEST(BenchmarkWorkPlanTest, StateIndexesCoverEveryTargetOperationExactlyOnce) {
-  const std::array<BenchmarkTarget, 4> targets = {BenchmarkTarget::MainMemory, BenchmarkTarget::L1, BenchmarkTarget::L2,
-                                                  BenchmarkTarget::Custom};
-  const std::array<BenchmarkOperation, 3> operations = {BenchmarkOperation::Read, BenchmarkOperation::Write,
-                                                        BenchmarkOperation::Copy};
-  std::array<bool, 12> bandwidth_indexes{};
-  std::array<bool, 4> latency_indexes{};
+TEST(BenchmarkWorkPlanTest, BandwidthPlansCoverStateIndexesAlignedPartitionsAndTinyBuffers) {
+  {
+    SCOPED_TRACE("state-indexes");
+    const std::array<BenchmarkTarget, 4> targets = {BenchmarkTarget::MainMemory, BenchmarkTarget::L1,
+                                                    BenchmarkTarget::L2, BenchmarkTarget::Custom};
+    const std::array<BenchmarkOperation, 3> operations = {BenchmarkOperation::Read, BenchmarkOperation::Write,
+                                                          BenchmarkOperation::Copy};
+    std::array<bool, 12> bandwidth_indexes{};
+    std::array<bool, 4> latency_indexes{};
 
-  for (BenchmarkTarget target : targets) {
-    for (BenchmarkOperation operation : operations) {
-      const size_t index = benchmark_bandwidth_state_index(target, operation);
-      ASSERT_LT(index, bandwidth_indexes.size());
-      EXPECT_FALSE(bandwidth_indexes[index]);
-      bandwidth_indexes[index] = true;
+    for (BenchmarkTarget target : targets) {
+      for (BenchmarkOperation operation : operations) {
+        const size_t index = benchmark_bandwidth_state_index(target, operation);
+        ASSERT_LT(index, bandwidth_indexes.size());
+        EXPECT_FALSE(bandwidth_indexes[index]);
+        bandwidth_indexes[index] = true;
+      }
+      const size_t latency_index = benchmark_latency_state_index(target);
+      ASSERT_LT(latency_index, latency_indexes.size());
+      EXPECT_FALSE(latency_indexes[latency_index]);
+      latency_indexes[latency_index] = true;
     }
-    const size_t latency_index = benchmark_latency_state_index(target);
-    ASSERT_LT(latency_index, latency_indexes.size());
-    EXPECT_FALSE(latency_indexes[latency_index]);
-    latency_indexes[latency_index] = true;
+
+    EXPECT_TRUE(std::all_of(bandwidth_indexes.begin(), bandwidth_indexes.end(), [](bool covered) { return covered; }));
+    EXPECT_TRUE(std::all_of(latency_indexes.begin(), latency_indexes.end(), [](bool covered) { return covered; }));
   }
 
-  EXPECT_TRUE(std::all_of(bandwidth_indexes.begin(), bandwidth_indexes.end(), [](bool covered) { return covered; }));
-  EXPECT_TRUE(std::all_of(latency_indexes.begin(), latency_indexes.end(), [](bool covered) { return covered; }));
+  {
+    SCOPED_TRACE("uneven-aligned-boundaries");
+    const size_t buffer_size = (7 * Constants::BYTES_PER_MB) + 123;
+    const BenchmarkWorkPlan plan =
+        build_benchmark_bandwidth_work_plan(buffer_size, 10, 3, BenchmarkTarget::MainMemory, BenchmarkOperation::Read);
+    ASSERT_EQ(plan.status, BenchmarkMeasurementStatus::Measured);
+    ASSERT_EQ(plan.boundaries.size(), 11u);
+    EXPECT_EQ(plan.boundaries.front(), 0u);
+    EXPECT_EQ(plan.boundaries.back(), buffer_size);
+    size_t covered = 0;
+    for (size_t index = 0; index < plan.workers.size(); ++index) {
+      EXPECT_EQ(plan.workers[index].offset_bytes, covered);
+      covered += plan.workers[index].span_bytes;
+      if (index + 1 < plan.workers.size()) {
+        EXPECT_EQ(covered % Constants::CACHE_LINE_SIZE_BYTES, 0u);
+      }
+    }
+    EXPECT_EQ(covered, buffer_size);
+    EXPECT_EQ(plan.total_payload_bytes, buffer_size * 3);
+  }
+
+  {
+    SCOPED_TRACE("tiny-buffer-worker-reduction");
+    const BenchmarkWorkPlan plan =
+        build_benchmark_bandwidth_work_plan(64, 10, 1, BenchmarkTarget::L1, BenchmarkOperation::Write);
+    ASSERT_EQ(plan.status, BenchmarkMeasurementStatus::Measured);
+    EXPECT_EQ(plan.effective_threads, 1);
+    ASSERT_EQ(plan.workers.size(), 1u);
+    EXPECT_EQ(plan.workers[0].span_bytes, 64u);
+  }
 }
 
-TEST(BenchmarkWorkPlanTest, RejectsInvalidBandwidthParametersAndPayloadOverflow) {
+TEST(BenchmarkWorkPlanTest, BandwidthPlansRejectInvalidParametersPassLimitsAndOverflow) {
   struct InvalidCase {
     size_t bytes;
     int threads;
@@ -69,39 +103,7 @@ TEST(BenchmarkWorkPlanTest, RejectsInvalidBandwidthParametersAndPayloadOverflow)
       EXPECT_EQ(plan.status_reason, Messages::benchmark_reason_invalid_bandwidth_plan());
     }
   }
-}
 
-TEST(BenchmarkWorkPlanTest, CoversUnevenBufferExactlyWithAlignedBoundaries) {
-  const size_t buffer_size = (7 * Constants::BYTES_PER_MB) + 123;
-  const BenchmarkWorkPlan plan =
-      build_benchmark_bandwidth_work_plan(buffer_size, 10, 3, BenchmarkTarget::MainMemory, BenchmarkOperation::Read);
-
-  ASSERT_EQ(plan.status, BenchmarkMeasurementStatus::Measured);
-  ASSERT_EQ(plan.boundaries.size(), 11u);
-  EXPECT_EQ(plan.boundaries.front(), 0u);
-  EXPECT_EQ(plan.boundaries.back(), buffer_size);
-  size_t covered = 0;
-  for (size_t index = 0; index < plan.workers.size(); ++index) {
-    EXPECT_EQ(plan.workers[index].offset_bytes, covered);
-    covered += plan.workers[index].span_bytes;
-    if (index + 1 < plan.workers.size()) {
-      EXPECT_EQ(covered % Constants::CACHE_LINE_SIZE_BYTES, 0u);
-    }
-  }
-  EXPECT_EQ(covered, buffer_size);
-  EXPECT_EQ(plan.total_payload_bytes, buffer_size * 3);
-}
-
-TEST(BenchmarkWorkPlanTest, ReducesWorkersForTinyBuffers) {
-  const BenchmarkWorkPlan plan =
-      build_benchmark_bandwidth_work_plan(64, 10, 1, BenchmarkTarget::L1, BenchmarkOperation::Write);
-  ASSERT_EQ(plan.status, BenchmarkMeasurementStatus::Measured);
-  EXPECT_EQ(plan.effective_threads, 1);
-  ASSERT_EQ(plan.workers.size(), 1u);
-  EXPECT_EQ(plan.workers[0].span_bytes, 64u);
-}
-
-TEST(BenchmarkWorkPlanTest, PassUpdatesRejectLimitsAndOverflowWithoutMutation) {
   BenchmarkWorkPlan ordinary =
       build_benchmark_bandwidth_work_plan(4096, 1, 3, BenchmarkTarget::MainMemory, BenchmarkOperation::Read);
   ASSERT_EQ(ordinary.status, BenchmarkMeasurementStatus::Measured);
@@ -119,20 +121,17 @@ TEST(BenchmarkWorkPlanTest, PassUpdatesRejectLimitsAndOverflowWithoutMutation) {
   EXPECT_EQ(overflowing.total_payload_bytes, std::numeric_limits<size_t>::max() / 2 + 1);
 }
 
-TEST(BenchmarkWorkPlanTest, LatencyPlanRoundsAndEnforcesCompleteCycles) {
-  struct TestCase {
+TEST(BenchmarkWorkPlanTest, LatencyPlansEnforceCompleteCyclesAndRejectInvalidBounds) {
+  struct ValidCase {
     size_t desired_access_count;
     BenchmarkTarget target;
     uint64_t seed;
     size_t expected_access_count;
     size_t expected_complete_cycles;
   };
-  const std::array<TestCase, 2> cases = {{
-      {257, BenchmarkTarget::MainMemory, 42, 272, 17},
-      {1, BenchmarkTarget::L1, 7, 256, 16},
-  }};
-
-  for (const TestCase& test_case : cases) {
+  for (const ValidCase& test_case :
+       {ValidCase{257, BenchmarkTarget::MainMemory, 42, 272, 17}, ValidCase{1, BenchmarkTarget::L1, 7, 256, 16}}) {
+    SCOPED_TRACE(test_case.desired_access_count);
     const BenchmarkLatencyWorkPlan plan = build_benchmark_latency_work_plan(
         4096, 256, test_case.desired_access_count, 16, 10000, test_case.target, test_case.seed);
     ASSERT_EQ(plan.status, BenchmarkMeasurementStatus::Measured);
@@ -141,23 +140,29 @@ TEST(BenchmarkWorkPlanTest, LatencyPlanRoundsAndEnforcesCompleteCycles) {
     EXPECT_EQ(plan.complete_chain_cycles, test_case.expected_complete_cycles);
     EXPECT_EQ(plan.seed, test_case.seed);
   }
-}
 
-TEST(BenchmarkWorkPlanTest, LatencyPlanReportsUnusableAndOverLimitWork) {
-  const BenchmarkLatencyWorkPlan too_short =
-      build_benchmark_latency_work_plan(255, 256, 1, 1, 1000, BenchmarkTarget::MainMemory, 1);
-  EXPECT_EQ(too_short.status, BenchmarkMeasurementStatus::Skipped);
-  EXPECT_EQ(too_short.status_reason, Messages::benchmark_reason_latency_chain_too_short());
-
-  const BenchmarkLatencyWorkPlan minimum_exceeds_limit =
-      build_benchmark_latency_work_plan(4096, 256, 1, 16, 255, BenchmarkTarget::MainMemory, 2);
-  EXPECT_EQ(minimum_exceeds_limit.status, BenchmarkMeasurementStatus::Invalid);
-  EXPECT_EQ(minimum_exceeds_limit.status_reason, Messages::benchmark_reason_minimum_cycles_exceed_limit());
-
-  const BenchmarkLatencyWorkPlan rounded_exceeds_limit =
-      build_benchmark_latency_work_plan(4096, 256, 257, 1, 271, BenchmarkTarget::MainMemory, 3);
-  EXPECT_EQ(rounded_exceeds_limit.status, BenchmarkMeasurementStatus::Invalid);
-  EXPECT_EQ(rounded_exceeds_limit.status_reason, Messages::benchmark_reason_rounded_accesses_exceed_limit());
+  struct InvalidCase {
+    const char* name;
+    size_t buffer_bytes, desired_accesses, min_cycles, max_accesses;
+    uint64_t seed;
+    BenchmarkMeasurementStatus status;
+    std::string reason;
+  };
+  for (const InvalidCase& entry : {
+           InvalidCase{"too-short", 255, 1, 1, 1000, 1, BenchmarkMeasurementStatus::Skipped,
+                       Messages::benchmark_reason_latency_chain_too_short()},
+           InvalidCase{"min-exceeds-limit", 4096, 1, 16, 255, 2, BenchmarkMeasurementStatus::Invalid,
+                       Messages::benchmark_reason_minimum_cycles_exceed_limit()},
+           InvalidCase{"rounded-exceeds-limit", 4096, 257, 1, 271, 3, BenchmarkMeasurementStatus::Invalid,
+                       Messages::benchmark_reason_rounded_accesses_exceed_limit()},
+       }) {
+    SCOPED_TRACE(entry.name);
+    const BenchmarkLatencyWorkPlan plan = build_benchmark_latency_work_plan(
+        entry.buffer_bytes, 256, entry.desired_accesses, entry.min_cycles, entry.max_accesses,
+        BenchmarkTarget::MainMemory, entry.seed);
+    EXPECT_EQ(plan.status, entry.status);
+    EXPECT_EQ(plan.status_reason, entry.reason);
+  }
 }
 
 TEST(BenchmarkWorkPlanTest, SeedDerivationIsStableAndDomainSeparated) {
@@ -188,15 +193,13 @@ TEST(BenchmarkWorkPlanTest, PhaseScheduleChecksEveryBoundaryWithoutExecutingKern
   EXPECT_EQ(complete.realized_phase_indexes, order);
 }
 
-TEST(BenchmarkWorkPlanTest, ElapsedValidationRejectsInjectedInvalidTiming) {
+TEST(BenchmarkWorkPlanTest, ElapsedValidationAndDurationQualityPolicies) {
   EXPECT_FALSE(benchmark_elapsed_is_valid(0.0));
   EXPECT_FALSE(benchmark_elapsed_is_valid(-1.0));
   EXPECT_FALSE(benchmark_elapsed_is_valid(std::numeric_limits<double>::quiet_NaN()));
   EXPECT_FALSE(benchmark_elapsed_is_valid(std::numeric_limits<double>::infinity()));
   EXPECT_TRUE(benchmark_elapsed_is_valid(0.001));
-}
 
-TEST(BenchmarkWorkPlanTest, DurationQualityDistinguishesMinimumWorkLimit) {
   EXPECT_TRUE(benchmark_duration_in_window(0.250, 0.100, 0.300));
   EXPECT_EQ(classify_benchmark_duration_quality(0.250, 16, 0.100, 0.300), "within-target-window");
   EXPECT_EQ(classify_benchmark_duration_quality(0.410, 16, 0.100, 0.300, true),
