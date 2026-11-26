@@ -489,6 +489,36 @@ TEST_F(GpuBandwidthParserTest, DefaultsUserValuesAndExplicitCapBoundary) {
               EXIT_SUCCESS);
     EXPECT_EQ(config.iterations, 512U);
   }
+
+  {
+    SCOPED_TRACE("inline-equals-option-syntax");
+    GpuBandwidthConfig config;
+    const CapturedGpuParse parsed = parse_gpu_arguments_capturing_stderr(
+        {"memory_benchmark", "--gpu-bandwidth", "--buffer-size=64", "--iterations=7", "--count=4", "--output=-",
+         "--seed=42"},
+        config);
+    ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+    EXPECT_TRUE(parsed.stderr_output.empty());
+    EXPECT_EQ(config.buffer_size_mb, 64U);
+    EXPECT_EQ(config.buffer_size_bytes, 64U * Constants::BYTES_PER_MB);
+    EXPECT_EQ(config.iterations, 7U);
+    EXPECT_EQ(config.loop_count, 4U);
+    EXPECT_EQ(config.output_file, "-");
+    EXPECT_EQ(config.seed, 42U);
+    EXPECT_TRUE(config.user_specified_iterations);
+    EXPECT_TRUE(config.user_specified_seed);
+  }
+
+  {
+    SCOPED_TRACE("inline-empty-output-disables-json");
+    GpuBandwidthConfig config;
+    config.output_file = "stale.json";
+    const CapturedGpuParse parsed =
+        parse_gpu_arguments_capturing_stderr({"memory_benchmark", "--gpu-bandwidth", "--output="}, config);
+    ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+    EXPECT_TRUE(parsed.stderr_output.empty());
+    EXPECT_TRUE(config.output_file.empty());
+  }
 }
 
 TEST_F(GpuBandwidthParserTest, RejectsInvalidOutputDuplicateMalformedAndCapOptions) {
@@ -504,6 +534,24 @@ TEST_F(GpuBandwidthParserTest, RejectsInvalidOutputDuplicateMalformedAndCapOptio
        Messages::error_duplicate_option("--output")},
       {{"memory_benchmark", "--gpu-bandwidth", "--output", "first", "-o", "second"},
        Messages::error_duplicate_option("--output")},
+      {{"memory_benchmark", "--gpu-bandwidth=1"}, Messages::error_option_does_not_take_value("--gpu-bandwidth")},
+      {{"memory_benchmark", "--gpu-bandwidth", "--help=1"}, Messages::error_option_does_not_take_value("--help")},
+      {{"memory_benchmark", "-G", "--unknown"},
+       Messages::error_option_not_allowed_in_mode("--unknown", Messages::error_gpu_bandwidth_must_be_used_alone())},
+      {{"memory_benchmark", "-G", "--threads", "4"},
+       Messages::error_option_not_allowed_in_mode("--threads", Messages::error_gpu_bandwidth_must_be_used_alone())},
+      {{"memory_benchmark", "--help"}, Messages::error_gpu_bandwidth_must_be_used_alone()},
+      {{"memory_benchmark", "-G", "--buffer-size", "-1"},
+       Messages::error_invalid_value("--buffer-size", "-1", Messages::gpu_reason_nonnegative_unsigned_long())},
+      {{"memory_benchmark", "-G", "--buffer-size", "64x"},
+       Messages::error_invalid_value("--buffer-size", "64x", Messages::reason_signed_integer_invalid())},
+      {{"memory_benchmark", "-G", "--buffer-size", "9223372036854775808"},
+       Messages::error_buffer_size_calculation(9223372036854775808UL)},
+      {{"memory_benchmark", "-G", "--buffer-size", "18446744073709551615"},
+       Messages::error_buffer_size_calculation(std::numeric_limits<unsigned long>::max())},
+      {{"memory_benchmark", "-G", "--buffer-size", "18446744073709551616"},
+       Messages::error_invalid_value("--buffer-size", "18446744073709551616",
+                                     Messages::reason_unsigned_integer_out_of_range())},
   };
   for (const OutputErrorCase& test_case : output_cases) {
     SCOPED_TRACE(::testing::PrintToString(test_case.arguments));
@@ -511,6 +559,18 @@ TEST_F(GpuBandwidthParserTest, RejectsInvalidOutputDuplicateMalformedAndCapOptio
     const CapturedGpuParse parsed = parse_gpu_arguments_capturing_stderr(test_case.arguments, config);
     EXPECT_EQ(parsed.result, EXIT_FAILURE);
     EXPECT_EQ(first_output_line(parsed.stderr_output), Messages::error_prefix() + test_case.diagnostic);
+  }
+
+  {
+    SCOPED_TRACE("argc-zero-and-null-argv-safe");
+    GpuBandwidthConfig config;
+    testing::internal::CaptureStderr();
+    const int status = parse_gpu_bandwidth_arguments(0, nullptr, config);
+    const std::string stderr_output = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(status, EXIT_FAILURE);
+    EXPECT_TRUE(config.argv.empty());
+    EXPECT_EQ(first_output_line(stderr_output),
+              Messages::error_prefix() + Messages::error_gpu_bandwidth_must_be_used_alone());
   }
 
   {

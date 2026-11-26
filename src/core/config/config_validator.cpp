@@ -123,29 +123,93 @@ std::string mode_name_for_sweep(const BenchmarkConfig& config) {
   return "--benchmark";
 }
 
+const char* conflicting_direct_option_for_sweep(const BenchmarkConfig& config,
+                                                SweepParameter parameter) {
+  switch (parameter) {
+    case SweepParameter::BufferSizeMb:
+      return config.user_specified_buffer_size ? "--buffer-size" : nullptr;
+    case SweepParameter::CacheSizeKb:
+      return config.use_custom_cache_size ? "--cache-size" : nullptr;
+    case SweepParameter::Threads:
+      return config.user_specified_threads ? "--threads" : nullptr;
+    case SweepParameter::LatencyTlbLocalityKb:
+      return config.user_specified_latency_tlb_locality ? "--latency-tlb-locality-kb" : nullptr;
+    case SweepParameter::LatencyStrideBytes:
+      return config.user_specified_latency_stride ? "--latency-stride-bytes" : nullptr;
+    case SweepParameter::LatencyChainMode:
+      return config.user_specified_latency_chain_mode ? "--latency-chain-mode" : nullptr;
+    case SweepParameter::TlbDensity:
+      return config.user_specified_tlb_density ? "--tlb-density" : nullptr;
+  }
+  return nullptr;
+}
+
+const char* canonical_sweep_parameter_name(SweepParameter parameter) {
+  switch (parameter) {
+    case SweepParameter::BufferSizeMb:
+      return "buffer-size";
+    case SweepParameter::CacheSizeKb:
+      return "cache-size";
+    case SweepParameter::Threads:
+      return "threads";
+    case SweepParameter::LatencyTlbLocalityKb:
+      return "latency-tlb-locality-kb";
+    case SweepParameter::LatencyStrideBytes:
+      return "latency-stride-bytes";
+    case SweepParameter::LatencyChainMode:
+      return "latency-chain-mode";
+    case SweepParameter::TlbDensity:
+      return "tlb-density";
+  }
+  return "";
+}
+
 }  // namespace
 
 /**
  * @brief Error Handling Strategy for this module:
- * 
+ *
  * This function uses RETURN CODES (EXIT_SUCCESS/EXIT_FAILURE) for error handling.
- * 
+ *
  * Rationale:
  * - Simple validation logic with straightforward error paths
  * - Called early in program lifecycle (before exceptions are expected)
  * - Consistent with other validation functions
  * - No deep call stacks - return codes are sufficient
  * - Integrates with main() program flow which uses exit codes
- * 
+ *
  * Error handling:
  * - Validation errors: Returns EXIT_FAILURE immediately with error message
  * - All errors are logged to std::cerr before returning
  * - Returns EXIT_SUCCESS on success
- * 
+ *
  * Callers should check return value and handle EXIT_FAILURE appropriately.
  */
 int validate_config(BenchmarkConfig& config) {
   const size_t page_size = get_config_page_size_bytes();
+
+  if (!config.analyze_tlb && !config.run_benchmark && !config.run_patterns) {
+    if (config.user_specified_pattern_seed || config.user_specified_benchmark_seed) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_seed_requires_supported_mode()
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (config.only_bandwidth && config.only_latency) {
+      std::cerr << Messages::error_prefix() << Messages::error_incompatible_flags() << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (config.only_bandwidth || config.only_latency) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_only_flags_require_benchmark()
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+    std::cerr << Messages::error_prefix()
+              << Messages::error_missing_primary_mode()
+              << std::endl;
+    return EXIT_FAILURE;
+  }
 
   if (config.run_sweep) {
     if (config.sweep_specs.empty()) {
@@ -160,15 +224,24 @@ int validate_config(BenchmarkConfig& config) {
     const std::string mode_name = mode_name_for_sweep(config);
     std::set<SweepParameter> seen_parameters;
     for (const SweepSpec& spec : config.sweep_specs) {
+      const std::string parameter_name =
+          spec.parameter_name.empty() ? canonical_sweep_parameter_name(spec.parameter) : spec.parameter_name;
       if (!seen_parameters.insert(spec.parameter).second) {
         std::cerr << Messages::error_prefix()
-                  << Messages::error_duplicate_sweep_parameter(spec.parameter_name)
+                  << Messages::error_duplicate_sweep_parameter(parameter_name)
                   << std::endl;
         return EXIT_FAILURE;
       }
       if (!sweep_parameter_allowed(config, spec.parameter)) {
         std::cerr << Messages::error_prefix()
-                  << Messages::error_sweep_parameter_not_allowed(spec.parameter_name, mode_name)
+                  << Messages::error_sweep_parameter_not_allowed(parameter_name, mode_name)
+                  << std::endl;
+        return EXIT_FAILURE;
+      }
+      if (const char* conflicting_option =
+              conflicting_direct_option_for_sweep(config, spec.parameter)) {
+        std::cerr << Messages::error_prefix()
+                  << Messages::error_sweep_option_conflict(conflicting_option, parameter_name)
                   << std::endl;
         return EXIT_FAILURE;
       }
@@ -224,6 +297,92 @@ int validate_config(BenchmarkConfig& config) {
     return EXIT_FAILURE;
   }
 
+  // Error: Validate mutually exclusive flags
+  if (config.only_bandwidth && config.only_latency) {
+    std::cerr << Messages::error_prefix() << Messages::error_incompatible_flags() << std::endl;
+    return EXIT_FAILURE;  // Return code: validation error
+  }
+
+  // Error: Validate flags with --patterns
+  if (config.run_patterns) {
+    if (config.only_bandwidth || config.only_latency) {
+      std::cerr << Messages::error_prefix() << Messages::error_only_flags_with_patterns() << std::endl;
+      return EXIT_FAILURE;  // Return code: validation error
+    }
+    if (config.use_custom_cache_size) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_patterns_incompatible_option("--cache-size")
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (config.user_specified_latency_samples) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_patterns_incompatible_option("--latency-samples")
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (config.user_specified_latency_stride) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_patterns_incompatible_option("--latency-stride-bytes")
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (config.user_specified_latency_chain_mode) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_patterns_incompatible_option("--latency-chain-mode")
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (config.user_specified_latency_tlb_locality) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_patterns_incompatible_option("--latency-tlb-locality-kb")
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+  }
+
+  // Error: Validate --only-bandwidth incompatibilities
+  if (config.only_bandwidth) {
+    if (config.use_custom_cache_size) {
+      std::cerr << Messages::error_prefix() << Messages::error_only_bandwidth_with_cache_size() << std::endl;
+      return EXIT_FAILURE;  // Return code: validation error
+    }
+    if (config.user_specified_latency_samples) {
+      std::cerr << Messages::error_prefix() << Messages::error_only_bandwidth_with_latency_samples() << std::endl;
+      return EXIT_FAILURE;  // Return code: validation error
+    }
+    if (config.user_specified_latency_stride) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_only_bandwidth_incompatible_option("--latency-stride-bytes")
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (config.user_specified_latency_chain_mode) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_only_bandwidth_incompatible_option("--latency-chain-mode")
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (config.user_specified_latency_tlb_locality) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_only_bandwidth_incompatible_option("--latency-tlb-locality-kb")
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+  }
+
+  // Error: Validate --only-latency incompatibilities
+  if (config.only_latency) {
+    if (config.user_specified_iterations) {
+      std::cerr << Messages::error_prefix() << Messages::error_only_latency_with_iterations() << std::endl;
+      return EXIT_FAILURE;  // Return code: validation error
+    }
+    if (config.user_specified_threads) {
+      std::cerr << Messages::error_prefix() << Messages::error_only_latency_with_threads() << std::endl;
+      return EXIT_FAILURE;
+    }
+  }
+
   // Error: Validate latency stride settings.
   if (config.latency_stride_bytes == 0) {
     std::cerr << Messages::error_prefix()
@@ -249,48 +408,6 @@ int validate_config(BenchmarkConfig& config) {
                      latency_chain_mode_to_string(effective_chain_mode))
               << std::endl;
     return EXIT_FAILURE;
-  }
-
-  // Error: Validate mutually exclusive flags
-  if (config.only_bandwidth && config.only_latency) {
-    std::cerr << Messages::error_prefix() << Messages::error_incompatible_flags() << std::endl;
-    return EXIT_FAILURE;  // Return code: validation error
-  }
-  
-  // Error: Validate flags with --patterns
-  if (config.run_patterns && (config.only_bandwidth || config.only_latency)) {
-    std::cerr << Messages::error_prefix() << Messages::error_only_flags_with_patterns() << std::endl;
-    return EXIT_FAILURE;  // Return code: validation error
-  }
-  
-  // Error: Validate --only-bandwidth and --only-latency require --benchmark
-  if (!config.run_benchmark && !config.run_patterns) {
-    if (config.only_bandwidth || config.only_latency) {
-      std::cerr << Messages::error_prefix()
-                << Messages::error_only_flags_require_benchmark()
-                << std::endl;
-      return EXIT_FAILURE;
-    }
-  }
-  
-  // Error: Validate --only-bandwidth incompatibilities
-  if (config.only_bandwidth) {
-    if (config.use_custom_cache_size) {
-      std::cerr << Messages::error_prefix() << Messages::error_only_bandwidth_with_cache_size() << std::endl;
-      return EXIT_FAILURE;  // Return code: validation error
-    }
-    if (config.user_specified_latency_samples) {
-      std::cerr << Messages::error_prefix() << Messages::error_only_bandwidth_with_latency_samples() << std::endl;
-      return EXIT_FAILURE;  // Return code: validation error
-    }
-  }
-  
-  // Error: Validate --only-latency incompatibilities
-  if (config.only_latency) {
-    if (config.user_specified_iterations) {
-      std::cerr << Messages::error_prefix() << Messages::error_only_latency_with_iterations() << std::endl;
-      return EXIT_FAILURE;  // Return code: validation error
-    }
   }
 
   if (!config.only_bandwidth) {
@@ -405,6 +522,20 @@ int validate_config(BenchmarkConfig& config) {
   if (max_allowed_mb_per_buffer < Constants::MINIMUM_LIMIT_MB_PER_BUFFER) {
     std::cout << Messages::info_calculated_max_less_than_min(max_allowed_mb_per_buffer, Constants::MINIMUM_LIMIT_MB_PER_BUFFER) << std::endl;
     max_allowed_mb_per_buffer = Constants::MINIMUM_LIMIT_MB_PER_BUFFER;
+  }
+
+  // Cap explicitly requested thread count after all incompatibility checks pass.
+  if (config.user_specified_threads) {
+    const ConfigTestHooks* test_hooks = get_config_test_hooks();
+    const int max_cores = (test_hooks != nullptr && test_hooks->use_system_info)
+                              ? test_hooks->total_logical_cores
+                              : get_total_logical_cores();
+    if (max_cores > 0 && config.num_threads > max_cores) {
+      std::cerr << Messages::warning_prefix()
+                << Messages::warning_threads_capped(config.num_threads, max_cores)
+                << std::endl;
+      config.num_threads = max_cores;
+    }
   }
 
   // Validate and cap buffer size.

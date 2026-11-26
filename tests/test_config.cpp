@@ -46,6 +46,10 @@ class ScopedConfigTestHooks {
 
   ~ScopedConfigTestHooks() { set_config_test_hooks(nullptr); }
 
+  const std::string& cpu_name() const { return hooks_.cpu_name; }
+  const std::string& macos_version() const { return hooks_.macos_version; }
+  int performance_cores() const { return hooks_.performance_cores; }
+  int efficiency_cores() const { return hooks_.efficiency_cores; }
   size_t page_size_bytes() const { return hooks_.page_size_bytes; }
   int total_logical_cores() const { return hooks_.total_logical_cores; }
   uint64_t generated_seed() const { return hooks_.generated_seed; }
@@ -61,6 +65,12 @@ struct CapturedParseResult {
   std::string stderr_output;
 };
 
+struct CapturedStreamsParseResult {
+  int result = EXIT_FAILURE;
+  std::string stdout_output;
+  std::string stderr_output;
+};
+
 CapturedParseResult parse_capturing_stderr(const std::vector<std::string>& arguments, BenchmarkConfig& config) {
   std::vector<std::string> mutable_arguments = arguments;
   std::vector<char*> argv;
@@ -72,6 +82,23 @@ CapturedParseResult parse_capturing_stderr(const std::vector<std::string>& argum
   testing::internal::CaptureStderr();
   const int result = parse_arguments(static_cast<int>(argv.size()), argv.data(), config);
   return {result, testing::internal::GetCapturedStderr()};
+}
+
+CapturedStreamsParseResult parse_capturing_streams(const std::vector<std::string>& arguments,
+                                                   BenchmarkConfig& config) {
+  std::vector<std::string> mutable_arguments = arguments;
+  std::vector<char*> argv;
+  argv.reserve(mutable_arguments.size());
+  for (std::string& argument : mutable_arguments) {
+    argv.push_back(argument.data());
+  }
+
+  testing::internal::CaptureStdout();
+  testing::internal::CaptureStderr();
+  const int result = parse_arguments(static_cast<int>(argv.size()), argv.data(), config);
+  const std::string stderr_output = testing::internal::GetCapturedStderr();
+  const std::string stdout_output = testing::internal::GetCapturedStdout();
+  return {result, stdout_output, stderr_output};
 }
 
 std::string expected_invalid_value(const std::string& option, const std::string& value, const std::string& reason) {
@@ -121,18 +148,30 @@ TEST(ConfigTest, ParsesAliasesExplicitOptionsAndHelpFlag) {
          EXPECT_EQ(config.custom_cache_size_kb_ll, 0);
          EXPECT_TRUE(config.use_custom_cache_size);
        }},
-      {"--buffer-size", "0", [](const BenchmarkConfig& config) { EXPECT_EQ(config.buffer_size_mb, 0u); }},
+      {"--buffer-size", "0",
+       [](const BenchmarkConfig& config) {
+         EXPECT_EQ(config.buffer_size_mb, 0u);
+         EXPECT_TRUE(config.user_specified_buffer_size);
+       }},
       {"--latency-tlb-locality-kb", "16",
        [](const BenchmarkConfig& config) {
          EXPECT_EQ(config.latency_tlb_locality_bytes, 16u * Constants::BYTES_PER_KB);
+         EXPECT_TRUE(config.user_specified_latency_tlb_locality);
        }},
       {"--latency-tlb-locality-kb", "0",
-       [](const BenchmarkConfig& config) { EXPECT_EQ(config.latency_tlb_locality_bytes, 0u); }},
+       [](const BenchmarkConfig& config) {
+         EXPECT_EQ(config.latency_tlb_locality_bytes, 0u);
+         EXPECT_TRUE(config.user_specified_latency_tlb_locality);
+       }},
       {"--latency-stride-bytes", "64",
-       [](const BenchmarkConfig& config) { EXPECT_EQ(config.latency_stride_bytes, 64u); }},
+       [](const BenchmarkConfig& config) {
+         EXPECT_EQ(config.latency_stride_bytes, 64u);
+         EXPECT_TRUE(config.user_specified_latency_stride);
+       }},
       {"--latency-chain-mode", "same-random-in-box",
        [](const BenchmarkConfig& config) {
          EXPECT_EQ(config.latency_chain_mode, LatencyChainMode::SameRandomInBoxIncreasingBox);
+         EXPECT_TRUE(config.user_specified_latency_chain_mode);
        }},
   };
   for (const ExplicitCase& test_case : explicit_cases) {
@@ -147,9 +186,11 @@ TEST(ConfigTest, ParsesAliasesExplicitOptionsAndHelpFlag) {
   {
     SCOPED_TRACE("help-flag");
     BenchmarkConfig config;
-    const char* argv[] = {"program", "-h"};
-    EXPECT_EQ(parse_arguments(2, const_cast<char**>(argv), config), EXIT_SUCCESS);
+    const CapturedStreamsParseResult parsed = parse_capturing_streams({"program", "-h"}, config);
+    EXPECT_EQ(parsed.result, EXIT_SUCCESS);
     EXPECT_TRUE(config.help_printed);
+    EXPECT_NE(parsed.stdout_output.find("Usage:"), std::string::npos);
+    EXPECT_TRUE(parsed.stderr_output.empty());
   }
 }
 
@@ -164,7 +205,9 @@ TEST(ConfigTest, ParseSweepValid) {
   EXPECT_TRUE(config.run_sweep);
   ASSERT_EQ(config.sweep_specs.size(), 2u);
   EXPECT_EQ(config.sweep_specs[0].parameter, SweepParameter::BufferSizeMb);
+  EXPECT_EQ(config.sweep_specs[0].values[0].unsigned_value, 128u);
   EXPECT_EQ(config.sweep_specs[0].values[0].integer_value, 128);
+  EXPECT_EQ(config.sweep_specs[0].values[1].unsigned_value, 256u);
   EXPECT_EQ(config.sweep_specs[0].values[1].integer_value, 256);
   EXPECT_EQ(config.sweep_specs[1].parameter, SweepParameter::Threads);
   EXPECT_EQ(config.sweep_specs[1].values[0].integer_value, 1);
@@ -259,8 +302,7 @@ TEST(ConfigTest, RejectsMissingDuplicateAndSemanticOptionErrors) {
     BenchmarkConfig config;
     const CapturedParseResult parsed = parse_capturing_stderr({"program", "--benchmark", option}, config);
     EXPECT_EQ(parsed.result, EXIT_FAILURE);
-    EXPECT_EQ(parsed.stderr_output.find(Messages::error_prefix() + Messages::error_missing_value(option) + "\n"), 0u)
-        << parsed.stderr_output;
+    EXPECT_EQ(parsed.stderr_output, Messages::error_prefix() + Messages::error_missing_value(option) + "\n");
   }
 
   struct DuplicateOptionCase {
@@ -289,10 +331,8 @@ TEST(ConfigTest, RejectsMissingDuplicateAndSemanticOptionErrors) {
       const CapturedParseResult parsed = parse_capturing_stderr(
           {"program", mode, test_case.option, test_case.first_value, test_case.option, test_case.second_value}, config);
       EXPECT_EQ(parsed.result, EXIT_FAILURE);
-      EXPECT_EQ(parsed.stderr_output.find(Messages::error_prefix() +
-                                          Messages::error_duplicate_option(test_case.option) + "\n"),
-                0u)
-          << parsed.stderr_output;
+      EXPECT_EQ(parsed.stderr_output,
+                Messages::error_prefix() + Messages::error_duplicate_option(test_case.option) + "\n");
     }
   }
 
@@ -316,6 +356,7 @@ TEST(ConfigTest, RejectsMissingDuplicateAndSemanticOptionErrors) {
            -1, static_cast<long long>(std::numeric_limits<size_t>::max() / Constants::BYTES_PER_KB))},
       {"--threads", "0", Messages::error_threads_invalid(0, 1, std::numeric_limits<int>::max())},
       {"--latency-samples", "0", Messages::error_latency_samples_invalid(0, 1, std::numeric_limits<int>::max())},
+      {"--sweep-max-runs", "0", Messages::reason_positive_integer()},
       {"-unknown", "value", ""},
   };
   for (const SemanticInvalidCase& test_case : semantic_cases) {
@@ -327,7 +368,7 @@ TEST(ConfigTest, RejectsMissingDuplicateAndSemanticOptionErrors) {
     const std::string diagnostic = test_case.reason.empty()
                                        ? Messages::error_prefix() + Messages::error_unknown_option(test_case.option)
                                        : expected_invalid_value(test_case.option, test_case.value, test_case.reason);
-    EXPECT_EQ(parsed.stderr_output.find(diagnostic + "\n"), 0u) << parsed.stderr_output;
+    EXPECT_EQ(parsed.stderr_output, diagnostic + "\n");
   }
 }
 
@@ -532,6 +573,10 @@ TEST(ConfigTest, ParseAnalyzeTlbDefaultsExplicitAndInvalidOptions) {
     EXPECT_EQ(config.sweep_max_runs, Constants::DEFAULT_ANALYZE_TLB_SWEEP_MAX_RUNS);
     EXPECT_EQ(config.tlb_seed, scoped_config_test_hooks.generated_seed());
     EXPECT_FALSE(config.user_specified_tlb_seed);
+    EXPECT_EQ(config.cpu_name, scoped_config_test_hooks.cpu_name());
+    EXPECT_EQ(config.macos_version, scoped_config_test_hooks.macos_version());
+    EXPECT_EQ(config.perf_cores, scoped_config_test_hooks.performance_cores());
+    EXPECT_EQ(config.eff_cores, scoped_config_test_hooks.efficiency_cores());
     EXPECT_TRUE(parsed.stderr_output.empty()) << parsed.stderr_output;
   }
 
@@ -548,17 +593,30 @@ TEST(ConfigTest, ParseAnalyzeTlbDefaultsExplicitAndInvalidOptions) {
          EXPECT_TRUE(config.user_specified_tlb_seed);
        }},
       {"--latency-stride-bytes", "128",
-       [](const BenchmarkConfig& config) { EXPECT_EQ(config.latency_stride_bytes, 128u); }},
+       [](const BenchmarkConfig& config) {
+         EXPECT_EQ(config.latency_stride_bytes, 128u);
+         EXPECT_TRUE(config.user_specified_latency_stride);
+       }},
       {"--latency-chain-mode", "random-box",
        [](const BenchmarkConfig& config) {
          EXPECT_EQ(config.latency_chain_mode, LatencyChainMode::RandomInBoxRandomBox);
+         EXPECT_TRUE(config.user_specified_latency_chain_mode);
        }},
       {"--tlb-density", "low",
-       [](const BenchmarkConfig& config) { EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::Low); }},
+       [](const BenchmarkConfig& config) {
+         EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::Low);
+         EXPECT_TRUE(config.user_specified_tlb_density);
+       }},
       {"--tlb-density", "medium",
-       [](const BenchmarkConfig& config) { EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::Medium); }},
+       [](const BenchmarkConfig& config) {
+         EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::Medium);
+         EXPECT_TRUE(config.user_specified_tlb_density);
+       }},
       {"--tlb-density", "high",
-       [](const BenchmarkConfig& config) { EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::High); }},
+       [](const BenchmarkConfig& config) {
+         EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::High);
+         EXPECT_TRUE(config.user_specified_tlb_density);
+       }},
   };
   for (const ValidCase& test_case : valid_cases) {
     SCOPED_TRACE(std::string(test_case.option) + " " + test_case.value);
@@ -576,16 +634,19 @@ TEST(ConfigTest, ParseAnalyzeTlbDefaultsExplicitAndInvalidOptions) {
     std::string diagnostic;
   };
   const InvalidCase invalid_cases[] = {
-      {{"--buffer-size", "512"}, Messages::error_analyze_tlb_must_be_used_alone()},
+      {{"--buffer-size", "512"},
+       Messages::error_option_not_allowed_in_mode("--buffer-size", Messages::error_analyze_tlb_must_be_used_alone())},
       {{"--seed", "42", "--seed", "43"}, Messages::error_duplicate_option("--seed")},
       {{"--latency-chain-mode", "global-random"}, Messages::error_analyze_tlb_global_random_unsupported()},
       {{"--tlb-density", "ultra"},
-       Messages::error_invalid_value("--tlb-density", "ultra", "must be one of: low, medium, high")},
+       Messages::error_invalid_value("--tlb-density", "ultra", Messages::reason_tlb_density_invalid())},
       {{"--latency-stride-bytes", "0"},
        Messages::error_invalid_value(
            "--latency-stride-bytes", "0",
            Messages::error_latency_stride_invalid(0, 1, std::numeric_limits<long long>::max()))},
       {{"--latency-stride-bytes", "65"}, Messages::error_latency_stride_alignment(65, sizeof(void*))},
+      {{"--sweep-max-runs", "0"},
+       Messages::error_invalid_value("--sweep-max-runs", "0", Messages::reason_positive_integer())},
       {{"--output"}, Messages::error_missing_value("--output")},
   };
   for (const InvalidCase& test_case : invalid_cases) {
@@ -595,8 +656,7 @@ TEST(ConfigTest, ParseAnalyzeTlbDefaultsExplicitAndInvalidOptions) {
     BenchmarkConfig config;
     const CapturedParseResult parsed = parse_capturing_stderr(arguments, config);
     EXPECT_EQ(parsed.result, EXIT_FAILURE);
-    EXPECT_EQ(parsed.stderr_output.find(Messages::error_prefix() + test_case.diagnostic + "\n"), 0u)
-        << parsed.stderr_output;
+    EXPECT_EQ(parsed.stderr_output, Messages::error_prefix() + test_case.diagnostic + "\n");
   }
 }
 
@@ -800,6 +860,7 @@ TEST(ConfigTest, ValidateConfigLatencyLocalityAndAnalyzeTlbIsolation) {
     SCOPED_TRACE(test_case.locality);
     SCOPED_TRACE(static_cast<int>(test_case.mode));
     BenchmarkConfig config;
+    config.run_benchmark = true;
     config.latency_stride_bytes = test_case.stride;
     config.latency_tlb_locality_bytes = test_case.locality;
     config.latency_chain_mode = test_case.mode;
@@ -819,4 +880,471 @@ TEST(ConfigTest, ValidateConfigLatencyLocalityAndAnalyzeTlbIsolation) {
     config.latency_stride_bytes = Constants::LATENCY_STRIDE_BYTES;
     EXPECT_EQ(validate_config(config), EXIT_SUCCESS);
   }
+}
+
+TEST(ConfigTest, SupportsInlineEqualsSyntaxAndRejectsUnexpectedValues) {
+  {
+    SCOPED_TRACE("general-inline-options");
+    BenchmarkConfig config;
+    const CapturedParseResult parsed = parse_capturing_stderr(
+        {"program", "--benchmark", "--buffer-size=512", "--iterations=25", "--count=2", "--threads=2",
+         "--cache-size=256", "--latency-samples=12", "--latency-stride-bytes=128", "--latency-chain-mode=random-box",
+         "--latency-tlb-locality-kb=32", "--seed=99", "--output=-", "--sweep=buffer-size=128,256",
+         "--sweep-max-runs=6"},
+        config);
+    ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+    EXPECT_TRUE(parsed.stderr_output.empty());
+    EXPECT_TRUE(config.run_benchmark);
+    EXPECT_EQ(config.buffer_size_mb, 512u);
+    EXPECT_TRUE(config.user_specified_buffer_size);
+    EXPECT_EQ(config.iterations, 25);
+    EXPECT_TRUE(config.user_specified_iterations);
+    EXPECT_EQ(config.loop_count, 2);
+    EXPECT_EQ(config.num_threads, 2);
+    EXPECT_TRUE(config.user_specified_threads);
+    EXPECT_EQ(config.custom_cache_size_kb_ll, 256);
+    EXPECT_TRUE(config.use_custom_cache_size);
+    EXPECT_EQ(config.latency_sample_count, 12);
+    EXPECT_TRUE(config.user_specified_latency_samples);
+    EXPECT_EQ(config.latency_stride_bytes, 128u);
+    EXPECT_TRUE(config.user_specified_latency_stride);
+    EXPECT_EQ(config.latency_chain_mode, LatencyChainMode::RandomInBoxRandomBox);
+    EXPECT_TRUE(config.user_specified_latency_chain_mode);
+    EXPECT_EQ(config.latency_tlb_locality_bytes, 32u * Constants::BYTES_PER_KB);
+    EXPECT_TRUE(config.user_specified_latency_tlb_locality);
+    EXPECT_EQ(config.benchmark_seed, 99u);
+    EXPECT_TRUE(config.user_specified_benchmark_seed);
+    EXPECT_EQ(config.output_file, "-");
+    EXPECT_TRUE(config.run_sweep);
+    ASSERT_EQ(config.sweep_specs.size(), 1u);
+    EXPECT_EQ(config.sweep_specs[0].parameter, SweepParameter::BufferSizeMb);
+    ASSERT_EQ(config.sweep_specs[0].values.size(), 2u);
+    EXPECT_EQ(config.sweep_specs[0].values[0].unsigned_value, 128u);
+    EXPECT_EQ(config.sweep_specs[0].values[1].unsigned_value, 256u);
+    EXPECT_EQ(config.sweep_max_runs, 6u);
+  }
+
+  {
+    SCOPED_TRACE("general-empty-inline-output");
+    BenchmarkConfig config;
+    const CapturedParseResult parsed = parse_capturing_stderr({"program", "--benchmark", "--output="}, config);
+    ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+    EXPECT_TRUE(parsed.stderr_output.empty());
+    EXPECT_TRUE(config.output_file.empty());
+  }
+
+  {
+    SCOPED_TRACE("tlb-inline-options");
+    BenchmarkConfig config;
+    const CapturedParseResult parsed = parse_capturing_stderr(
+        {"program", "--analyze-tlb", "--output=-", "--latency-stride-bytes=128",
+         "--latency-chain-mode=same-random-in-box", "--tlb-density=high", "--seed=77",
+         "--sweep=tlb-density=low,high", "--sweep-max-runs=12"},
+        config);
+    ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+    EXPECT_TRUE(parsed.stderr_output.empty());
+    EXPECT_TRUE(config.analyze_tlb);
+    EXPECT_EQ(config.output_file, "-");
+    EXPECT_EQ(config.latency_stride_bytes, 128u);
+    EXPECT_TRUE(config.user_specified_latency_stride);
+    EXPECT_EQ(config.latency_chain_mode, LatencyChainMode::SameRandomInBoxIncreasingBox);
+    EXPECT_TRUE(config.user_specified_latency_chain_mode);
+    EXPECT_EQ(config.tlb_sweep_density, TlbSweepDensity::High);
+    EXPECT_TRUE(config.user_specified_tlb_density);
+    EXPECT_EQ(config.tlb_seed, 77u);
+    EXPECT_TRUE(config.user_specified_tlb_seed);
+    EXPECT_TRUE(config.run_sweep);
+    ASSERT_EQ(config.sweep_specs.size(), 1u);
+    EXPECT_EQ(config.sweep_specs[0].parameter, SweepParameter::TlbDensity);
+    EXPECT_EQ(config.sweep_max_runs, 12u);
+  }
+
+  {
+    SCOPED_TRACE("tlb-empty-inline-output");
+    BenchmarkConfig config;
+    const CapturedParseResult parsed = parse_capturing_stderr({"program", "--analyze-tlb", "--output="}, config);
+    ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+    EXPECT_TRUE(parsed.stderr_output.empty());
+    EXPECT_TRUE(config.output_file.empty());
+  }
+
+  struct UnexpectedValueCase {
+    std::vector<std::string> arguments;
+    const char* canonical_option;
+  };
+  const UnexpectedValueCase unexpected_cases[] = {
+      {{"program", "--benchmark=1"}, "--benchmark"},
+      {{"program", "--patterns=1"}, "--patterns"},
+      {{"program", "--analyze-tlb=1"}, "--analyze-tlb"},
+      {{"program", "--benchmark", "--only-bandwidth=1"}, "--only-bandwidth"},
+      {{"program", "--benchmark", "--only-latency=1"}, "--only-latency"},
+      {{"program", "--benchmark", "--non-cacheable=1"}, "--non-cacheable"},
+      {{"program", "--benchmark", "--help=1"}, "--help"},
+      {{"program", "--analyze-tlb", "--help=1"}, "--help"},
+  };
+  for (const UnexpectedValueCase& test_case : unexpected_cases) {
+    SCOPED_TRACE(testing::PrintToString(test_case.arguments));
+    BenchmarkConfig config;
+    const CapturedParseResult parsed = parse_capturing_stderr(test_case.arguments, config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_EQ(parsed.stderr_output,
+              Messages::error_prefix() + Messages::error_option_does_not_take_value(test_case.canonical_option) +
+                  "\n");
+  }
+}
+
+TEST(ConfigTest, RejectsDuplicatePrimaryAndBooleanFlags) {
+  struct DuplicateFlagCase {
+    std::vector<std::string> arguments;
+    const char* canonical_option;
+  };
+  const DuplicateFlagCase cases[] = {
+      {{"program", "-B", "-B"}, "--benchmark"},
+      {{"program", "-B", "--benchmark"}, "--benchmark"},
+      {{"program", "-P", "--patterns"}, "--patterns"},
+      {{"program", "-T", "-T"}, "--analyze-tlb"},
+      {{"program", "-T", "--analyze-tlb"}, "--analyze-tlb"},
+      {{"program", "-B", "-W", "-W"}, "--only-bandwidth"},
+      {{"program", "-B", "-L", "-L"}, "--only-latency"},
+      {{"program", "-B", "-u", "-u"}, "--non-cacheable"},
+      {{"program", "-h", "--help"}, "--help"},
+      {{"program", "--benchmark", "-h", "--help"}, "--help"},
+      {{"program", "--analyze-tlb", "--help", "-h"}, "--help"},
+  };
+  for (const DuplicateFlagCase& test_case : cases) {
+    SCOPED_TRACE(testing::PrintToString(test_case.arguments));
+    BenchmarkConfig config;
+    const CapturedStreamsParseResult parsed = parse_capturing_streams(test_case.arguments, config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_TRUE(parsed.stdout_output.empty());
+    EXPECT_EQ(parsed.stderr_output,
+              Messages::error_prefix() + Messages::error_duplicate_option(test_case.canonical_option) + "\n");
+  }
+}
+
+TEST(ConfigTest, HelpValidationOrderAndSideEffectIsolationAcrossGeneralAndTlbModes) {
+  {
+    SCOPED_TRACE("analyze-tlb-help-skips-os-and-seed");
+    BenchmarkConfig config;
+    const CapturedStreamsParseResult parsed = parse_capturing_streams({"program", "--analyze-tlb", "--help"}, config);
+    ASSERT_EQ(parsed.result, EXIT_SUCCESS);
+    EXPECT_TRUE(config.analyze_tlb);
+    EXPECT_TRUE(config.help_printed);
+    EXPECT_EQ(config.tlb_seed, 0u);
+    EXPECT_TRUE(config.cpu_name.empty());
+    EXPECT_TRUE(config.macos_version.empty());
+    EXPECT_EQ(config.perf_cores, 0);
+    EXPECT_EQ(config.eff_cores, 0);
+    EXPECT_NE(parsed.stdout_output.find("Usage:"), std::string::npos);
+    EXPECT_TRUE(parsed.stderr_output.empty());
+  }
+
+  {
+    SCOPED_TRACE("analyze-tlb-help-rejects-unknown-option");
+    BenchmarkConfig config;
+    const CapturedStreamsParseResult parsed =
+        parse_capturing_streams({"program", "--analyze-tlb", "--help", "--unknown"}, config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_FALSE(config.help_printed);
+    EXPECT_TRUE(parsed.stdout_output.empty());
+    EXPECT_EQ(parsed.stderr_output,
+              Messages::error_prefix() +
+                  Messages::error_option_not_allowed_in_mode("--unknown",
+                                                             Messages::error_analyze_tlb_must_be_used_alone()) +
+                  "\n");
+  }
+
+  {
+    SCOPED_TRACE("benchmark-help-skips-os-cache-and-seed");
+    BenchmarkConfig config;
+    const CapturedStreamsParseResult parsed = parse_capturing_streams({"program", "--benchmark", "--help"}, config);
+    ASSERT_EQ(parsed.result, EXIT_SUCCESS);
+    EXPECT_TRUE(config.run_benchmark);
+    EXPECT_TRUE(config.help_printed);
+    EXPECT_EQ(config.benchmark_seed, 0u);
+    EXPECT_TRUE(config.cpu_name.empty());
+    EXPECT_TRUE(config.macos_version.empty());
+    EXPECT_EQ(config.l1_cache_size, 0u);
+    EXPECT_EQ(config.l2_cache_size, 0u);
+    EXPECT_EQ(config.num_threads, 0);
+    EXPECT_NE(parsed.stdout_output.find("Usage:"), std::string::npos);
+    EXPECT_TRUE(parsed.stderr_output.empty());
+  }
+
+  for (const char* bad_option : {"--cache-size", "--iterations"}) {
+    SCOPED_TRACE(bad_option);
+    BenchmarkConfig config;
+    const CapturedStreamsParseResult parsed =
+        parse_capturing_streams({"program", "--benchmark", "--help", bad_option, "bad"}, config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_TRUE(parsed.stdout_output.empty());
+    EXPECT_EQ(parsed.stderr_output,
+              expected_invalid_value(bad_option, "bad", Messages::reason_signed_integer_invalid()) + "\n");
+  }
+}
+
+TEST(ConfigTest, SinglePassParsesFlagShapedChainModeValueWithoutPrescanCollision) {
+  BenchmarkConfig config;
+  const CapturedParseResult parsed =
+      parse_capturing_stderr({"program", "--benchmark", "--latency-chain-mode", "-k"}, config);
+  EXPECT_EQ(parsed.result, EXIT_FAILURE);
+  EXPECT_EQ(parsed.stderr_output,
+            expected_invalid_value("--latency-chain-mode", "-k", Messages::error_latency_chain_mode_invalid()) + "\n");
+}
+
+TEST(ConfigTest, ParsesFullUnsignedLongRangeForBufferSizeAndSweep) {
+  const unsigned long llong_max_plus_one =
+      static_cast<unsigned long>(std::numeric_limits<long long>::max()) + 1UL;
+  const unsigned long ulong_max = std::numeric_limits<unsigned long>::max();
+  const std::string llong_max_plus_one_str = std::to_string(llong_max_plus_one);
+  const std::string ulong_max_str = std::to_string(ulong_max);
+
+  {
+    SCOPED_TRACE("direct-llong-max-plus-one");
+    BenchmarkConfig config;
+    const CapturedParseResult parsed =
+        parse_capturing_stderr({"program", "--benchmark", "--buffer-size", llong_max_plus_one_str}, config);
+    ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+    EXPECT_EQ(config.buffer_size_mb, llong_max_plus_one);
+    EXPECT_TRUE(config.user_specified_buffer_size);
+  }
+
+  {
+    SCOPED_TRACE("direct-ulong-max");
+    BenchmarkConfig config;
+    const CapturedParseResult parsed =
+        parse_capturing_stderr({"program", "--benchmark", "--buffer-size=" + ulong_max_str}, config);
+    ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+    EXPECT_EQ(config.buffer_size_mb, ulong_max);
+    EXPECT_TRUE(config.user_specified_buffer_size);
+  }
+
+  {
+    SCOPED_TRACE("direct-ulong-max-plus-one");
+    BenchmarkConfig config;
+    const CapturedParseResult parsed =
+        parse_capturing_stderr({"program", "--benchmark", "--buffer-size", "18446744073709551616"}, config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_EQ(parsed.stderr_output,
+              expected_invalid_value("--buffer-size", "18446744073709551616",
+                                     Messages::reason_unsigned_integer_out_of_range()) +
+                  "\n");
+  }
+
+  {
+    SCOPED_TRACE("direct-negative");
+    BenchmarkConfig config;
+    const CapturedParseResult parsed =
+        parse_capturing_stderr({"program", "--benchmark", "--buffer-size", "-1"}, config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_EQ(parsed.stderr_output,
+              expected_invalid_value("--buffer-size", "-1", Messages::error_buffersize_invalid(-1, ulong_max)) + "\n");
+  }
+
+  {
+    SCOPED_TRACE("sweep-full-ulong-range");
+    BenchmarkConfig config;
+    const std::string spec = "buffer-size=" + llong_max_plus_one_str + "," + ulong_max_str;
+    const CapturedParseResult parsed =
+        parse_capturing_stderr({"program", "--benchmark", "--sweep", spec, "--output", "out.json"}, config);
+    ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+    ASSERT_EQ(config.sweep_specs.size(), 1u);
+    ASSERT_EQ(config.sweep_specs[0].values.size(), 2u);
+    EXPECT_EQ(config.sweep_specs[0].values[0].unsigned_value, llong_max_plus_one);
+    EXPECT_EQ(config.sweep_specs[0].values[1].unsigned_value, ulong_max);
+  }
+
+  {
+    SCOPED_TRACE("sweep-ulong-overflow");
+    BenchmarkConfig config;
+    const CapturedParseResult parsed =
+        parse_capturing_stderr({"program", "--benchmark", "--sweep", "buffer-size=18446744073709551616"}, config);
+    EXPECT_EQ(parsed.result, EXIT_FAILURE);
+    EXPECT_EQ(parsed.stderr_output,
+              expected_invalid_value("--sweep", "buffer-size=18446744073709551616",
+                                     Messages::reason_unsigned_integer_out_of_range()) +
+                  "\n");
+  }
+}
+
+TEST(ConfigTest, ParseArgumentsResetsStaleConfigStateOnReuse) {
+  BenchmarkConfig config;
+  const CapturedParseResult first = parse_capturing_stderr(
+      {"program", "--benchmark", "--buffer-size", "128", "--threads", "2", "--non-cacheable", "--cache-size", "256",
+       "--latency-samples", "5", "--latency-stride-bytes", "128", "--latency-chain-mode", "random-box",
+       "--latency-tlb-locality-kb", "32", "--seed", "42", "--output", "first.json", "--sweep", "threads=1,2"},
+      config);
+  ASSERT_EQ(first.result, EXIT_SUCCESS) << first.stderr_output;
+
+  const CapturedParseResult second = parse_capturing_stderr({"program", "--patterns"}, config);
+  ASSERT_EQ(second.result, EXIT_SUCCESS) << second.stderr_output;
+  EXPECT_FALSE(config.run_benchmark);
+  EXPECT_TRUE(config.run_patterns);
+  EXPECT_FALSE(config.analyze_tlb);
+  EXPECT_EQ(config.buffer_size_mb, Constants::DEFAULT_BUFFER_SIZE_MB);
+  EXPECT_FALSE(config.user_specified_buffer_size);
+  EXPECT_FALSE(config.use_non_cacheable);
+  EXPECT_FALSE(config.use_custom_cache_size);
+  EXPECT_EQ(config.custom_cache_size_kb_ll, -1);
+  EXPECT_FALSE(config.user_specified_latency_samples);
+  EXPECT_FALSE(config.user_specified_latency_stride);
+  EXPECT_FALSE(config.user_specified_latency_chain_mode);
+  EXPECT_FALSE(config.user_specified_latency_tlb_locality);
+  EXPECT_FALSE(config.user_specified_threads);
+  EXPECT_EQ(config.num_threads, scoped_config_test_hooks.total_logical_cores());
+  EXPECT_FALSE(config.user_specified_benchmark_seed);
+  EXPECT_EQ(config.benchmark_seed, 0u);
+  EXPECT_TRUE(config.output_file.empty());
+  EXPECT_FALSE(config.run_sweep);
+  EXPECT_TRUE(config.sweep_specs.empty());
+
+  const CapturedParseResult third = parse_capturing_stderr({"program", "--analyze-tlb"}, config);
+  ASSERT_EQ(third.result, EXIT_SUCCESS) << third.stderr_output;
+  EXPECT_TRUE(config.analyze_tlb);
+  EXPECT_FALSE(config.run_patterns);
+  EXPECT_FALSE(config.run_benchmark);
+  EXPECT_EQ(config.pattern_seed, 0u);
+  EXPECT_EQ(config.cpu_name, scoped_config_test_hooks.cpu_name());
+  EXPECT_EQ(config.macos_version, scoped_config_test_hooks.macos_version());
+  EXPECT_EQ(config.perf_cores, scoped_config_test_hooks.performance_cores());
+  EXPECT_EQ(config.eff_cores, scoped_config_test_hooks.efficiency_cores());
+}
+
+TEST(ConfigTest, ValidateRejectsNoPrimaryModeConfigurationsWithExactDiagnostics) {
+  struct NoModeCase {
+    std::vector<std::string> arguments;
+    std::string diagnostic;
+  };
+  const NoModeCase cases[] = {
+      {{"program", "--only-bandwidth"}, Messages::error_only_flags_require_benchmark()},
+      {{"program", "--only-latency"}, Messages::error_only_flags_require_benchmark()},
+      {{"program", "--only-bandwidth", "--only-latency"}, Messages::error_incompatible_flags()},
+      {{"program", "--seed", "42"}, Messages::error_seed_requires_supported_mode()},
+      {{"program", "--threads", "1"}, Messages::error_missing_primary_mode()},
+      {{"program", "--buffer-size", "64"}, Messages::error_missing_primary_mode()},
+      {{"program", "--sweep", "buffer-size=1,2", "--output", "sweep.json"}, Messages::error_missing_primary_mode()},
+  };
+  for (const NoModeCase& test_case : cases) {
+    SCOPED_TRACE(testing::PrintToString(test_case.arguments));
+    BenchmarkConfig config;
+    const CapturedParseResult parsed = parse_capturing_stderr(test_case.arguments, config);
+    ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+    EXPECT_TRUE(parsed.stderr_output.empty());
+    testing::internal::CaptureStderr();
+    const int result = validate_config(config);
+    const std::string diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(result, EXIT_FAILURE);
+    EXPECT_EQ(diagnostic, Messages::error_prefix() + test_case.diagnostic + "\n");
+  }
+}
+
+TEST(ConfigTest, ValidateRejectsPatternsOnlyBandwidthAndOnlyLatencyIncompatibleOptions) {
+  struct IncompatibleCase {
+    std::vector<std::string> arguments;
+    std::string diagnostic;
+  };
+  const IncompatibleCase cases[] = {
+      {{"program", "--patterns", "--cache-size", "256"},
+       Messages::error_patterns_incompatible_option("--cache-size")},
+      {{"program", "--patterns", "--latency-samples", "10"},
+       Messages::error_patterns_incompatible_option("--latency-samples")},
+      {{"program", "--patterns", "--latency-stride-bytes", "128"},
+       Messages::error_patterns_incompatible_option("--latency-stride-bytes")},
+      {{"program", "--patterns", "--latency-chain-mode", "random-box"},
+       Messages::error_patterns_incompatible_option("--latency-chain-mode")},
+      {{"program", "--patterns", "--latency-tlb-locality-kb", "32"},
+       Messages::error_patterns_incompatible_option("--latency-tlb-locality-kb")},
+      {{"program", "--benchmark", "--only-bandwidth", "--latency-stride-bytes", "128"},
+       Messages::error_only_bandwidth_incompatible_option("--latency-stride-bytes")},
+      {{"program", "--benchmark", "--only-bandwidth", "--latency-chain-mode", "random-box"},
+       Messages::error_only_bandwidth_incompatible_option("--latency-chain-mode")},
+      {{"program", "--benchmark", "--only-bandwidth", "--latency-tlb-locality-kb", "32"},
+       Messages::error_only_bandwidth_incompatible_option("--latency-tlb-locality-kb")},
+      {{"program", "--benchmark", "--only-latency", "--threads", "2"},
+       Messages::error_only_latency_with_threads()},
+      {{"program", "--benchmark", "--only-latency", "--threads", "999"},
+       Messages::error_only_latency_with_threads()},
+  };
+  for (const IncompatibleCase& test_case : cases) {
+    SCOPED_TRACE(testing::PrintToString(test_case.arguments));
+    BenchmarkConfig config;
+    const CapturedParseResult parsed = parse_capturing_stderr(test_case.arguments, config);
+    ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+    EXPECT_TRUE(parsed.stderr_output.empty());
+    testing::internal::CaptureStderr();
+    const int result = validate_config(config);
+    const std::string diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(result, EXIT_FAILURE);
+    EXPECT_EQ(diagnostic, Messages::error_prefix() + test_case.diagnostic + "\n");
+  }
+}
+
+TEST(ConfigTest, ValidateRejectsDirectAndSweepOptionConflictsInGeneralAndTlbModes) {
+  struct ConflictCase {
+    std::vector<std::string> arguments;
+    const char* direct_option;
+    const char* sweep_key;
+  };
+  const ConflictCase cases[] = {
+      {{"program", "--benchmark", "--buffer-size", "128", "--sweep", "buffer-size=128,256", "--output", "out.json"},
+       "--buffer-size", "buffer-size"},
+      {{"program", "--benchmark", "--cache-size", "256", "--sweep", "cache-size=256,512", "--output", "out.json"},
+       "--cache-size", "cache-size"},
+      {{"program", "--benchmark", "--threads", "2", "--sweep", "threads=1,2", "--output", "out.json"},
+       "--threads", "threads"},
+      {{"program", "--benchmark", "--latency-tlb-locality-kb", "16", "--sweep", "latency-tlb-locality-kb=16,32",
+        "--output", "out.json"},
+       "--latency-tlb-locality-kb", "latency-tlb-locality-kb"},
+      {{"program", "--benchmark", "--latency-stride-bytes", "64", "--sweep", "latency-stride-bytes=64,128",
+        "--output", "out.json"},
+       "--latency-stride-bytes", "latency-stride-bytes"},
+      {{"program", "--benchmark", "--latency-chain-mode", "auto", "--sweep", "latency-chain-mode=auto,random-box",
+        "--output", "out.json"},
+       "--latency-chain-mode", "latency-chain-mode"},
+      {{"program", "--patterns", "--buffer-size", "64", "--sweep", "buffer-size=64,128", "--output", "out.json"},
+       "--buffer-size", "buffer-size"},
+      {{"program", "--patterns", "--threads", "2", "--sweep", "threads=1,2", "--output", "out.json"},
+       "--threads", "threads"},
+      {{"program", "--analyze-tlb", "--latency-stride-bytes", "64", "--sweep", "latency-stride-bytes=64,128",
+        "--output", "out.json"},
+       "--latency-stride-bytes", "latency-stride-bytes"},
+      {{"program", "--analyze-tlb", "--latency-chain-mode", "auto", "--sweep", "latency-chain-mode=auto,random-box",
+        "--output", "out.json"},
+       "--latency-chain-mode", "latency-chain-mode"},
+      {{"program", "--analyze-tlb", "--tlb-density", "low", "--sweep", "tlb-density=low,high", "--output", "out.json"},
+       "--tlb-density", "tlb-density"},
+  };
+  for (const ConflictCase& test_case : cases) {
+    SCOPED_TRACE(testing::PrintToString(test_case.arguments));
+    BenchmarkConfig config;
+    const CapturedParseResult parsed = parse_capturing_stderr(test_case.arguments, config);
+    ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+    EXPECT_TRUE(parsed.stderr_output.empty());
+    testing::internal::CaptureStderr();
+    const int result = validate_config(config);
+    const std::string diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(result, EXIT_FAILURE);
+    EXPECT_EQ(diagnostic,
+              Messages::error_prefix() +
+                  Messages::error_sweep_option_conflict(test_case.direct_option, test_case.sweep_key) + "\n");
+  }
+}
+
+TEST(ConfigTest, ThreadCappingOccursInValidateConfigWithoutParseWarning) {
+  const int max_cores = scoped_config_test_hooks.total_logical_cores();
+  const int requested = max_cores + 7;
+  BenchmarkConfig config;
+  const CapturedParseResult parsed =
+      parse_capturing_stderr({"program", "--benchmark", "--threads", std::to_string(requested)}, config);
+  ASSERT_EQ(parsed.result, EXIT_SUCCESS) << parsed.stderr_output;
+  EXPECT_TRUE(parsed.stderr_output.empty());
+  EXPECT_EQ(config.num_threads, requested);
+  EXPECT_TRUE(config.user_specified_threads);
+
+  testing::internal::CaptureStderr();
+  const int result = validate_config(config);
+  const std::string warning = testing::internal::GetCapturedStderr();
+  EXPECT_EQ(result, EXIT_SUCCESS);
+  EXPECT_EQ(config.num_threads, max_cores);
+  EXPECT_EQ(warning, Messages::warning_prefix() + Messages::warning_threads_capped(requested, max_cores) + "\n");
 }

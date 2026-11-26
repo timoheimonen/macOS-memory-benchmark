@@ -17,46 +17,39 @@
 /**
  * @file argument_parser.cpp
  * @brief Command-line argument parsing implementation
+ * @author Timo Heimonen <timo.heimonen@proton.me>
+ * @date 2026
  *
- * This file implements the argument parser for the memory benchmark application.
- * It handles parsing and validation of all command-line options including:
- * - Buffer size configuration (-b, --buffer-size)
- * - Iteration counts (-i, --iterations; -r, --count)
- * - Latency sampling and pointer-chain controls (--latency-samples, -s/--latency-stride-bytes,
- *   --latency-chain-mode, --latency-tlb-locality-kb)
- * - Cache size specification (-k, --cache-size)
- * - Thread count configuration (-t, --threads)
- * - Test mode selection (-B/--benchmark, -P/--patterns, --analyze-tlb,
- *   -W/--only-bandwidth, -L/--only-latency)
- * - Reproducible workload selection (--seed) and TLB density (--tlb-density)
- * - Multi-configuration sweeps (--sweep, --sweep-max-runs)
- * - Best-effort cache-discouraging allocation hints (--non-cacheable)
- * - Output options (-o, --output)
- * - Help display (-h, --help)
+ * This file implements the descriptor-driven command-line argument parser for
+ * the standard (`-B/--benchmark`), pattern (`-P/--patterns`), and standalone
+ * TLB analysis (`-T/--analyze-tlb`) modes.
  *
- * The parser first discovers the selected mode and cache size, then parses the
- * complete standard/pattern/TLB option set. Core-to-core mode is routed to its
- * dedicated parser before this function. It employs exception
- * handling internally for validation, converting exceptions to return codes
- * at the function boundary.
- *
- * @note Uses exception handling internally but presents a return code interface
- * @note Performs comprehensive range validation for all numeric parameters
+ * Syntactic scanning (short flags, long flags, `--option=value`, duplicate
+ * detection, missing values, unexpected values, and unknown options) is handled
+ * uniformly by `parse_cli_options()`. Option values are validated in a single
+ * pass before any help printing, OS `sysctl` queries, cache detection, or seed
+ * generation occur. Unexpected exceptions are contained at the `parse_arguments`
+ * boundary and converted to `EXIT_FAILURE`.
  */
 
+#include "core/config/cli_parser.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
+#include "core/config/mode_selector.h"
 #include "core/config/sweep_utils.h"
 #include "core/system/system_info.h"
 #include "output/console/messages/messages_api.h"
-#include "utils/benchmark.h"
+#include "output/console/output_printer.h"
 #include "utils/seed_utils.h"
+
+#include <array>
 #include <charconv>
+#include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
-#include <cmath>
-#include <cstdlib>
+#include <string>
 
 StrictIntegerParseStatus parse_strict_signed_decimal(const std::string& value,
                                                      long long& out_value) {
@@ -180,31 +173,101 @@ constexpr const char* OPT_THREADS_LONG = "--threads";
 constexpr const char* OPT_TLB_DENSITY_SHORT = "-D";
 constexpr const char* OPT_TLB_DENSITY_LONG = "--tlb-density";
 
-bool is_option(const std::string& arg, const char* short_option, const char* long_option) {
-  return arg == short_option || arg == long_option;
-}
+enum TlbOptionId {
+  TLB_OPT_ANALYZE_TLB = 1,
+  TLB_OPT_HELP,
+  TLB_OPT_OUTPUT,
+  TLB_OPT_SWEEP,
+  TLB_OPT_SWEEP_MAX_RUNS,
+  TLB_OPT_LATENCY_STRIDE,
+  TLB_OPT_LATENCY_CHAIN_MODE,
+  TLB_OPT_TLB_DENSITY,
+  TLB_OPT_SEED,
+};
 
-/**
- * @brief Skip one opaque output target while traversing a parser pre-scan.
- *
- * The owning parsing pass remains responsible for validating the option and
- * consuming, diagnosing, and storing its value.
- *
- * @param argc Number of command-line arguments.
- * @param argv Command-line argument array.
- * @param argument_index Index of the token being inspected; advanced once
- *        when an output value exists.
- * @return `true` when the current token is `-o` or `--output`.
- */
-bool skip_opaque_output_value_for_prescan(int argc, char* argv[], int& argument_index) {
-  if (!is_option(std::string(argv[argument_index]), OPT_OUTPUT_SHORT, OPT_OUTPUT_LONG)) {
-    return false;
-  }
-  if (argument_index + 1 < argc) {
-    ++argument_index;
-  }
-  return true;
-}
+constexpr std::array<CliOptionSpec, 9> kTlbOptionSpecs{{
+    {TLB_OPT_ANALYZE_TLB, OPT_ANALYZE_TLB_SHORT, OPT_ANALYZE_TLB_LONG,
+     CliOptionValueKind::None, CliOptionArity::Single},
+    {TLB_OPT_HELP, OPT_HELP_SHORT, OPT_HELP_LONG,
+     CliOptionValueKind::None, CliOptionArity::Single},
+    {TLB_OPT_OUTPUT, OPT_OUTPUT_SHORT, OPT_OUTPUT_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {TLB_OPT_SWEEP, OPT_SWEEP_SHORT, OPT_SWEEP_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Repeatable},
+    {TLB_OPT_SWEEP_MAX_RUNS, OPT_SWEEP_MAX_RUNS_SHORT, OPT_SWEEP_MAX_RUNS_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {TLB_OPT_LATENCY_STRIDE, OPT_LATENCY_STRIDE_SHORT, OPT_LATENCY_STRIDE_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {TLB_OPT_LATENCY_CHAIN_MODE, OPT_LATENCY_CHAIN_MODE_SHORT, OPT_LATENCY_CHAIN_MODE_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {TLB_OPT_TLB_DENSITY, OPT_TLB_DENSITY_SHORT, OPT_TLB_DENSITY_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {TLB_OPT_SEED, nullptr, OPT_SEED_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+}};
+
+enum GeneralOptionId {
+  GEN_OPT_BENCHMARK = 1,
+  GEN_OPT_PATTERNS,
+  GEN_OPT_ONLY_BANDWIDTH,
+  GEN_OPT_ONLY_LATENCY,
+  GEN_OPT_NON_CACHEABLE,
+  GEN_OPT_HELP,
+  GEN_OPT_ITERATIONS,
+  GEN_OPT_BUFFER_SIZE,
+  GEN_OPT_COUNT,
+  GEN_OPT_LATENCY_SAMPLES,
+  GEN_OPT_LATENCY_STRIDE,
+  GEN_OPT_LATENCY_CHAIN_MODE,
+  GEN_OPT_LATENCY_TLB_LOCALITY,
+  GEN_OPT_CACHE_SIZE,
+  GEN_OPT_THREADS,
+  GEN_OPT_OUTPUT,
+  GEN_OPT_SEED,
+  GEN_OPT_SWEEP,
+  GEN_OPT_SWEEP_MAX_RUNS,
+};
+
+constexpr std::array<CliOptionSpec, 19> kGeneralOptionSpecs{{
+    {GEN_OPT_BENCHMARK, OPT_BENCHMARK_SHORT, OPT_BENCHMARK_LONG,
+     CliOptionValueKind::None, CliOptionArity::Single},
+    {GEN_OPT_PATTERNS, OPT_PATTERNS_SHORT, OPT_PATTERNS_LONG,
+     CliOptionValueKind::None, CliOptionArity::Single},
+    {GEN_OPT_ONLY_BANDWIDTH, OPT_ONLY_BANDWIDTH_SHORT, OPT_ONLY_BANDWIDTH_LONG,
+     CliOptionValueKind::None, CliOptionArity::Single},
+    {GEN_OPT_ONLY_LATENCY, OPT_ONLY_LATENCY_SHORT, OPT_ONLY_LATENCY_LONG,
+     CliOptionValueKind::None, CliOptionArity::Single},
+    {GEN_OPT_NON_CACHEABLE, OPT_NON_CACHEABLE_SHORT, OPT_NON_CACHEABLE_LONG,
+     CliOptionValueKind::None, CliOptionArity::Single},
+    {GEN_OPT_HELP, OPT_HELP_SHORT, OPT_HELP_LONG,
+     CliOptionValueKind::None, CliOptionArity::Single},
+    {GEN_OPT_ITERATIONS, OPT_ITERATIONS_SHORT, OPT_ITERATIONS_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {GEN_OPT_BUFFER_SIZE, OPT_BUFFER_SIZE_SHORT, OPT_BUFFER_SIZE_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {GEN_OPT_COUNT, OPT_COUNT_SHORT, OPT_COUNT_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {GEN_OPT_LATENCY_SAMPLES, OPT_LATENCY_SAMPLES_SHORT, OPT_LATENCY_SAMPLES_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {GEN_OPT_LATENCY_STRIDE, OPT_LATENCY_STRIDE_SHORT, OPT_LATENCY_STRIDE_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {GEN_OPT_LATENCY_CHAIN_MODE, OPT_LATENCY_CHAIN_MODE_SHORT, OPT_LATENCY_CHAIN_MODE_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {GEN_OPT_LATENCY_TLB_LOCALITY, OPT_LATENCY_TLB_LOCALITY_SHORT, OPT_LATENCY_TLB_LOCALITY_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {GEN_OPT_CACHE_SIZE, OPT_CACHE_SIZE_SHORT, OPT_CACHE_SIZE_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {GEN_OPT_THREADS, OPT_THREADS_SHORT, OPT_THREADS_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {GEN_OPT_OUTPUT, OPT_OUTPUT_SHORT, OPT_OUTPUT_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {GEN_OPT_SEED, nullptr, OPT_SEED_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {GEN_OPT_SWEEP, OPT_SWEEP_SHORT, OPT_SWEEP_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Repeatable},
+    {GEN_OPT_SWEEP_MAX_RUNS, OPT_SWEEP_MAX_RUNS_SHORT, OPT_SWEEP_MAX_RUNS_LONG,
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+}};
 
 long long parse_signed_decimal_or_throw(const std::string& value) {
   long long parsed = 0;
@@ -224,6 +287,25 @@ uint64_t parse_unsigned_decimal_or_throw(const std::string& value) {
   return parsed;
 }
 
+unsigned long parse_buffer_size_mb_or_throw(const std::string& value) {
+  unsigned long parsed = 0;
+  long long negative_value = 0;
+  const StrictNonNegativeUlongStatus status =
+      parse_strict_nonnegative_ulong(value, parsed, negative_value);
+  switch (status) {
+    case StrictNonNegativeUlongStatus::Success:
+      return parsed;
+    case StrictNonNegativeUlongStatus::Negative:
+      throw std::out_of_range(Messages::error_buffersize_invalid(
+          negative_value, std::numeric_limits<unsigned long>::max()));
+    case StrictNonNegativeUlongStatus::OutOfRange:
+      throw std::out_of_range(Messages::reason_unsigned_integer_out_of_range());
+    case StrictNonNegativeUlongStatus::Invalid:
+      throw std::out_of_range(Messages::reason_signed_integer_invalid());
+  }
+  throw std::out_of_range(Messages::reason_signed_integer_invalid());
+}
+
 uint64_t generate_config_seed() {
   const ConfigTestHooks* hooks = get_config_test_hooks();
   if (hooks != nullptr && hooks->generated_seed != 0) {
@@ -232,6 +314,18 @@ uint64_t generate_config_seed() {
         [injected_seed]() { return injected_seed; });
   }
   return SeedUtils::generate_seed();
+}
+
+void populate_common_system_info(BenchmarkConfig& config, int* out_max_cores = nullptr) {
+  const ConfigTestHooks* test_hooks = get_config_test_hooks();
+  const bool use_injected_system_info = test_hooks != nullptr && test_hooks->use_system_info;
+  config.cpu_name = use_injected_system_info ? test_hooks->cpu_name : get_processor_name();
+  config.macos_version = use_injected_system_info ? test_hooks->macos_version : get_macos_version();
+  config.perf_cores = use_injected_system_info ? test_hooks->performance_cores : get_performance_cores();
+  config.eff_cores = use_injected_system_info ? test_hooks->efficiency_cores : get_efficiency_cores();
+  if (out_max_cores != nullptr) {
+    *out_max_cores = use_injected_system_info ? test_hooks->total_logical_cores : get_total_logical_cores();
+  }
 }
 
 bool tlb_sweep_density_from_string(const std::string& value, TlbSweepDensity& out_density) {
@@ -296,7 +390,7 @@ SweepSpec parse_sweep_spec(const std::string& spec_text) {
 
   SweepSpec spec;
   if (!sweep_parameter_from_string(parsed_text.key, spec.parameter, spec.parameter_name)) {
-    throw std::invalid_argument("unsupported sweep parameter: " + parsed_text.key);
+    throw std::invalid_argument(Messages::reason_unsupported_sweep_parameter(parsed_text.key));
   }
 
   for (const std::string& raw_value : parsed_text.values) {
@@ -309,16 +403,17 @@ SweepSpec parse_sweep_spec(const std::string& spec_text) {
       }
     } else if (spec.parameter == SweepParameter::TlbDensity) {
       if (!tlb_sweep_density_from_string(raw_value, value.tlb_sweep_density)) {
-        throw std::out_of_range("must be one of: low, medium, high");
+        throw std::out_of_range(Messages::reason_tlb_density_invalid());
+      }
+    } else if (spec.parameter == SweepParameter::BufferSizeMb) {
+      const unsigned long parsed_mb = parse_buffer_size_mb_or_throw(raw_value);
+      value.unsigned_value = parsed_mb;
+      if (parsed_mb <= static_cast<unsigned long>(std::numeric_limits<long long>::max())) {
+        value.integer_value = static_cast<long long>(parsed_mb);
       }
     } else {
       const long long parsed = parse_signed_decimal_or_throw(raw_value);
-      if (spec.parameter == SweepParameter::BufferSizeMb) {
-        if (parsed < 0 || parsed > std::numeric_limits<unsigned long>::max()) {
-          throw std::out_of_range(Messages::error_buffersize_invalid(
-              parsed, std::numeric_limits<unsigned long>::max()));
-        }
-      } else if (spec.parameter == SweepParameter::CacheSizeKb) {
+      if (spec.parameter == SweepParameter::CacheSizeKb) {
         if (parsed < 0 || parsed > Constants::MAX_CACHE_SIZE_KB ||
             (parsed > 0 && parsed < Constants::MIN_CACHE_SIZE_KB)) {
           throw std::out_of_range(Messages::error_cache_size_invalid(
@@ -350,618 +445,352 @@ SweepSpec parse_sweep_spec(const std::string& spec_text) {
   return spec;
 }
 
-}  // namespace
+int parse_analyze_tlb_arguments(int argc, char* argv[], BenchmarkConfig& config) {
+  config.analyze_tlb = true;
+  config.tlb_sweep_density = TlbSweepDensity::Medium;
+  config.sweep_max_runs = Constants::DEFAULT_ANALYZE_TLB_SWEEP_MAX_RUNS;
 
-/**
- * @brief Error Handling Strategy for this module:
- * 
- * This function uses EXCEPTIONS internally, which are caught and converted to RETURN CODES.
- * 
- * Rationale:
- * - Argument parsing involves multiple validation points with complex logic
- * - Strict numeric conversion reports malformed and out-of-range tokens through exceptions
- * - Exceptions allow early termination without deeply nested conditionals
- * - Cleaner code flow for validation logic
- * - BUT: Must convert to return codes at boundary (called from main())
- * 
- * Exception types used:
- * - std::invalid_argument: Missing values, unknown options, malformed arguments
- * - std::out_of_range: Value validation errors (out of valid range)
- * 
- * Error conversion:
- * - All exceptions are caught and converted to EXIT_FAILURE
- * - Error messages are printed to std::cerr
- * - Usage information is printed before returning
- * - Returns EXIT_SUCCESS on success, EXIT_FAILURE on any error
- * 
- * Note: This is a "boundary function" - it converts exceptions to return codes
- *       to integrate with the main program flow (which uses exit codes).
- */
-int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
-  long long requested_buffer_size_mb_ll = -1;  // User requested size (-1 = none)
-  long long requested_threads_ll = -1;  // User requested threads (-1 = none)
-  long long requested_latency_tlb_locality_kb_ll = -1;  // User requested TLB-locality window in KB (-1 = none)
-
-  bool analyze_tlb_present = false;
-  for (int i = 1; i < argc; ++i) {
-    if (skip_opaque_output_value_for_prescan(argc, argv, i)) {
-      continue;
-    }
-    if (is_option(std::string(argv[i]), OPT_ANALYZE_TLB_SHORT, OPT_ANALYZE_TLB_LONG)) {
-      analyze_tlb_present = true;
-      break;
-    }
+  const CliParseResult parsed = parse_cli_options(argc, argv, kTlbOptionSpecs);
+  if (!parsed.ok) {
+    std::cerr << Messages::error_prefix()
+              << format_cli_parse_error(parsed, &Messages::error_analyze_tlb_must_be_used_alone())
+              << std::endl;
+    return EXIT_FAILURE;
   }
 
-  if (analyze_tlb_present) {
-    config.analyze_tlb = true;
-    config.tlb_sweep_density = TlbSweepDensity::Medium;
-    config.sweep_max_runs = Constants::DEFAULT_ANALYZE_TLB_SWEEP_MAX_RUNS;
-    bool output_seen = false;
-    bool latency_stride_seen = false;
-    bool latency_chain_mode_seen = false;
-    bool tlb_density_seen = false;
-    bool seed_seen = false;
-    bool sweep_max_runs_seen = false;
-
-    for (int i = 1; i < argc; ++i) {
-      const std::string arg = argv[i];
-      if (is_option(arg, OPT_ANALYZE_TLB_SHORT, OPT_ANALYZE_TLB_LONG)) {
-        continue;
-      }
-
-      if (is_option(arg, OPT_OUTPUT_SHORT, OPT_OUTPUT_LONG)) {
-        if (output_seen) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_duplicate_option(OPT_OUTPUT_LONG)
-                    << std::endl;
-          print_usage(argv[0]);
-          return EXIT_FAILURE;
-        }
-        if (++i >= argc) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_missing_value(OPT_OUTPUT_LONG)
-                    << std::endl;
-          print_usage(argv[0]);
-          return EXIT_FAILURE;
-        }
-        config.output_file = argv[i];
-        output_seen = true;
-        continue;
-      }
-
-      if (is_option(arg, OPT_SWEEP_SHORT, OPT_SWEEP_LONG)) {
-        if (++i >= argc) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_missing_value(OPT_SWEEP_LONG)
-                    << std::endl;
-          print_usage(argv[0]);
-          return EXIT_FAILURE;
-        }
+  for (const CliParsedOption& opt : parsed.options) {
+    switch (opt.id) {
+      case TLB_OPT_ANALYZE_TLB:
+        config.analyze_tlb = true;
+        break;
+      case TLB_OPT_HELP:
+        config.help_printed = true;
+        break;
+      case TLB_OPT_OUTPUT:
+        config.output_file = opt.value;
+        break;
+      case TLB_OPT_SWEEP:
         try {
-          config.sweep_specs.push_back(parse_sweep_spec(argv[i]));
+          config.sweep_specs.push_back(parse_sweep_spec(opt.value));
         } catch (const std::invalid_argument& e) {
           std::cerr << Messages::error_prefix()
-                    << Messages::error_invalid_value(arg, argv[i], e.what())
+                    << Messages::error_invalid_value(opt.matched_name, opt.value, e.what())
                     << std::endl;
-          print_usage(argv[0]);
           return EXIT_FAILURE;
         } catch (const std::out_of_range& e) {
           std::cerr << Messages::error_prefix()
-                    << Messages::error_invalid_value(arg, argv[i], e.what())
+                    << Messages::error_invalid_value(opt.matched_name, opt.value, e.what())
                     << std::endl;
-          print_usage(argv[0]);
           return EXIT_FAILURE;
         }
         config.run_sweep = true;
-        continue;
-      }
-
-      if (is_option(arg, OPT_SWEEP_MAX_RUNS_SHORT, OPT_SWEEP_MAX_RUNS_LONG)) {
-        if (sweep_max_runs_seen) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_duplicate_option(OPT_SWEEP_MAX_RUNS_LONG)
-                    << std::endl;
-          print_usage(argv[0]);
-          return EXIT_FAILURE;
-        }
-        if (++i >= argc) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_missing_value(OPT_SWEEP_MAX_RUNS_LONG)
-                    << std::endl;
-          print_usage(argv[0]);
-          return EXIT_FAILURE;
-        }
+        break;
+      case TLB_OPT_SWEEP_MAX_RUNS:
         try {
-          const long long val_ll = parse_signed_decimal_or_throw(argv[i]);
+          const long long val_ll = parse_signed_decimal_or_throw(opt.value);
           if (val_ll <= 0) {
-            throw std::out_of_range("must be a positive integer");
+            throw std::out_of_range(Messages::reason_positive_integer());
           }
           config.sweep_max_runs = static_cast<size_t>(val_ll);
         } catch (const std::out_of_range& e) {
           std::cerr << Messages::error_prefix()
-                    << Messages::error_invalid_value(arg, argv[i], e.what())
+                    << Messages::error_invalid_value(opt.matched_name, opt.value, e.what())
                     << std::endl;
-          print_usage(argv[0]);
           return EXIT_FAILURE;
         }
-        sweep_max_runs_seen = true;
-        continue;
-      }
-
-      if (is_option(arg, OPT_LATENCY_STRIDE_SHORT, OPT_LATENCY_STRIDE_LONG)) {
-        if (latency_stride_seen) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_duplicate_option(OPT_LATENCY_STRIDE_LONG)
-                    << std::endl;
-          print_usage(argv[0]);
-          return EXIT_FAILURE;
-        }
-        if (++i >= argc) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_missing_value(OPT_LATENCY_STRIDE_LONG)
-                    << std::endl;
-          print_usage(argv[0]);
-          return EXIT_FAILURE;
-        }
-
-        const std::string stride_value = argv[i];
+        break;
+      case TLB_OPT_LATENCY_STRIDE: {
         long long val_ll = 0;
         try {
-          val_ll = parse_signed_decimal_or_throw(stride_value);
+          val_ll = parse_signed_decimal_or_throw(opt.value);
         } catch (const std::out_of_range& e) {
           std::cerr << Messages::error_prefix()
-                    << Messages::error_invalid_value(arg, stride_value, e.what())
+                    << Messages::error_invalid_value(opt.matched_name, opt.value, e.what())
                     << std::endl;
-          print_usage(argv[0]);
           return EXIT_FAILURE;
         }
-
         if (val_ll <= 0) {
           std::cerr << Messages::error_prefix()
                     << Messages::error_invalid_value(
-                           arg,
-                           stride_value,
+                           opt.matched_name, opt.value,
                            Messages::error_latency_stride_invalid(
                                val_ll, 1, std::numeric_limits<long long>::max()))
                     << std::endl;
-          print_usage(argv[0]);
           return EXIT_FAILURE;
         }
-
         config.latency_stride_bytes = static_cast<size_t>(val_ll);
         if ((config.latency_stride_bytes % sizeof(void*)) != 0) {
           std::cerr << Messages::error_prefix()
                     << Messages::error_latency_stride_alignment(
-                           config.latency_stride_bytes,
-                           sizeof(void*))
+                           config.latency_stride_bytes, sizeof(void*))
                     << std::endl;
-          print_usage(argv[0]);
           return EXIT_FAILURE;
         }
-
-        latency_stride_seen = true;
-        continue;
+        config.user_specified_latency_stride = true;
+        break;
       }
-
-      if (is_option(arg, OPT_LATENCY_CHAIN_MODE_SHORT, OPT_LATENCY_CHAIN_MODE_LONG)) {
-        if (latency_chain_mode_seen) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_duplicate_option(OPT_LATENCY_CHAIN_MODE_LONG)
-                    << std::endl;
-          print_usage(argv[0]);
-          return EXIT_FAILURE;
-        }
-        if (++i >= argc) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_missing_value(OPT_LATENCY_CHAIN_MODE_LONG)
-                    << std::endl;
-          print_usage(argv[0]);
-          return EXIT_FAILURE;
-        }
-
-        const std::string mode_value = argv[i];
+      case TLB_OPT_LATENCY_CHAIN_MODE: {
         LatencyChainMode parsed_mode = LatencyChainMode::Auto;
-        if (!latency_chain_mode_from_string(mode_value, parsed_mode)) {
+        if (!latency_chain_mode_from_string(opt.value, parsed_mode)) {
           std::cerr << Messages::error_prefix()
-                    << Messages::error_invalid_value(arg, mode_value,
-                                                     Messages::error_latency_chain_mode_invalid())
+                    << Messages::error_invalid_value(
+                           opt.matched_name, opt.value,
+                           Messages::error_latency_chain_mode_invalid())
                     << std::endl;
-          print_usage(argv[0]);
           return EXIT_FAILURE;
         }
         if (parsed_mode == LatencyChainMode::GlobalRandom) {
           std::cerr << Messages::error_prefix()
                     << Messages::error_analyze_tlb_global_random_unsupported()
                     << std::endl;
-          print_usage(argv[0]);
           return EXIT_FAILURE;
         }
-
         config.latency_chain_mode = parsed_mode;
-        latency_chain_mode_seen = true;
-        continue;
+        config.user_specified_latency_chain_mode = true;
+        break;
       }
-
-      if (is_option(arg, OPT_TLB_DENSITY_SHORT, OPT_TLB_DENSITY_LONG)) {
-        if (tlb_density_seen) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_duplicate_option(OPT_TLB_DENSITY_LONG)
-                    << std::endl;
-          print_usage(argv[0]);
-          return EXIT_FAILURE;
-        }
-        if (++i >= argc) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_missing_value(OPT_TLB_DENSITY_LONG)
-                    << std::endl;
-          print_usage(argv[0]);
-          return EXIT_FAILURE;
-        }
-
-        const std::string density_value = argv[i];
+      case TLB_OPT_TLB_DENSITY: {
         TlbSweepDensity parsed_density = TlbSweepDensity::Medium;
-        if (!tlb_sweep_density_from_string(density_value, parsed_density)) {
+        if (!tlb_sweep_density_from_string(opt.value, parsed_density)) {
           std::cerr << Messages::error_prefix()
                     << Messages::error_invalid_value(
-                           arg, density_value, "must be one of: low, medium, high")
+                           opt.matched_name, opt.value,
+                           Messages::reason_tlb_density_invalid())
                     << std::endl;
-          print_usage(argv[0]);
           return EXIT_FAILURE;
         }
-
         config.tlb_sweep_density = parsed_density;
-        tlb_density_seen = true;
-        continue;
+        config.user_specified_tlb_density = true;
+        break;
       }
-
-      if (arg == OPT_SEED_LONG) {
-        if (seed_seen) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_duplicate_option(OPT_SEED_LONG)
-                    << std::endl;
-          print_usage(argv[0]);
-          return EXIT_FAILURE;
-        }
-        if (++i >= argc) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_missing_value(OPT_SEED_LONG)
-                    << std::endl;
-          print_usage(argv[0]);
-          return EXIT_FAILURE;
-        }
-
-        const std::string seed_value = argv[i];
+      case TLB_OPT_SEED:
         try {
-          config.tlb_seed = parse_unsigned_decimal_or_throw(seed_value);
+          config.tlb_seed = parse_unsigned_decimal_or_throw(opt.value);
         } catch (const std::out_of_range& e) {
           std::cerr << Messages::error_prefix()
-                    << Messages::error_invalid_value(arg, seed_value, e.what())
+                    << Messages::error_invalid_value(opt.matched_name, opt.value, e.what())
                     << std::endl;
-          print_usage(argv[0]);
           return EXIT_FAILURE;
         }
         config.user_specified_tlb_seed = true;
-        seed_seen = true;
-        continue;
-      }
-
-      std::cerr << Messages::error_prefix()
-                << Messages::error_analyze_tlb_must_be_used_alone()
-                << std::endl;
-      print_usage(argv[0]);
-      return EXIT_FAILURE;
+        break;
+      default:
+        break;
     }
+  }
 
-    if (!seed_seen) {
-      config.tlb_seed = generate_config_seed();
-    }
-    config.cpu_name = get_processor_name();
-    config.macos_version = get_macos_version();
-    config.perf_cores = get_performance_cores();
-    config.eff_cores = get_efficiency_cores();
-
+  if (config.help_printed) {
+    print_help(cli_program_name(argc, argv));
     return EXIT_SUCCESS;
   }
-  
-  // First pass: parse --cache-size early (needed for cache size detection)
-  bool cache_size_seen = false;
-  for (int i = 1; i < argc; ++i) {
-    if (skip_opaque_output_value_for_prescan(argc, argv, i)) {
-      continue;
-    }
-    std::string arg = argv[i];
+
+  if (!config.user_specified_tlb_seed) {
+    config.tlb_seed = generate_config_seed();
+  }
+  populate_common_system_info(config);
+
+  return EXIT_SUCCESS;
+}
+
+int parse_general_arguments(int argc, char* argv[], BenchmarkConfig& config) {
+  const CliParseResult parsed = parse_cli_options(argc, argv, kGeneralOptionSpecs);
+  if (!parsed.ok) {
+    std::cerr << Messages::error_prefix() << format_cli_parse_error(parsed) << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  int requested_threads = 0;
+  bool has_requested_threads = false;
+  long long requested_latency_tlb_locality_kb_ll = -1;
+  bool seed_seen = false;
+  uint64_t parsed_general_seed = 0;
+
+  for (const CliParsedOption& opt : parsed.options) {
     try {
-      if (is_option(arg, OPT_CACHE_SIZE_SHORT, OPT_CACHE_SIZE_LONG)) {
-        if (cache_size_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option(OPT_CACHE_SIZE_LONG));
-        if (++i < argc) {
-          long long val_ll = parse_signed_decimal_or_throw(argv[i]);
-          // Error: Value validation - out of valid range
-          // Note: 0 is accepted here and validated later (allowed only with --only-latency)
+      switch (opt.id) {
+        case GEN_OPT_BENCHMARK:
+          config.run_benchmark = true;
+          if (config.run_patterns) {
+            std::cerr << Messages::error_prefix()
+                      << Messages::error_mutually_exclusive_modes(OPT_BENCHMARK_LONG, OPT_PATTERNS_LONG)
+                      << std::endl;
+            return EXIT_FAILURE;
+          }
+          break;
+        case GEN_OPT_PATTERNS:
+          config.run_patterns = true;
+          if (config.run_benchmark) {
+            std::cerr << Messages::error_prefix()
+                      << Messages::error_mutually_exclusive_modes(OPT_BENCHMARK_LONG, OPT_PATTERNS_LONG)
+                      << std::endl;
+            return EXIT_FAILURE;
+          }
+          break;
+        case GEN_OPT_ONLY_BANDWIDTH:
+          config.only_bandwidth = true;
+          break;
+        case GEN_OPT_ONLY_LATENCY:
+          config.only_latency = true;
+          break;
+        case GEN_OPT_NON_CACHEABLE:
+          config.use_non_cacheable = true;
+          break;
+        case GEN_OPT_HELP:
+          config.help_printed = true;
+          break;
+        case GEN_OPT_ITERATIONS: {
+          const long long val_ll = parse_signed_decimal_or_throw(opt.value);
+          if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max()) {
+            throw std::out_of_range(
+                Messages::error_iterations_invalid(val_ll, 1, std::numeric_limits<int>::max()));
+          }
+          config.iterations = static_cast<int>(val_ll);
+          config.user_specified_iterations = true;
+          break;
+        }
+        case GEN_OPT_BUFFER_SIZE:
+          config.buffer_size_mb = parse_buffer_size_mb_or_throw(opt.value);
+          config.user_specified_buffer_size = true;
+          break;
+        case GEN_OPT_COUNT: {
+          const long long val_ll = parse_signed_decimal_or_throw(opt.value);
+          if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max()) {
+            throw std::out_of_range(
+                Messages::error_count_invalid(val_ll, 1, std::numeric_limits<int>::max()));
+          }
+          config.loop_count = static_cast<int>(val_ll);
+          break;
+        }
+        case GEN_OPT_LATENCY_SAMPLES: {
+          const long long val_ll = parse_signed_decimal_or_throw(opt.value);
+          if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max()) {
+            throw std::out_of_range(
+                Messages::error_latency_samples_invalid(val_ll, 1, std::numeric_limits<int>::max()));
+          }
+          config.latency_sample_count = static_cast<int>(val_ll);
+          config.user_specified_latency_samples = true;
+          break;
+        }
+        case GEN_OPT_LATENCY_STRIDE: {
+          const long long val_ll = parse_signed_decimal_or_throw(opt.value);
+          if (val_ll <= 0) {
+            throw std::out_of_range(
+                Messages::error_latency_stride_invalid(val_ll, 1, std::numeric_limits<long long>::max()));
+          }
+          config.latency_stride_bytes = static_cast<size_t>(val_ll);
+          config.user_specified_latency_stride = true;
+          break;
+        }
+        case GEN_OPT_LATENCY_CHAIN_MODE: {
+          LatencyChainMode parsed_mode = LatencyChainMode::Auto;
+          if (!latency_chain_mode_from_string(opt.value, parsed_mode)) {
+            throw std::out_of_range(Messages::error_latency_chain_mode_invalid());
+          }
+          config.latency_chain_mode = parsed_mode;
+          config.user_specified_latency_chain_mode = true;
+          break;
+        }
+        case GEN_OPT_LATENCY_TLB_LOCALITY: {
+          const long long val_ll = parse_signed_decimal_or_throw(opt.value);
+          const long long max_locality_kb =
+              static_cast<long long>(std::numeric_limits<size_t>::max() / Constants::BYTES_PER_KB);
+          if (val_ll < 0 || val_ll > max_locality_kb) {
+            throw std::out_of_range(
+                Messages::error_latency_tlb_locality_invalid(val_ll, max_locality_kb));
+          }
+          requested_latency_tlb_locality_kb_ll = val_ll;
+          config.user_specified_latency_tlb_locality = true;
+          break;
+        }
+        case GEN_OPT_CACHE_SIZE: {
+          const long long val_ll = parse_signed_decimal_or_throw(opt.value);
+          // 0 is accepted here and validated later (allowed only with --only-latency).
           if (val_ll < 0 || val_ll > Constants::MAX_CACHE_SIZE_KB ||
-              (val_ll > 0 && val_ll < Constants::MIN_CACHE_SIZE_KB))
-            throw std::out_of_range(Messages::error_cache_size_invalid(Constants::MIN_CACHE_SIZE_KB,
-                                                                       Constants::MAX_CACHE_SIZE_KB,
-                                                                       Constants::MAX_CACHE_SIZE_KB / 1024));
+              (val_ll > 0 && val_ll < Constants::MIN_CACHE_SIZE_KB)) {
+            throw std::out_of_range(Messages::error_cache_size_invalid(
+                Constants::MIN_CACHE_SIZE_KB,
+                Constants::MAX_CACHE_SIZE_KB,
+                Constants::MAX_CACHE_SIZE_KB / 1024));
+          }
           config.custom_cache_size_kb_ll = val_ll;
-          cache_size_seen = true;
-        } else
-          // Error: Missing required value for option
-          throw std::invalid_argument(Messages::error_missing_value(OPT_CACHE_SIZE_LONG));
+          break;
+        }
+        case GEN_OPT_THREADS: {
+          const long long val_ll = parse_signed_decimal_or_throw(opt.value);
+          if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max()) {
+            throw std::out_of_range(
+                Messages::error_threads_invalid(val_ll, 1, std::numeric_limits<int>::max()));
+          }
+          requested_threads = static_cast<int>(val_ll);
+          has_requested_threads = true;
+          break;
+        }
+        case GEN_OPT_OUTPUT:
+          config.output_file = opt.value;
+          break;
+        case GEN_OPT_SEED:
+          parsed_general_seed = parse_unsigned_decimal_or_throw(opt.value);
+          seed_seen = true;
+          break;
+        case GEN_OPT_SWEEP:
+          config.sweep_specs.push_back(parse_sweep_spec(opt.value));
+          config.run_sweep = true;
+          break;
+        case GEN_OPT_SWEEP_MAX_RUNS: {
+          const long long val_ll = parse_signed_decimal_or_throw(opt.value);
+          if (val_ll <= 0) {
+            throw std::out_of_range(Messages::reason_positive_integer());
+          }
+          config.sweep_max_runs = static_cast<size_t>(val_ll);
+          break;
+        }
+        default:
+          break;
       }
-    } catch (const std::invalid_argument &e) {
-      // Exception caught: Convert to return code and print error
-      std::cerr << Messages::error_prefix() << e.what() << std::endl;
-      print_usage(argv[0]);
-      return EXIT_FAILURE;  // Convert exception to return code
-    } catch (const std::out_of_range &e) {
-      // Exception caught: Convert to return code and print error
-      std::cerr << Messages::error_prefix() << Messages::error_invalid_value(arg, argv[i], e.what()) << std::endl;
-      print_usage(argv[0]);
-      return EXIT_FAILURE;  // Convert exception to return code
+    } catch (const std::invalid_argument& e) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_invalid_value(opt.matched_name, opt.value, e.what())
+                << std::endl;
+      return EXIT_FAILURE;
+    } catch (const std::out_of_range& e) {
+      std::cerr << Messages::error_prefix()
+                << Messages::error_invalid_value(opt.matched_name, opt.value, e.what())
+                << std::endl;
+      return EXIT_FAILURE;
     }
   }
 
-  // Get system info. Unit tests may provide a deterministic platform snapshot.
+  if (config.help_printed) {
+    print_help(cli_program_name(argc, argv));
+    return EXIT_SUCCESS;
+  }
+
+  int max_cores = 0;
+  populate_common_system_info(config, &max_cores);
+
   const ConfigTestHooks* test_hooks = get_config_test_hooks();
   const bool use_injected_system_info = test_hooks != nullptr && test_hooks->use_system_info;
-  config.cpu_name = use_injected_system_info ? test_hooks->cpu_name : get_processor_name();
-  config.macos_version = use_injected_system_info ? test_hooks->macos_version : get_macos_version();
-  config.perf_cores = use_injected_system_info ? test_hooks->performance_cores : get_performance_cores();
-  config.eff_cores = use_injected_system_info ? test_hooks->efficiency_cores : get_efficiency_cores();
-  int max_cores = use_injected_system_info ? test_hooks->total_logical_cores : get_total_logical_cores();
-  config.num_threads = max_cores;  // Default: use all available cores
-  
-  // Determine if custom cache size is being used
+
   config.use_custom_cache_size = (config.custom_cache_size_kb_ll != -1);
-  
-  // Get cache sizes
   if (config.use_custom_cache_size) {
-    config.custom_cache_size_bytes = static_cast<size_t>(config.custom_cache_size_kb_ll) * Constants::BYTES_PER_KB;
+    config.custom_cache_size_bytes =
+        static_cast<size_t>(config.custom_cache_size_kb_ll) * Constants::BYTES_PER_KB;
   } else {
     config.l1_cache_size = use_injected_system_info ? test_hooks->l1_cache_size : get_l1_cache_size();
     config.l2_cache_size = use_injected_system_info ? test_hooks->l2_cache_size : get_l2_cache_size();
   }
-  
-  // Set default access counts from constants
+
+  // Set default access counts from constants.
   config.l1_num_accesses = Constants::L1_LATENCY_ACCESSES;
   config.l2_num_accesses = Constants::L2_LATENCY_ACCESSES;
   config.custom_num_accesses = Constants::CUSTOM_LATENCY_ACCESSES;
 
-  // Second pass: parse all other arguments
-  // Error handling: Uses try-catch to convert exceptions to return codes
-  bool iterations_seen = false;
-  bool buffersize_seen = false;
-  bool count_seen = false;
-  bool latency_samples_seen = false;
-  bool latency_stride_seen = false;
-  bool latency_chain_mode_seen = false;
-  bool latency_tlb_locality_seen = false;
-  bool threads_seen = false;
-  bool output_seen = false;
-  bool seed_seen = false;
-  uint64_t parsed_general_seed = 0;
-  bool sweep_max_runs_seen = false;
-
-  for (int i = 1; i < argc; ++i) {
-    std::string arg = argv[i];
-    try {
-      if (is_option(arg, OPT_ITERATIONS_SHORT, OPT_ITERATIONS_LONG)) {
-        if (iterations_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option(OPT_ITERATIONS_LONG));
-        if (++i < argc) {
-          long long val_ll = parse_signed_decimal_or_throw(argv[i]);
-          // Error: Value validation - out of valid range
-          if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
-            throw std::out_of_range(Messages::error_iterations_invalid(val_ll, 1, std::numeric_limits<int>::max()));
-          config.iterations = static_cast<int>(val_ll);
-          config.user_specified_iterations = true;
-        } else
-          // Error: Missing required value
-          throw std::invalid_argument(Messages::error_missing_value(OPT_ITERATIONS_LONG));
-        iterations_seen = true;
-      } else if (is_option(arg, OPT_BUFFER_SIZE_SHORT, OPT_BUFFER_SIZE_LONG)) {
-        if (buffersize_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option(OPT_BUFFER_SIZE_LONG));
-        if (++i < argc) {
-          long long val_ll = parse_signed_decimal_or_throw(argv[i]);
-          // Error: Value validation - out of valid range
-          // Note: 0 is accepted here and validated later (allowed only with --only-latency)
-          if (val_ll < 0 || val_ll > std::numeric_limits<unsigned long>::max())
-            throw std::out_of_range(Messages::error_buffersize_invalid(val_ll, std::numeric_limits<unsigned long>::max()));
-          requested_buffer_size_mb_ll = val_ll;
-        } else
-          // Error: Missing required value
-          throw std::invalid_argument(Messages::error_missing_value(OPT_BUFFER_SIZE_LONG));
-        buffersize_seen = true;
-      } else if (is_option(arg, OPT_COUNT_SHORT, OPT_COUNT_LONG)) {
-        if (count_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option(OPT_COUNT_LONG));
-        if (++i < argc) {
-          long long val_ll = parse_signed_decimal_or_throw(argv[i]);
-          // Error: Value validation - out of valid range
-          if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
-            throw std::out_of_range(Messages::error_count_invalid(val_ll, 1, std::numeric_limits<int>::max()));
-          config.loop_count = static_cast<int>(val_ll);
-        } else
-          // Error: Missing required value
-          throw std::invalid_argument(Messages::error_missing_value(OPT_COUNT_LONG));
-        count_seen = true;
-      } else if (is_option(arg, OPT_LATENCY_SAMPLES_SHORT, OPT_LATENCY_SAMPLES_LONG)) {
-        if (latency_samples_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option(OPT_LATENCY_SAMPLES_LONG));
-        if (++i < argc) {
-          long long val_ll = parse_signed_decimal_or_throw(argv[i]);
-          // Error: Value validation - out of valid range
-          if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
-            throw std::out_of_range(Messages::error_latency_samples_invalid(val_ll, 1, std::numeric_limits<int>::max()));
-          config.latency_sample_count = static_cast<int>(val_ll);
-          config.user_specified_latency_samples = true;
-        } else
-          // Error: Missing required value
-          throw std::invalid_argument(Messages::error_missing_value(OPT_LATENCY_SAMPLES_LONG));
-        latency_samples_seen = true;
-      } else if (is_option(arg, OPT_LATENCY_STRIDE_SHORT, OPT_LATENCY_STRIDE_LONG)) {
-        if (latency_stride_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option(OPT_LATENCY_STRIDE_LONG));
-        if (++i < argc) {
-          long long val_ll = parse_signed_decimal_or_throw(argv[i]);
-          if (val_ll <= 0) {
-            throw std::out_of_range(Messages::error_latency_stride_invalid(
-                val_ll, 1, std::numeric_limits<long long>::max()));
-          }
-          config.latency_stride_bytes = static_cast<size_t>(val_ll);
-        } else {
-          throw std::invalid_argument(Messages::error_missing_value(OPT_LATENCY_STRIDE_LONG));
-        }
-        latency_stride_seen = true;
-      } else if (is_option(arg, OPT_LATENCY_CHAIN_MODE_SHORT, OPT_LATENCY_CHAIN_MODE_LONG)) {
-        if (latency_chain_mode_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option(OPT_LATENCY_CHAIN_MODE_LONG));
-        if (++i < argc) {
-          LatencyChainMode parsed_mode = LatencyChainMode::Auto;
-          if (!latency_chain_mode_from_string(argv[i], parsed_mode)) {
-            throw std::out_of_range(Messages::error_latency_chain_mode_invalid());
-          }
-          config.latency_chain_mode = parsed_mode;
-        } else {
-          throw std::invalid_argument(Messages::error_missing_value(OPT_LATENCY_CHAIN_MODE_LONG));
-        }
-        latency_chain_mode_seen = true;
-      } else if (is_option(arg, OPT_LATENCY_TLB_LOCALITY_SHORT, OPT_LATENCY_TLB_LOCALITY_LONG)) {
-        if (latency_tlb_locality_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option(OPT_LATENCY_TLB_LOCALITY_LONG));
-        if (++i < argc) {
-          long long val_ll = parse_signed_decimal_or_throw(argv[i]);
-          const long long max_locality_kb =
-              static_cast<long long>(std::numeric_limits<size_t>::max() / Constants::BYTES_PER_KB);
-          if (val_ll < 0 || val_ll > max_locality_kb) {
-            throw std::out_of_range(Messages::error_latency_tlb_locality_invalid(val_ll, max_locality_kb));
-          }
-          requested_latency_tlb_locality_kb_ll = val_ll;
-          config.user_specified_latency_tlb_locality = true;
-        } else {
-          throw std::invalid_argument(Messages::error_missing_value(OPT_LATENCY_TLB_LOCALITY_LONG));
-        }
-        latency_tlb_locality_seen = true;
-      } else if (is_option(arg, OPT_CACHE_SIZE_SHORT, OPT_CACHE_SIZE_LONG)) {
-        // Already parsed in first pass, skip it and its value in second pass
-        ++i;
-        // Silently skip - already parsed and validated in first pass
-        continue;
-      } else if (is_option(arg, OPT_SWEEP_SHORT, OPT_SWEEP_LONG)) {
-        if (++i < argc) {
-          config.sweep_specs.push_back(parse_sweep_spec(argv[i]));
-          config.run_sweep = true;
-        } else {
-          throw std::invalid_argument(Messages::error_missing_value(OPT_SWEEP_LONG));
-        }
-      } else if (is_option(arg, OPT_SWEEP_MAX_RUNS_SHORT, OPT_SWEEP_MAX_RUNS_LONG)) {
-        if (sweep_max_runs_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option(OPT_SWEEP_MAX_RUNS_LONG));
-        if (++i < argc) {
-          long long val_ll = parse_signed_decimal_or_throw(argv[i]);
-          if (val_ll <= 0) {
-            throw std::out_of_range("sweep-max-runs must be a positive integer");
-          }
-          config.sweep_max_runs = static_cast<size_t>(val_ll);
-        } else {
-          throw std::invalid_argument(Messages::error_missing_value(OPT_SWEEP_MAX_RUNS_LONG));
-        }
-        sweep_max_runs_seen = true;
-      } else if (is_option(arg, OPT_OUTPUT_SHORT, OPT_OUTPUT_LONG)) {
-        if (output_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option(OPT_OUTPUT_LONG));
-        if (++i < argc) {
-          config.output_file = argv[i];
-        } else
-          // Error: Missing required value
-          throw std::invalid_argument(Messages::error_missing_value(OPT_OUTPUT_LONG));
-        output_seen = true;
-      } else if (arg == OPT_SEED_LONG) {
-        if (seed_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option(OPT_SEED_LONG));
-        if (++i < argc) {
-          parsed_general_seed = parse_unsigned_decimal_or_throw(argv[i]);
-        } else {
-          throw std::invalid_argument(Messages::error_missing_value(OPT_SEED_LONG));
-        }
-        seed_seen = true;
-      } else if (is_option(arg, OPT_BENCHMARK_SHORT, OPT_BENCHMARK_LONG)) {
-        config.run_benchmark = true;
-        if (config.run_patterns) {
-          throw std::invalid_argument(Messages::error_mutually_exclusive_modes(OPT_BENCHMARK_LONG, OPT_PATTERNS_LONG));
-        }
-      } else if (is_option(arg, OPT_PATTERNS_SHORT, OPT_PATTERNS_LONG)) {
-        config.run_patterns = true;
-        if (config.run_benchmark) {
-          throw std::invalid_argument(Messages::error_mutually_exclusive_modes(OPT_BENCHMARK_LONG, OPT_PATTERNS_LONG));
-        }
-      } else if (is_option(arg, OPT_NON_CACHEABLE_SHORT, OPT_NON_CACHEABLE_LONG)) {
-        config.use_non_cacheable = true;
-      } else if (is_option(arg, OPT_ONLY_BANDWIDTH_SHORT, OPT_ONLY_BANDWIDTH_LONG)) {
-        config.only_bandwidth = true;
-      } else if (is_option(arg, OPT_ONLY_LATENCY_SHORT, OPT_ONLY_LATENCY_LONG)) {
-        config.only_latency = true;
-      } else if (is_option(arg, OPT_THREADS_SHORT, OPT_THREADS_LONG)) {
-        if (threads_seen)
-          throw std::invalid_argument(Messages::error_duplicate_option(OPT_THREADS_LONG));
-        if (++i < argc) {
-          long long val_ll = parse_signed_decimal_or_throw(argv[i]);
-          // Error: Value validation - out of valid range
-          if (val_ll <= 0 || val_ll > std::numeric_limits<int>::max())
-            throw std::out_of_range(Messages::error_threads_invalid(val_ll, 1, std::numeric_limits<int>::max()));
-          requested_threads_ll = val_ll;
-        } else
-          // Error: Missing required value
-          throw std::invalid_argument(Messages::error_missing_value(OPT_THREADS_LONG));
-        threads_seen = true;
-      } else if (is_option(arg, OPT_HELP_SHORT, OPT_HELP_LONG)) {
-        config.help_printed = true;
-        print_help(argv[0]);
-        return EXIT_SUCCESS;  // Special return value for help (not an error)
-      } else {
-        // Error: Unknown option
-        throw std::invalid_argument(Messages::error_unknown_option(arg));
-      }
-    } catch (const std::invalid_argument &e) {
-      // Exception caught: Convert to return code
-      // Error: Invalid argument (missing value, unknown option, etc.)
-      std::cerr << Messages::error_prefix();
-      if (is_option(arg, OPT_SWEEP_SHORT, OPT_SWEEP_LONG) && i < argc) {
-        std::cerr << Messages::error_invalid_value(arg, argv[i], e.what());
-      } else {
-        std::cerr << e.what();
-      }
-      std::cerr << std::endl;
-      print_usage(argv[0]);
-      return EXIT_FAILURE;  // Convert exception to return code
-    } catch (const std::out_of_range &e) {
-      // Exception caught: Convert to return code
-      // Error: Value out of valid range
-      std::cerr << Messages::error_prefix() << Messages::error_invalid_value(arg, argv[i], e.what()) << std::endl;
-      print_usage(argv[0]);
-      return EXIT_FAILURE;  // Convert exception to return code
-    }
-  }
-
-  // Set buffer size from user request or default
-  if (requested_buffer_size_mb_ll != -1) {
-    config.buffer_size_mb = static_cast<unsigned long>(requested_buffer_size_mb_ll);
-  }
-  // Otherwise use default (already set in struct)
-
-  // Set threads from user request or default
-  if (requested_threads_ll != -1) {
-    int requested_threads = static_cast<int>(requested_threads_ll);
-    if (requested_threads > max_cores) {
-      std::cerr << Messages::warning_prefix() << Messages::warning_threads_capped(requested_threads, max_cores) << std::endl;
-      config.num_threads = max_cores;
-    } else {
-      config.num_threads = requested_threads;
-    }
+  // Preserve requested thread count without warning; validate_config() handles capping.
+  if (has_requested_threads) {
+    config.num_threads = requested_threads;
     config.user_specified_threads = true;
+  } else {
+    config.num_threads = max_cores;
   }
 
   if (requested_latency_tlb_locality_kb_ll != -1) {
@@ -983,5 +812,49 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
     config.benchmark_seed = generate_config_seed();
   }
 
-  return EXIT_SUCCESS;  // All arguments parsed successfully
+  return EXIT_SUCCESS;
+}
+
+int parse_arguments_impl(int argc, char* argv[], BenchmarkConfig& config) {
+  config = BenchmarkConfig{};
+
+  const PrimaryModeSelection mode_selection = select_primary_benchmark_mode(argc, argv);
+  if (mode_selection.mode == PrimaryBenchmarkMode::Conflict) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_mutually_exclusive_modes(
+                     mode_selection.selected_options[0],
+                     mode_selection.selected_options[1])
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  if (mode_selection.mode == PrimaryBenchmarkMode::AnalyzeTlb) {
+    return parse_analyze_tlb_arguments(argc, argv, config);
+  }
+
+  return parse_general_arguments(argc, argv, config);
+}
+
+}  // namespace
+
+/**
+ * @brief Parse command-line arguments and populate a benchmark configuration.
+ *
+ * Uses exception handling internally for strict numeric and sweep validation,
+ * converting all errors and unexpected exceptions to `EXIT_FAILURE` at the
+ * boundary so no exception escapes to callers.
+ */
+int parse_arguments(int argc, char* argv[], BenchmarkConfig& config) {
+  try {
+    return parse_arguments_impl(argc, argv, config);
+  } catch (const std::exception& error) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_command_execution_exception("Argument parsing", error.what())
+              << std::endl;
+  } catch (...) {
+    std::cerr << Messages::error_prefix()
+              << Messages::error_command_execution_exception("Argument parsing", "")
+              << std::endl;
+  }
+  return EXIT_FAILURE;
 }

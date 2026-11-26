@@ -550,13 +550,15 @@ TEST(ExecutableCliIntegrationTest, HelpRemainsHumanAcrossModesAndOutputOrderingI
   };
   std::vector<HelpCase> cases = {
       {{}, "Usage:", "--benchmark"},
-      {{"--threads", "1"}, "Usage:", "--threads <count>"},
+      {{"--help"}, "Usage:", "--benchmark"},
   };
   const HelpCase modes[] = {
       {{"--benchmark"}, "Usage:", "--benchmark"},
+      {{"--patterns"}, "Usage:", "--patterns"},
+      {{"--analyze-tlb"}, "Usage:", "--analyze-tlb"},
       {{"--gpu-bandwidth"}, "Usage: ./memory_benchmark --gpu-bandwidth [options]", "minimum: 64 MB"},
       {{"--llm-memory"}, "Usage: ./memory_benchmark --llm-memory [options]", "schema 2"},
-      {{"--llm-memory", "--llm-memory-backend", "metal"},
+      {{"--llm-memory", "--llm-memory-backend=metal"},
        "Usage: ./memory_benchmark --llm-memory [options]",
        "schema 2"},
       {{"--analyze-core2core"}, "Usage:", "--analyze-core2core"},
@@ -568,7 +570,7 @@ TEST(ExecutableCliIntegrationTest, HelpRemainsHumanAcrossModesAndOutputOrderingI
         test_case.arguments.insert(test_case.arguments.begin() + 1, "--help");
         test_case.arguments.insert(test_case.arguments.end(), {"--output", "-"});
       } else {
-        test_case.arguments.insert(test_case.arguments.end(), {"--output", "-", "--help"});
+        test_case.arguments.insert(test_case.arguments.end(), {"--output=-", "--help"});
       }
       cases.push_back(std::move(test_case));
     }
@@ -610,21 +612,47 @@ TEST(ExecutableCliIntegrationTest, InvalidCommandsFailBeforeOutputAcrossModesInt
        Messages::error_llm_memory_config_invalid("json-integer-out-of-range"),
        true},
       {{"--benchmark", "--only-bandwidth", "--latency-samples", "1", "--output", "-"},
-       Messages::error_only_bandwidth_with_latency_samples()},
+       Messages::error_only_bandwidth_with_latency_samples(),
+       true},
+      {{"--benchmark", "--only-latency", "--threads=2", "--output=-"},
+       Messages::error_only_latency_with_threads(),
+       true},
+      {{"--patterns", "--cache-size=256", "--output=-"},
+       Messages::error_patterns_incompatible_option("--cache-size"),
+       true},
+      {{"--benchmark", "--buffer-size=128", "--sweep=buffer-size=128,256", "--output=-"},
+       Messages::error_sweep_option_conflict("--buffer-size", "buffer-size"),
+       true},
+      {{"--benchmark", "--buffer-size", "-G"},
+       Messages::error_invalid_value("--buffer-size", "-G", Messages::reason_signed_integer_invalid()),
+       true},
+      {{"--benchmark=1"}, Messages::error_option_does_not_take_value("--benchmark"), true},
+      {{"--benchmark", "--benchmark"}, Messages::error_duplicate_option("--benchmark"), true},
+      {{"--threads", "1"}, Messages::error_missing_primary_mode(), true},
+      {{"--only-bandwidth"}, Messages::error_only_flags_require_benchmark(), true},
+      {{"--seed", "42"}, Messages::error_seed_requires_supported_mode(), true},
       {{"--llm-memory", "--weight-size-mb", "1", "--output", "-"},
-       Messages::error_llm_memory_missing_required_option("--layers")},
+       Messages::error_llm_memory_missing_required_option("--layers"),
+       true},
       {{"--gpu-bandwidth", "--buffer-size", "63", "--output", "-"},
        Messages::error_gpu_buffer_size_below_minimum(63, Constants::GPU_MIN_BUFFER_SIZE_MB),
        true},
-      {{"--benchmark", "--output", "-", "--not-a-real-option"}, Messages::error_unknown_option("--not-a-real-option")},
+      {{"--benchmark", "--output", "-", "--not-a-real-option"},
+       Messages::error_unknown_option("--not-a-real-option"),
+       true},
       {{"--analyze-core2core", "--output", "-", "--buffer-size", "256"},
-       Messages::error_analyze_core_to_core_must_be_used_alone()},
+       Messages::error_option_not_allowed_in_mode("--buffer-size",
+                                                  Messages::error_analyze_core_to_core_must_be_used_alone()),
+       true},
       {{"--analyze-tlb", "--sweep", "latency-stride-bytes=64,130", "--output", output.path()},
-       Messages::error_latency_stride_alignment(130, sizeof(uintptr_t))},
+       Messages::error_latency_stride_alignment(130, sizeof(uintptr_t)),
+       true},
       {{"--analyze-tlb", "--latency-stride-bytes", "32768", "--output", "-"},
-       Messages::error_analyze_tlb_stride_exceeds_page(32768, static_cast<size_t>(page_size))},
+       Messages::error_analyze_tlb_stride_exceeds_page(32768, static_cast<size_t>(page_size)),
+       true},
       {{"--analyze-tlb", "--sweep", "latency-stride-bytes=64,130", "--output", "-"},
-       Messages::error_latency_stride_alignment(130, sizeof(uintptr_t))},
+       Messages::error_latency_stride_alignment(130, sizeof(uintptr_t)),
+       true},
   };
   for (const InvalidCase& test_case : cases) {
     SCOPED_TRACE(testing::PrintToString(test_case.arguments));

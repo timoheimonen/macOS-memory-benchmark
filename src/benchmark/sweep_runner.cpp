@@ -94,6 +94,8 @@ nlohmann::ordered_json build_sweep_parameters_json(const BenchmarkConfig& config
       if (spec.parameter == SweepParameter::LatencyChainMode ||
           spec.parameter == SweepParameter::TlbDensity) {
         values.push_back(value.raw_value);
+      } else if (spec.parameter == SweepParameter::BufferSizeMb) {
+        values.push_back(value.unsigned_value);
       } else {
         values.push_back(value.integer_value);
       }
@@ -111,6 +113,8 @@ nlohmann::ordered_json build_assignment_json(const std::vector<SweepAssignment>&
     if (spec.parameter == SweepParameter::LatencyChainMode ||
         spec.parameter == SweepParameter::TlbDensity) {
       params[spec.parameter_name] = value.raw_value;
+    } else if (spec.parameter == SweepParameter::BufferSizeMb) {
+      params[spec.parameter_name] = value.unsigned_value;
     } else {
       params[spec.parameter_name] = value.integer_value;
     }
@@ -124,7 +128,8 @@ void apply_assignment(BenchmarkConfig& config, const SweepAssignment& assignment
 
   switch (spec.parameter) {
     case SweepParameter::BufferSizeMb:
-      config.buffer_size_mb = static_cast<unsigned long>(value.integer_value);
+      config.buffer_size_mb = value.unsigned_value;
+      config.user_specified_buffer_size = true;
       break;
     case SweepParameter::CacheSizeKb:
       config.custom_cache_size_kb_ll = value.integer_value;
@@ -134,7 +139,10 @@ void apply_assignment(BenchmarkConfig& config, const SweepAssignment& assignment
       break;
     case SweepParameter::Threads: {
       const int requested_threads = static_cast<int>(value.integer_value);
-      const int max_cores = get_total_logical_cores();
+      const ConfigTestHooks* test_hooks = get_config_test_hooks();
+      const int max_cores = (test_hooks != nullptr && test_hooks->use_system_info)
+                                ? test_hooks->total_logical_cores
+                                : get_total_logical_cores();
       config.num_threads = (max_cores > 0) ? std::min(requested_threads, max_cores) : requested_threads;
       config.user_specified_threads = true;
       break;
@@ -146,12 +154,15 @@ void apply_assignment(BenchmarkConfig& config, const SweepAssignment& assignment
       break;
     case SweepParameter::LatencyStrideBytes:
       config.latency_stride_bytes = static_cast<size_t>(value.integer_value);
+      config.user_specified_latency_stride = true;
       break;
     case SweepParameter::LatencyChainMode:
       config.latency_chain_mode = value.latency_chain_mode;
+      config.user_specified_latency_chain_mode = true;
       break;
     case SweepParameter::TlbDensity:
       config.tlb_sweep_density = value.tlb_sweep_density;
+      config.user_specified_tlb_density = true;
       break;
   }
 }

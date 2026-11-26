@@ -33,12 +33,6 @@ struct BenchmarkResults;
 
 // --- Output/Printing Functions ---
 /**
- * @brief Print command-line usage instructions
- * @param prog_name Program name (typically argv[0])
- */
-void print_usage(const char* prog_name);
-
-/**
  * @brief Print help text to stdout (for -h/--help)
  * @param prog_name Program name (typically argv[0])
  */

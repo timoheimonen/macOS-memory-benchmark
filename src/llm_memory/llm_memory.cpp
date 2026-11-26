@@ -33,6 +33,7 @@
 #include <string_view>
 #include <utility>
 
+#include "core/config/cli_parser.h"
 #include "core/config/config.h"
 #include "core/config/sweep_utils.h"
 #include "core/config/version.h"
@@ -62,33 +63,81 @@ bool llm_parser_hooks_active = false;
 LlmMemoryCommandTestHooks active_llm_command_hooks;
 bool llm_command_hooks_active = false;
 
-bool is_option(const std::string& argument, const char* short_option,
-               const char* long_option) {
-  return argument == short_option || argument == long_option;
-}
+enum LlmOptionId {
+  OPT_ID_LLM_MEMORY = 1,
+  OPT_ID_HELP,
+  OPT_ID_BACKEND,
+  OPT_ID_KV_LAYOUT,
+  OPT_ID_PHASE,
+  OPT_ID_KV_BLOCK_TOKENS,
+  OPT_ID_WEIGHT_SIZE_MB,
+  OPT_ID_LAYERS,
+  OPT_ID_QUERY_HEADS,
+  OPT_ID_KV_HEADS,
+  OPT_ID_HEAD_DIM,
+  OPT_ID_KV_ELEMENT_BYTES,
+  OPT_ID_CONTEXT_TOKENS,
+  OPT_ID_PROMPT_TOKENS,
+  OPT_ID_ATTENTION_QUERY_TILE_TOKENS,
+  OPT_ID_BATCH_SIZE,
+  OPT_ID_THREADS,
+  OPT_ID_ITERATIONS,
+  OPT_ID_COUNT,
+  OPT_ID_SEED,
+  OPT_ID_OUTPUT,
+  OPT_ID_SWEEP,
+  OPT_ID_SWEEP_MAX_RUNS,
+};
 
-bool report_duplicate(bool& seen, const char* canonical_option) {
-  if (!seen) {
-    seen = true;
-    return false;
-  }
-  std::cerr << Messages::error_prefix()
-            << Messages::error_duplicate_option(canonical_option)
-            << std::endl;
-  return true;
-}
-
-bool take_value(int argc, char* argv[], int& index,
-                const char* canonical_option, std::string& value) {
-  if (++index >= argc) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_missing_value(canonical_option)
-              << std::endl;
-    return false;
-  }
-  value = argv[index];
-  return true;
-}
+constexpr std::array<CliOptionSpec, 23> kLlmOptionSpecs{{
+    {OPT_ID_LLM_MEMORY, "-M", "--llm-memory", CliOptionValueKind::None,
+     CliOptionArity::Single},
+    {OPT_ID_HELP, "-h", "--help", CliOptionValueKind::None,
+     CliOptionArity::Single},
+    {OPT_ID_BACKEND, nullptr, "--llm-memory-backend",
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {OPT_ID_KV_LAYOUT, nullptr, "--kv-layout",
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {OPT_ID_PHASE, nullptr, "--phase", CliOptionValueKind::RequiredValue,
+     CliOptionArity::Single},
+    {OPT_ID_KV_BLOCK_TOKENS, nullptr, "--kv-block-tokens",
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {OPT_ID_WEIGHT_SIZE_MB, nullptr, "--weight-size-mb",
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {OPT_ID_LAYERS, nullptr, "--layers", CliOptionValueKind::RequiredValue,
+     CliOptionArity::Single},
+    {OPT_ID_QUERY_HEADS, nullptr, "--query-heads",
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {OPT_ID_KV_HEADS, nullptr, "--kv-heads", CliOptionValueKind::RequiredValue,
+     CliOptionArity::Single},
+    {OPT_ID_HEAD_DIM, nullptr, "--head-dim", CliOptionValueKind::RequiredValue,
+     CliOptionArity::Single},
+    {OPT_ID_KV_ELEMENT_BYTES, nullptr, "--kv-element-bytes",
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {OPT_ID_CONTEXT_TOKENS, nullptr, "--context-tokens",
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {OPT_ID_PROMPT_TOKENS, nullptr, "--prompt-tokens",
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {OPT_ID_ATTENTION_QUERY_TILE_TOKENS, nullptr,
+     "--attention-query-tile-tokens", CliOptionValueKind::RequiredValue,
+     CliOptionArity::Single},
+    {OPT_ID_BATCH_SIZE, nullptr, "--batch-size",
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+    {OPT_ID_THREADS, "-t", "--threads", CliOptionValueKind::RequiredValue,
+     CliOptionArity::Single},
+    {OPT_ID_ITERATIONS, "-i", "--iterations", CliOptionValueKind::RequiredValue,
+     CliOptionArity::Single},
+    {OPT_ID_COUNT, "-r", "--count", CliOptionValueKind::RequiredValue,
+     CliOptionArity::Single},
+    {OPT_ID_SEED, nullptr, "--seed", CliOptionValueKind::RequiredValue,
+     CliOptionArity::Single},
+    {OPT_ID_OUTPUT, "-o", "--output", CliOptionValueKind::RequiredValue,
+     CliOptionArity::Single},
+    {OPT_ID_SWEEP, "-S", "--sweep", CliOptionValueKind::RequiredValue,
+     CliOptionArity::Repeatable},
+    {OPT_ID_SWEEP_MAX_RUNS, "-X", "--sweep-max-runs",
+     CliOptionValueKind::RequiredValue, CliOptionArity::Single},
+}};
 
 bool parse_positive_size(const std::string& option,
                          const std::string& token, size_t& value) {
@@ -614,356 +663,238 @@ void set_llm_memory_command_test_hooks(
 int parse_llm_memory_arguments(int argc, char* argv[],
                                LlmMemoryConfig& config) {
   config = LlmMemoryConfig{};
-  config.argv.reserve(static_cast<size_t>(std::max(argc, 0)));
-  for (int index = 0; index < argc; ++index) {
-    config.argv.emplace_back(argv[index]);
+  if (argc > 0 && argv != nullptr) {
+    config.argv.reserve(static_cast<size_t>(argc));
+    for (int index = 0; index < argc; ++index) {
+      if (argv[index] != nullptr) {
+        config.argv.emplace_back(argv[index]);
+      }
+    }
+  }
+
+  const CliParseResult parsed = parse_cli_options(argc, argv, kLlmOptionSpecs);
+  if (!parsed.ok) {
+    std::cerr << Messages::error_prefix()
+              << format_cli_parse_error(
+                     parsed, &Messages::error_llm_memory_must_be_used_alone())
+              << std::endl;
+    return EXIT_FAILURE;
   }
 
   bool mode_seen = false;
-  bool backend_seen = false;
   bool weight_seen = false;
   bool layers_seen = false;
   bool query_heads_seen = false;
   bool kv_heads_seen = false;
   bool head_dimension_seen = false;
-  bool kv_element_bytes_seen = false;
-  bool phase_seen = false;
   bool context_tokens_seen = false;
   bool prompt_tokens_seen = false;
   bool attention_query_tile_tokens_seen = false;
-  bool kv_layout_seen = false;
   bool kv_block_tokens_seen = false;
-  bool batch_size_seen = false;
-  bool threads_seen = false;
-  bool iterations_seen = false;
-  bool count_seen = false;
-  bool seed_seen = false;
-  bool output_seen = false;
-  bool sweep_max_runs_seen = false;
-  bool help_seen = false;
 
-  for (int index = 1; index < argc; ++index) {
-    const std::string argument = argv[index];
-    if (is_option(argument, "-M", "--llm-memory")) {
-      if (report_duplicate(mode_seen, "--llm-memory")) {
-        return EXIT_FAILURE;
-      }
-      continue;
-    }
-    if (is_option(argument, "-h", "--help")) {
-      if (report_duplicate(help_seen, "--help")) {
-        return EXIT_FAILURE;
-      }
-      config.help_printed = true;
-      continue;
-    }
-    if (argument == "--llm-memory-backend") {
-      if (report_duplicate(backend_seen, "--llm-memory-backend")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--llm-memory-backend", token)) {
-        return EXIT_FAILURE;
-      }
-      if (token == "cpu") {
-        config.backend = LlmMemoryBackend::Cpu;
-      } else if (token == "metal") {
-        config.backend = LlmMemoryBackend::Metal;
-      } else {
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_invalid_value(
-                         argument, token,
-                         Messages::llm_memory_reason_backend())
-                  << std::endl;
-        return EXIT_FAILURE;
-      }
-      config.user_specified_backend = true;
-      continue;
-    }
-    if (argument == "--kv-layout") {
-      if (report_duplicate(kv_layout_seen, "--kv-layout")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--kv-layout", token)) {
-        return EXIT_FAILURE;
-      }
-      if (token == "contiguous") {
-        config.kv_layout = LlmKvLayout::Contiguous;
-      } else if (token == "paged") {
-        config.kv_layout = LlmKvLayout::Paged;
-      } else {
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_invalid_value(
-                         argument, token,
-                         Messages::llm_memory_reason_kv_layout())
-                  << std::endl;
-        return EXIT_FAILURE;
-      }
-      config.user_specified_kv_layout = true;
-      continue;
-    }
-    if (argument == "--phase") {
-      if (report_duplicate(phase_seen, "--phase")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--phase", token)) {
-        return EXIT_FAILURE;
-      }
-      if (token == "decode") {
-        config.phase = LlmPhase::Decode;
-      } else if (token == "prefill") {
-        config.phase = LlmPhase::Prefill;
-      } else {
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_invalid_value(argument, token, Messages::llm_memory_reason_phase()) << std::endl;
-        return EXIT_FAILURE;
-      }
-      config.user_specified_phase = true;
-      continue;
-    }
-    if (argument == "--kv-block-tokens") {
-      if (report_duplicate(kv_block_tokens_seen, "--kv-block-tokens")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--kv-block-tokens", token) ||
-          !parse_nonnegative_size(argument, token,
-                                  config.kv_block_tokens)) {
-        return EXIT_FAILURE;
-      }
-      config.user_specified_kv_block_tokens = true;
-      continue;
-    }
-    if (argument == "--weight-size-mb") {
-      if (report_duplicate(weight_seen, "--weight-size-mb")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--weight-size-mb", token) ||
-          !parse_positive_size(argument, token, config.weight_size_mb)) {
-        return EXIT_FAILURE;
-      }
-      continue;
-    }
-    if (argument == "--layers") {
-      if (report_duplicate(layers_seen, "--layers")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--layers", token) ||
-          !parse_positive_size(argument, token, config.layer_count)) {
-        return EXIT_FAILURE;
-      }
-      continue;
-    }
-    if (argument == "--query-heads") {
-      if (report_duplicate(query_heads_seen, "--query-heads")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--query-heads", token) ||
-          !parse_positive_size(argument, token,
-                               config.query_head_count)) {
-        return EXIT_FAILURE;
-      }
-      continue;
-    }
-    if (argument == "--kv-heads") {
-      if (report_duplicate(kv_heads_seen, "--kv-heads")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--kv-heads", token) ||
-          !parse_positive_size(argument, token, config.kv_head_count)) {
-        return EXIT_FAILURE;
-      }
-      continue;
-    }
-    if (argument == "--head-dim") {
-      if (report_duplicate(head_dimension_seen, "--head-dim")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--head-dim", token) ||
-          !parse_positive_size(argument, token, config.head_dimension)) {
-        return EXIT_FAILURE;
-      }
-      continue;
-    }
-    if (argument == "--kv-element-bytes") {
-      if (report_duplicate(kv_element_bytes_seen, "--kv-element-bytes")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--kv-element-bytes", token) ||
-          !parse_positive_size(argument, token, config.kv_element_bytes)) {
-        return EXIT_FAILURE;
-      }
-      if (config.kv_element_bytes != 1 && config.kv_element_bytes != 2 &&
-          config.kv_element_bytes != 4) {
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_invalid_value(
-                         argument, token,
-                         Messages::llm_memory_reason_kv_element_bytes())
-                  << std::endl;
-        return EXIT_FAILURE;
-      }
-      continue;
-    }
-    if (argument == "--context-tokens") {
-      if (report_duplicate(context_tokens_seen, "--context-tokens")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--context-tokens", token) ||
-          !parse_positive_size(argument, token,
-                               config.visible_context_tokens)) {
-        return EXIT_FAILURE;
-      }
-      config.user_specified_context_tokens = true;
-      continue;
-    }
-    if (argument == "--prompt-tokens") {
-      if (report_duplicate(prompt_tokens_seen, "--prompt-tokens")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--prompt-tokens", token) ||
-          !parse_nonnegative_size(argument, token, config.prompt_tokens)) {
-        return EXIT_FAILURE;
-      }
-      config.user_specified_prompt_tokens = true;
-      continue;
-    }
-    if (argument == "--attention-query-tile-tokens") {
-      if (report_duplicate(attention_query_tile_tokens_seen, "--attention-query-tile-tokens")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--attention-query-tile-tokens", token) ||
-          !parse_nonnegative_size(argument, token, config.attention_query_tile_tokens)) {
-        return EXIT_FAILURE;
-      }
-      config.user_specified_attention_query_tile_tokens = true;
-      continue;
-    }
-    if (argument == "--batch-size") {
-      if (report_duplicate(batch_size_seen, "--batch-size")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--batch-size", token) ||
-          !parse_positive_size(argument, token, config.batch_size)) {
-        return EXIT_FAILURE;
-      }
-      continue;
-    }
-    if (is_option(argument, "-t", "--threads")) {
-      if (report_duplicate(threads_seen, "--threads")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--threads", token) ||
-          !parse_positive_size(argument, token,
-                               config.requested_workers)) {
-        return EXIT_FAILURE;
-      }
-      config.user_specified_workers = true;
-      continue;
-    }
-    if (is_option(argument, "-i", "--iterations")) {
-      if (report_duplicate(iterations_seen, "--iterations")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--iterations", token) ||
-          !parse_positive_size(argument, token, config.iterations)) {
-        return EXIT_FAILURE;
-      }
-      config.user_specified_iterations = true;
-      continue;
-    }
-    if (is_option(argument, "-r", "--count")) {
-      if (report_duplicate(count_seen, "--count")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--count", token) ||
-          !parse_positive_size(argument, token, config.loop_count)) {
-        return EXIT_FAILURE;
-      }
-      continue;
-    }
-    if (argument == "--seed") {
-      if (report_duplicate(seed_seen, "--seed")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--seed", token)) {
-        return EXIT_FAILURE;
-      }
-      const StrictIntegerParseStatus status =
-          parse_strict_unsigned_decimal(token, config.seed);
-      if (status != StrictIntegerParseStatus::Success) {
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_invalid_value(
-                         argument, token,
-                         strict_unsigned_decimal_error_reason(status))
-                  << std::endl;
-        return EXIT_FAILURE;
-      }
-      config.user_specified_seed = true;
-      continue;
-    }
-    if (is_option(argument, "-o", "--output")) {
-      if (report_duplicate(output_seen, "--output")) {
-        return EXIT_FAILURE;
-      }
-      if (!take_value(argc, argv, index, "--output", config.output_file)) {
-        return EXIT_FAILURE;
-      }
-      continue;
-    }
-    if (is_option(argument, "-S", "--sweep")) {
-      std::string token;
-      if (!take_value(argc, argv, index, "--sweep", token)) {
-        return EXIT_FAILURE;
-      }
-      LlmSweepSpec spec;
-      if (!parse_llm_sweep_spec(token, spec)) {
-        return EXIT_FAILURE;
-      }
-      for (const LlmSweepSpec& existing : config.sweep_specs) {
-        if (existing.parameter == spec.parameter) {
+  for (const CliParsedOption& option : parsed.options) {
+    switch (option.id) {
+      case OPT_ID_LLM_MEMORY:
+        mode_seen = true;
+        break;
+      case OPT_ID_HELP:
+        config.help_printed = true;
+        break;
+      case OPT_ID_BACKEND:
+        if (option.value == "cpu") {
+          config.backend = LlmMemoryBackend::Cpu;
+        } else if (option.value == "metal") {
+          config.backend = LlmMemoryBackend::Metal;
+        } else {
           std::cerr << Messages::error_prefix()
-                    << Messages::error_duplicate_sweep_parameter(
-                           spec.parameter_name)
+                    << Messages::error_invalid_value(
+                           option.matched_name, option.value,
+                           Messages::llm_memory_reason_backend())
                     << std::endl;
           return EXIT_FAILURE;
         }
+        config.user_specified_backend = true;
+        break;
+      case OPT_ID_KV_LAYOUT:
+        if (option.value == "contiguous") {
+          config.kv_layout = LlmKvLayout::Contiguous;
+        } else if (option.value == "paged") {
+          config.kv_layout = LlmKvLayout::Paged;
+        } else {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(
+                           option.matched_name, option.value,
+                           Messages::llm_memory_reason_kv_layout())
+                    << std::endl;
+          return EXIT_FAILURE;
+        }
+        config.user_specified_kv_layout = true;
+        break;
+      case OPT_ID_PHASE:
+        if (option.value == "decode") {
+          config.phase = LlmPhase::Decode;
+        } else if (option.value == "prefill") {
+          config.phase = LlmPhase::Prefill;
+        } else {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(
+                           option.matched_name, option.value,
+                           Messages::llm_memory_reason_phase())
+                    << std::endl;
+          return EXIT_FAILURE;
+        }
+        config.user_specified_phase = true;
+        break;
+      case OPT_ID_KV_BLOCK_TOKENS:
+        if (!parse_nonnegative_size(option.matched_name, option.value,
+                                    config.kv_block_tokens)) {
+          return EXIT_FAILURE;
+        }
+        config.user_specified_kv_block_tokens = true;
+        kv_block_tokens_seen = true;
+        break;
+      case OPT_ID_WEIGHT_SIZE_MB:
+        if (!parse_positive_size(option.matched_name, option.value,
+                                 config.weight_size_mb)) {
+          return EXIT_FAILURE;
+        }
+        weight_seen = true;
+        break;
+      case OPT_ID_LAYERS:
+        if (!parse_positive_size(option.matched_name, option.value,
+                                 config.layer_count)) {
+          return EXIT_FAILURE;
+        }
+        layers_seen = true;
+        break;
+      case OPT_ID_QUERY_HEADS:
+        if (!parse_positive_size(option.matched_name, option.value,
+                                 config.query_head_count)) {
+          return EXIT_FAILURE;
+        }
+        query_heads_seen = true;
+        break;
+      case OPT_ID_KV_HEADS:
+        if (!parse_positive_size(option.matched_name, option.value,
+                                 config.kv_head_count)) {
+          return EXIT_FAILURE;
+        }
+        kv_heads_seen = true;
+        break;
+      case OPT_ID_HEAD_DIM:
+        if (!parse_positive_size(option.matched_name, option.value,
+                                 config.head_dimension)) {
+          return EXIT_FAILURE;
+        }
+        head_dimension_seen = true;
+        break;
+      case OPT_ID_KV_ELEMENT_BYTES:
+        if (!parse_positive_size(option.matched_name, option.value,
+                                 config.kv_element_bytes)) {
+          return EXIT_FAILURE;
+        }
+        if (config.kv_element_bytes != 1 && config.kv_element_bytes != 2 &&
+            config.kv_element_bytes != 4) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(
+                           option.matched_name, option.value,
+                           Messages::llm_memory_reason_kv_element_bytes())
+                    << std::endl;
+          return EXIT_FAILURE;
+        }
+        break;
+      case OPT_ID_CONTEXT_TOKENS:
+        if (!parse_positive_size(option.matched_name, option.value,
+                                 config.visible_context_tokens)) {
+          return EXIT_FAILURE;
+        }
+        config.user_specified_context_tokens = true;
+        context_tokens_seen = true;
+        break;
+      case OPT_ID_PROMPT_TOKENS:
+        if (!parse_nonnegative_size(option.matched_name, option.value,
+                                    config.prompt_tokens)) {
+          return EXIT_FAILURE;
+        }
+        config.user_specified_prompt_tokens = true;
+        prompt_tokens_seen = true;
+        break;
+      case OPT_ID_ATTENTION_QUERY_TILE_TOKENS:
+        if (!parse_nonnegative_size(option.matched_name, option.value,
+                                    config.attention_query_tile_tokens)) {
+          return EXIT_FAILURE;
+        }
+        config.user_specified_attention_query_tile_tokens = true;
+        attention_query_tile_tokens_seen = true;
+        break;
+      case OPT_ID_BATCH_SIZE:
+        if (!parse_positive_size(option.matched_name, option.value,
+                                 config.batch_size)) {
+          return EXIT_FAILURE;
+        }
+        break;
+      case OPT_ID_THREADS:
+        if (!parse_positive_size(option.matched_name, option.value,
+                                 config.requested_workers)) {
+          return EXIT_FAILURE;
+        }
+        config.user_specified_workers = true;
+        break;
+      case OPT_ID_ITERATIONS:
+        if (!parse_positive_size(option.matched_name, option.value,
+                                 config.iterations)) {
+          return EXIT_FAILURE;
+        }
+        config.user_specified_iterations = true;
+        break;
+      case OPT_ID_COUNT:
+        if (!parse_positive_size(option.matched_name, option.value,
+                                 config.loop_count)) {
+          return EXIT_FAILURE;
+        }
+        break;
+      case OPT_ID_SEED: {
+        const StrictIntegerParseStatus status =
+            parse_strict_unsigned_decimal(option.value, config.seed);
+        if (status != StrictIntegerParseStatus::Success) {
+          std::cerr << Messages::error_prefix()
+                    << Messages::error_invalid_value(
+                           option.matched_name, option.value,
+                           strict_unsigned_decimal_error_reason(status))
+                    << std::endl;
+          return EXIT_FAILURE;
+        }
+        config.user_specified_seed = true;
+        break;
       }
-      config.sweep_specs.push_back(std::move(spec));
-      config.run_sweep = true;
-      continue;
+      case OPT_ID_OUTPUT:
+        config.output_file = option.value;
+        break;
+      case OPT_ID_SWEEP: {
+        LlmSweepSpec spec;
+        if (!parse_llm_sweep_spec(option.value, spec)) {
+          return EXIT_FAILURE;
+        }
+        for (const LlmSweepSpec& existing : config.sweep_specs) {
+          if (existing.parameter == spec.parameter) {
+            std::cerr << Messages::error_prefix()
+                      << Messages::error_duplicate_sweep_parameter(
+                             spec.parameter_name)
+                      << std::endl;
+            return EXIT_FAILURE;
+          }
+        }
+        config.sweep_specs.push_back(std::move(spec));
+        config.run_sweep = true;
+        break;
+      }
+      case OPT_ID_SWEEP_MAX_RUNS:
+        if (!parse_positive_size(option.matched_name, option.value,
+                                 config.sweep_max_runs)) {
+          return EXIT_FAILURE;
+        }
+        break;
     }
-    if (is_option(argument, "-X", "--sweep-max-runs")) {
-      if (report_duplicate(sweep_max_runs_seen, "--sweep-max-runs")) {
-        return EXIT_FAILURE;
-      }
-      std::string token;
-      if (!take_value(argc, argv, index, "--sweep-max-runs", token) ||
-          !parse_positive_size(argument, token, config.sweep_max_runs)) {
-        return EXIT_FAILURE;
-      }
-      continue;
-    }
-
-    std::cerr << Messages::error_prefix()
-              << Messages::error_llm_memory_must_be_used_alone()
-              << std::endl;
-    return EXIT_FAILURE;
   }
 
   if (!mode_seen) {
@@ -973,7 +904,7 @@ int parse_llm_memory_arguments(int argc, char* argv[],
     return EXIT_FAILURE;
   }
   if (config.help_printed) {
-    print_llm_memory_help(argc > 0 ? argv[0] : "memory_benchmark");
+    print_llm_memory_help(cli_program_name(argc, argv));
     return EXIT_SUCCESS;
   }
 
