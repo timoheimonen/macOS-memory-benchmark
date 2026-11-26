@@ -1540,7 +1540,7 @@ Recommended validation commands:
   `./test_runner '--gtest_filter=*LlmMetalBackend*:*LlmMemoryRunner*:*LlmMemoryJson*:*ExecutableCli*'`; real-device
   cases compile each selected profile and cover all scenarios, GPU timestamps, exact tails or partial paged blocks,
   paged-prefill `N+2*M` lookups, cyclic block-owner threadgroups and their exact accounted-byte evidence, full-prompt
-  writes, Q=1/Q=P/remainder tiled-prefix scans, source-hash-bound loop ordering, permutation-sensitive lookups,
+  writes, Q=1/Q=P/remainder tiled-prefix scans, source-hash provenance, permutation-sensitive lookups,
   K/V-write and padding validation, multi-threadgroup work, and a bounded run crossing the 256 MiB segment boundary.
 - Deterministic GPU-focused tests:
   `./test_runner --gtest_filter='GpuBandwidthParserTest.*:GpuMemoryBudgetTest.*:GpuRunnerTest.*:GpuJsonTest.*:GpuWorkPlanTest.*:GpuTimedAccumulatorOracleTest.*:ModeSelectorTest.*:HashUtilsTest.*'`
