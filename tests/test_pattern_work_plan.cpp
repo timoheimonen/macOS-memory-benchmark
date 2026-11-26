@@ -105,6 +105,11 @@ TEST(PatternWorkPlanTest, BuildsStridedPlansWithExactTailPartitioningAndPayloadA
   ASSERT_GT(plan.passes, 1u);
   ASSERT_TRUE(set_strided_pattern_passes(previous, plan.passes - 1));
   EXPECT_LT(previous.total_payload_bytes, minimum_payload);
+
+  EXPECT_EQ(calculate_pattern_pilot_passes(1024, 4096, 100), 4u);
+  EXPECT_EQ(calculate_pattern_pilot_passes(0, 4096, 100), 0u);
+  EXPECT_EQ(calculate_pattern_calibrated_passes(0.05, 4, 0.20, 1, 100), 16u);
+  EXPECT_EQ(calculate_pattern_calibrated_passes(0.0, 4, 0.20, 1, 100), 0u);
 }
 
 TEST(PatternWorkPlanTest, SerializesMeasurementStatus) {

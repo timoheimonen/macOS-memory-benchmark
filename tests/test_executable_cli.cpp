@@ -600,6 +600,15 @@ TEST(ExecutableCliIntegrationTest, InvalidCommandsFailBeforeOutputAcrossModesInt
       {{"--llm-memory", "--gpu-bandwidth"},
        Messages::error_mutually_exclusive_modes("--llm-memory", "--gpu-bandwidth"),
        true},
+      {{"--gpu-bandwidth", "--llm-memory"},
+       Messages::error_mutually_exclusive_modes("--gpu-bandwidth", "--llm-memory"),
+       true},
+      {{"--llm-memory", "--weight-size-mb", "1", "--layers", "1", "--query-heads",
+        std::to_string(Constants::LLM_JSON_MAX_SAFE_INTEGER + 1), "--kv-heads", "1", "--head-dim", "8",
+        "--kv-element-bytes", "1", "--context-tokens", "2", "--batch-size", "1", "--threads", "1", "--iterations", "1",
+        "--count", "1", "--output", "-"},
+       Messages::error_llm_memory_config_invalid("json-integer-out-of-range"),
+       true},
       {{"--benchmark", "--only-bandwidth", "--latency-samples", "1", "--output", "-"},
        Messages::error_only_bandwidth_with_latency_samples()},
       {{"--llm-memory", "--weight-size-mb", "1", "--output", "-"},
@@ -749,18 +758,39 @@ TEST(ExecutableCliIntegrationTest, StandardAndPatternSweepFileAndStdoutIntegrati
 }
 
 TEST(ExecutableCliIntegrationTest, PatternBenchmarkWritesSingleJsonDocumentToStdoutIntegration) {
-  const CliResult result = run_memory_benchmark(
-      {"--patterns", "--buffer-size", "1", "--iterations", "1", "--count", "1", "--threads", "1", "--seed", "42",
-       "--output", "-"});
-  expect_process_completed(result);
-  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
-  const nlohmann::json json = expect_stdout_json_transport(result, Messages::msg_running_pattern_benchmarks());
-  EXPECT_EQ(json["configuration"]["mode"], Constants::PATTERNS_JSON_MODE_NAME);
-  EXPECT_EQ(json["configuration"]["pattern_schema_version"], Constants::PATTERN_JSON_SCHEMA_VERSION);
-  EXPECT_EQ(json["status"], "complete");
-  EXPECT_TRUE(json["results_complete"].get<bool>());
-  EXPECT_EQ(json["planned_loops"], 1u);
-  EXPECT_EQ(json["completed_loops"], 1u);
+  for (bool automatic_calibration : {false, true}) {
+    SCOPED_TRACE(automatic_calibration ? "automatic_calibration" : "explicit_iterations");
+    std::vector<std::string> args = {"--patterns", "--buffer-size", "1", "--count", "1", "--threads", "1", "--seed",
+                                     "42", "--output", "-"};
+    if (!automatic_calibration) args.insert(args.begin() + 3, {"--iterations", "1"});
+    const CliResult result = run_memory_benchmark(args);
+    expect_process_completed(result);
+    ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+    const nlohmann::json json = expect_stdout_json_transport(result, Messages::msg_running_pattern_benchmarks());
+    EXPECT_EQ(json["configuration"]["mode"], Constants::PATTERNS_JSON_MODE_NAME);
+    EXPECT_EQ(json["configuration"]["pattern_schema_version"], Constants::PATTERN_JSON_SCHEMA_VERSION);
+    EXPECT_EQ(json["status"], "complete");
+    EXPECT_TRUE(json["results_complete"].get<bool>());
+    EXPECT_EQ(json["planned_loops"], 1u);
+    EXPECT_EQ(json["completed_loops"], 1u);
+    if (automatic_calibration) {
+      EXPECT_NE(result.stderr_output.find("automatic duration calibration"), std::string::npos);
+      EXPECT_EQ(json["configuration"]["pattern_pass_policy"], "automatic-duration-calibration");
+      EXPECT_EQ(json["configuration"]["calibration_max_corrections"], 2u);
+      for (const auto& pattern : json["patterns"].items()) {
+        for (const auto& operation : pattern.value()["bandwidth"].items()) {
+          ASSERT_EQ(operation.value()["measurements"].size(), 1u);
+          const nlohmann::json& measurement = operation.value()["measurements"][0];
+          if (measurement["status"] == "measured") {
+            EXPECT_TRUE(measurement["automatic_calibration"].get<bool>());
+            EXPECT_GT(measurement["pilot_elapsed_seconds"].get<double>(), 0.0);
+            EXPECT_GT(measurement["elapsed_seconds"].get<double>(), 0.0);
+            EXPECT_GT(measurement["passes"].get<size_t>(), 0u);
+          }
+        }
+      }
+    }
+  }
 }
 
 TEST(ExecutableCliIntegrationTest, AnalyzeTlbWritesSingleJsonDocumentToStdoutIntegration) {
@@ -831,11 +861,14 @@ TEST(ExecutableCliIntegrationTest, CoreToCoreSweepFileAndStdoutIntegration) {
 TEST(ExecutableCliIntegrationTest, GpuBandwidthFileAndStdoutSchemaV1Integration) {
   const TemporaryJsonFile file_output("gpu_schema_v1");
   for (bool is_stdout : {true, false}) {
-    SCOPED_TRACE(is_stdout ? "stdout" : "file");
+    SCOPED_TRACE(is_stdout ? "stdout_explicit" : "file_automatic_calibration");
     const std::string target = is_stdout ? "-" : file_output.path();
-    const CliResult result = run_memory_benchmark(
-        {"--gpu-bandwidth", "--buffer-size", "64", "--iterations", "1", "--count", "3", "--seed", "42", "--output",
-         target});
+    const size_t loop_count = is_stdout ? 3u : 1u;
+    const size_t measurement_count = loop_count * 3u;
+    std::vector<std::string> args = {"--gpu-bandwidth", "--buffer-size", "64", "--count", std::to_string(loop_count),
+                                     "--seed", "42", "--output", target};
+    if (is_stdout) args.insert(args.begin() + 3, {"--iterations", "1"});
+    const CliResult result = run_memory_benchmark(args);
     expect_process_completed(result);
 
     const nlohmann::json json = is_stdout ? expect_stdout_json_transport(result, Messages::msg_running_gpu_bandwidth())
@@ -846,27 +879,50 @@ TEST(ExecutableCliIntegrationTest, GpuBandwidthFileAndStdoutSchemaV1Integration)
     EXPECT_EQ(json["mode"], Constants::GPU_JSON_MODE_NAME);
     EXPECT_EQ(json["configuration"]["output_file"], target);
     EXPECT_EQ(json["configuration"]["base_seed_uint64_decimal"], "42");
-    EXPECT_EQ(json["configuration"]["loop_count"], 3u);
-    EXPECT_EQ(json["configuration"]["iterations"], 1u);
-    EXPECT_EQ(json["counters"]["planned_loops"], 3u);
-    EXPECT_EQ(json["counters"]["planned_measurements"], 9u);
-    ASSERT_EQ(json["measurements"].size(), 9u);
+    EXPECT_EQ(json["configuration"]["loop_count"], loop_count);
+    if (is_stdout) {
+      EXPECT_EQ(json["configuration"]["iterations"], 1u);
+      EXPECT_EQ(json["configuration"]["work_policy"], "explicit-fixed-work");
+    } else {
+      EXPECT_TRUE(json["configuration"]["iterations"].is_null());
+      EXPECT_EQ(json["configuration"]["work_policy"], "automatic-calibration");
+    }
+    EXPECT_EQ(json["counters"]["planned_loops"], loop_count);
+    EXPECT_EQ(json["counters"]["planned_measurements"], measurement_count);
+    ASSERT_EQ(json["measurements"].size(), measurement_count);
 
     const std::string status = json["status"].get<std::string>();
     if (status == "complete") {
       EXPECT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
       EXPECT_TRUE(json["results_complete"].get<bool>());
       EXPECT_TRUE(json["conclusions_valid"].get<bool>());
-      EXPECT_EQ(json["counters"]["completed_loops"], 3u);
-      EXPECT_EQ(json["counters"]["validated_measurements"], 9u);
+      EXPECT_EQ(json["counters"]["completed_loops"], loop_count);
+      EXPECT_EQ(json["counters"]["validated_measurements"], measurement_count);
       for (const nlohmann::json& measurement : json["measurements"]) {
         EXPECT_EQ(measurement["status"], "measured");
         EXPECT_GT(measurement["value_gb_s"].get<double>(), 0.0);
         EXPECT_EQ(measurement["timed"]["command_buffer_count"], 1u);
         EXPECT_EQ(measurement["timed"]["compute_encoder_count"], 1u);
         EXPECT_EQ(measurement["validation"]["validation_status"], "passed");
+        if (!is_stdout) {
+          const std::string quality = measurement["duration_quality"].get<std::string>();
+          EXPECT_TRUE(quality == "within-target-window" || quality == "below-target-window" ||
+                      quality == "above-target-window" || quality == "dispatch-cap-below-target" ||
+                      quality == "payload-cap-below-target" || quality == "single-pass-exceeds-window")
+              << quality;
+        }
       }
-      EXPECT_EQ(json["work_plans"][2]["exact_payload_bytes"], "134217728");
+      if (is_stdout) {
+        EXPECT_EQ(json["work_plans"][2]["exact_payload_bytes"], "134217728");
+      } else {
+        for (const char* operation : {"read", "write", "copy"}) {
+          const nlohmann::json& attempts = json["excluded_calibration_attempts"][operation];
+          ASSERT_GE(attempts.size(), 2u);
+          EXPECT_EQ(attempts[0]["purpose"], "pilot");
+          EXPECT_EQ(attempts[1]["purpose"], "duration-trial");
+          EXPECT_TRUE(attempts.back()["valid"].get<bool>());
+        }
+      }
       EXPECT_EQ(json["backend"]["allocation"]["buffer_a"]["storage_mode"], "private");
       EXPECT_EQ(json["backend"]["allocation"]["buffer_a"]["hazard_tracking_mode"], "tracked");
       EXPECT_EQ(json["backend"]["compilation"]["kernel_source_sha256"].get<std::string>().size(), 64u);
@@ -972,6 +1028,23 @@ TEST(ExecutableCliIntegrationTest, LlmCpuDecodeFileAndStdoutSchemaV2Integration)
   EXPECT_FALSE(json["resolved_plan"]["plan_identity"].get<std::string>().empty());
   for (const auto& plan : json["resolved_plan"]["scenario_plans"]) EXPECT_EQ(plan["model_ref"], "resolved_plan");
   expect_complete_llm_checkpoint_lifecycle(json);
+
+  {
+    SCOPED_TRACE("checkpoint_write_failed_directory_target");
+    TemporaryCliDirectory output_parent;
+    const std::filesystem::path output_target = output_parent.path() / "existing-output-directory";
+    std::error_code create_error;
+    ASSERT_TRUE(std::filesystem::create_directory(output_target, create_error)) << create_error.message();
+    const CliResult failed = run_memory_benchmark(bounded_llm_arguments(output_target.string()));
+    expect_process_completed(failed);
+    EXPECT_EQ(failed.exit_code, EXIT_FAILURE);
+    EXPECT_TRUE(std::filesystem::is_directory(output_target));
+    EXPECT_FALSE(std::filesystem::exists(output_target.string() + ".tmp"));
+    EXPECT_EQ(count_occurrences(failed.stderr_output,
+                                Messages::error_llm_memory_run_failed("checkpoint-write-failed")),
+              1u)
+        << failed.stderr_output;
+  }
 }
 
 TEST(ExecutableCliIntegrationTest, LlmCpuPrefillContiguousAndPagedSchemaV2Integration) {
@@ -1125,5 +1198,25 @@ TEST(ExecutableCliIntegrationTest, LlmMemorySweepsFileStdoutAndPagedPrefillRemai
       EXPECT_TRUE(run["result"]["run_accepted"].get<bool>());
       EXPECT_TRUE(run["result"]["resolved_plan"]["layout"]["decode_append_offset_in_last_block"].is_null());
     }
+  }
+
+  {
+    SCOPED_TRACE("preinit_json_peak_overflow_sweep_failure");
+    const CliResult result = run_memory_benchmark(
+        {"--llm-memory", "--weight-size-mb", "1", "--layers", "1", "--query-heads", "1", "--kv-heads", "1",
+         "--head-dim", "8", "--kv-element-bytes", "1", "--sweep", "context-tokens=2,4", "--threads", "1",
+         "--iterations", "1", "--count", std::to_string(Constants::LLM_JSON_MAX_SAFE_INTEGER / 3), "--seed", "42",
+         "--output", "-"});
+    expect_process_completed(result);
+    ASSERT_EQ(result.exit_code, EXIT_FAILURE) << result.stderr_output;
+    const nlohmann::json envelope = parse_single_stdout_json(result);
+    EXPECT_EQ(envelope["status"], "failed");
+    EXPECT_EQ(envelope["status_reason"], "json-output-peak-bytes-overflow");
+    EXPECT_FALSE(envelope["conclusions_valid"].get<bool>());
+    ASSERT_EQ(envelope["runs"].size(), 1u);
+    EXPECT_EQ(envelope["runs"][0]["status"], "failed");
+    EXPECT_EQ(envelope["runs"][0]["status_reason"], "json-output-peak-bytes-overflow");
+    EXPECT_TRUE(envelope["runs"][0]["result"].is_null());
+    expect_no_dash_transport_artifacts(result);
   }
 }
