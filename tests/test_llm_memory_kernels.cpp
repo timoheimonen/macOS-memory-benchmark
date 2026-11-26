@@ -369,103 +369,62 @@ OracleWorkerRun oracle_worker_run(const LlmLayerDescriptor* layers, size_t layer
   return run;
 }
 
-uint64_t oracle_prefill_word(uint64_t seed, size_t operation,
-                             size_t layer, size_t batch,
-                             LlmPrefillKvDomain domain,
+uint64_t oracle_prefill_word(uint64_t seed, size_t operation, size_t layer, size_t batch, LlmPrefillKvDomain domain,
                              size_t logical_word) {
-  const uint64_t domain_value =
-      domain == LlmPrefillKvDomain::K ? kAppendKDomain : kAppendVDomain;
-  return seed + kPrefillPhaseDomain +
-         kStepMultiplier * (static_cast<uint64_t>(operation) + 1) +
-         kLayerMultiplier * (static_cast<uint64_t>(layer) + 1) +
-         kBatchMultiplier * (static_cast<uint64_t>(batch) + 1) +
-         domain_value +
-         kWordMultiplier * (static_cast<uint64_t>(logical_word) + 1);
+  const uint64_t domain_value = domain == LlmPrefillKvDomain::K ? kAppendKDomain : kAppendVDomain;
+  return seed + kPrefillPhaseDomain + kStepMultiplier * (static_cast<uint64_t>(operation) + 1) +
+         kLayerMultiplier * (static_cast<uint64_t>(layer) + 1) + kBatchMultiplier * (static_cast<uint64_t>(batch) + 1) +
+         domain_value + kWordMultiplier * (static_cast<uint64_t>(logical_word) + 1);
 }
 
-uint8_t oracle_prefill_byte(uint64_t seed, size_t operation, size_t layer,
-                            size_t batch, LlmPrefillKvDomain domain,
+uint8_t oracle_prefill_byte(uint64_t seed, size_t operation, size_t layer, size_t batch, LlmPrefillKvDomain domain,
                             size_t logical_byte) {
-  const uint64_t word = oracle_prefill_word(
-      seed, operation, layer, batch, domain, logical_byte / sizeof(uint64_t));
-  return static_cast<uint8_t>(
-      word >> (8 * (logical_byte % sizeof(uint64_t))));
+  const uint64_t word = oracle_prefill_word(seed, operation, layer, batch, domain, logical_byte / sizeof(uint64_t));
+  return static_cast<uint8_t>(word >> (8 * (logical_byte % sizeof(uint64_t))));
 }
 
-void oracle_prefill_absorb_visit(LlmReadChecksumComponent& state,
-                                 uint64_t seed, size_t operation,
-                                 size_t layer, size_t batch,
-                                 LlmPrefillKvDomain domain,
-                                 size_t first_logical_byte,
+void oracle_prefill_absorb_visit(LlmReadChecksumComponent& state, uint64_t seed, size_t operation, size_t layer,
+                                 size_t batch, LlmPrefillKvDomain domain, size_t first_logical_byte,
                                  size_t byte_count) {
-  if (byte_count == 0) {
-    return;
-  }
+  if (byte_count == 0) return;
   for (size_t offset = 0; offset < byte_count; ++offset) {
     const size_t logical_byte = first_logical_byte + offset;
-    const size_t logical_word = logical_byte / sizeof(uint64_t);
     const uint64_t contribution =
-        static_cast<uint64_t>(oracle_prefill_byte(
-            seed, operation, layer, batch, domain, logical_byte))
+        static_cast<uint64_t>(oracle_prefill_byte(seed, operation, layer, batch, domain, logical_byte))
         << (8 * (logical_byte % sizeof(uint64_t)));
-    if ((logical_word & 1U) == 0) {
-      state.state_a += contribution;
-    } else {
-      state.state_b += contribution;
-    }
+    (((logical_byte / sizeof(uint64_t)) & 1U) == 0 ? state.state_a : state.state_b) += contribution;
   }
   state.exact_bytes_read += byte_count;
   ++state.span_count;
 }
 
-LlmWorkerChecksum oracle_prefill_worker_run(
-    const LlmPrefillLayerDescriptor* layers, size_t layer_count,
-    const LlmPrefillKvSequenceDescriptor* sequences, size_t operation_count,
-    uint64_t scenario_flags, uint64_t scenario_seed) {
-  LlmWorkerChecksum checksum{oracle_initial(LlmChecksumComponent::Weight),
-                             {}, {}};
+LlmWorkerChecksum oracle_prefill_worker_run(const LlmPrefillLayerDescriptor* layers, size_t layer_count,
+                                            const LlmPrefillKvSequenceDescriptor* sequences, size_t operation_count,
+                                            uint64_t scenario_flags, uint64_t scenario_seed) {
+  LlmWorkerChecksum checksum{oracle_initial(LlmChecksumComponent::Weight), {}, {}};
   for (size_t operation = 0; operation < operation_count; ++operation) {
     for (size_t local_layer = 0; local_layer < layer_count; ++local_layer) {
       const LlmPrefillLayerDescriptor& layer = layers[local_layer];
       if ((scenario_flags & kLlmScenarioFlagWeight) != 0) {
         oracle_absorb(checksum.weight, layer.weight_ptr, layer.weight_bytes);
       }
-      if ((scenario_flags & kLlmScenarioFlagKv) == 0) {
-        continue;
-      }
-      for (size_t local_sequence = 0;
-           local_sequence < layer.sequence_count; ++local_sequence) {
-        const LlmPrefillKvSequenceDescriptor& sequence =
-            sequences[layer.first_sequence_index + local_sequence];
-        if (sequence.owned_token_count == 0) {
-          continue;
-        }
-        const size_t owner_end =
-            sequence.first_token + sequence.owned_token_count;
+      if ((scenario_flags & kLlmScenarioFlagKv) == 0) continue;
+      for (size_t local_sequence = 0; local_sequence < layer.sequence_count; ++local_sequence) {
+        const LlmPrefillKvSequenceDescriptor& sequence = sequences[layer.first_sequence_index + local_sequence];
+        if (sequence.owned_token_count == 0) continue;
+        const size_t owner_end = sequence.first_token + sequence.owned_token_count;
         size_t tile_end = 0;
         while (tile_end < sequence.prompt_tokens) {
-          tile_end += std::min<size_t>(
-              sequence.attention_query_tile_tokens,
-              sequence.prompt_tokens - tile_end);
-          if (tile_end <= sequence.first_token) {
-            continue;
-          }
+          tile_end += std::min<size_t>(sequence.attention_query_tile_tokens, sequence.prompt_tokens - tile_end);
+          if (tile_end <= sequence.first_token) continue;
           const size_t visit_end = std::min(tile_end, owner_end);
-          if (visit_end <= sequence.first_token) {
-            continue;
-          }
-          const size_t first_byte =
-              sequence.first_token * sequence.record_bytes;
-          const size_t visit_bytes =
-              (visit_end - sequence.first_token) * sequence.record_bytes;
-          oracle_prefill_absorb_visit(
-              checksum.k, scenario_seed, operation, sequence.layer_index,
-              sequence.batch_sequence_index, LlmPrefillKvDomain::K,
-              first_byte, visit_bytes);
-          oracle_prefill_absorb_visit(
-              checksum.v, scenario_seed, operation, sequence.layer_index,
-              sequence.batch_sequence_index, LlmPrefillKvDomain::V,
-              first_byte, visit_bytes);
+          if (visit_end <= sequence.first_token) continue;
+          const size_t first_byte = sequence.first_token * sequence.record_bytes;
+          const size_t visit_bytes = (visit_end - sequence.first_token) * sequence.record_bytes;
+          oracle_prefill_absorb_visit(checksum.k, scenario_seed, operation, sequence.layer_index,
+                                      sequence.batch_sequence_index, LlmPrefillKvDomain::K, first_byte, visit_bytes);
+          oracle_prefill_absorb_visit(checksum.v, scenario_seed, operation, sequence.layer_index,
+                                      sequence.batch_sequence_index, LlmPrefillKvDomain::V, first_byte, visit_bytes);
         }
       }
     }
@@ -493,86 +452,49 @@ void oracle_apply_paged_append(uint8_t* destination, size_t append_bytes, uint64
 }
 
 LlmWorkerChecksum oracle_paged_worker_run(const LlmPagedLayerDescriptor* layers, size_t layer_count,
-                                          const LlmPagedKvAssignmentDescriptor* assignments,
-                                          size_t work_units, uint64_t scenario_flags,
-                                          uint64_t scenario_seed) {
+                                          const LlmPagedKvAssignmentDescriptor* assignments, size_t work_units,
+                                          uint64_t scenario_flags, uint64_t scenario_seed) {
   LlmWorkerChecksum checksum = oracle_initial_worker();
   for (size_t work_unit = 0; work_unit < work_units; ++work_unit) {
     for (size_t layer = 0; layer < layer_count; ++layer) {
       const LlmPagedLayerDescriptor& layer_descriptor = layers[layer];
       if ((scenario_flags & kLlmScenarioFlagWeight) != 0) {
-        oracle_absorb(checksum.weight, layer_descriptor.weight_ptr,
-                      layer_descriptor.weight_bytes);
+        oracle_absorb(checksum.weight, layer_descriptor.weight_ptr, layer_descriptor.weight_bytes);
       }
-      if ((scenario_flags & kLlmScenarioFlagKv) == 0) {
-        continue;
-      }
+      if ((scenario_flags & kLlmScenarioFlagKv) == 0) continue;
       for (size_t local = 0; local < layer_descriptor.assignment_count; ++local) {
-        const LlmPagedKvAssignmentDescriptor& assignment =
-            assignments[layer_descriptor.first_assignment_index + local];
-        if (assignment.owned_block_count == 0) {
-          continue;
-        }
+        const LlmPagedKvAssignmentDescriptor& assignment = assignments[layer_descriptor.first_assignment_index + local];
+        if (assignment.owned_block_count == 0) continue;
         const uint64_t terminal_logical_block = assignment.blocks_per_sequence - 1;
-        const uint64_t assignment_end =
-            assignment.first_logical_block + assignment.owned_block_count;
-        const bool owns_terminal =
-            assignment.first_logical_block <= terminal_logical_block &&
-            terminal_logical_block < assignment_end;
-        if (owns_terminal) {
-          const uint32_t physical_id =
-              assignment.block_table_row[terminal_logical_block];
+        const uint64_t assignment_end = assignment.first_logical_block + assignment.owned_block_count;
+        if (assignment.first_logical_block <= terminal_logical_block && terminal_logical_block < assignment_end) {
+          const uint32_t physical_id = assignment.block_table_row[terminal_logical_block];
           const uint64_t global_logical_index =
-              assignment.batch_sequence_index * assignment.blocks_per_sequence +
-              terminal_logical_block;
-          oracle_mix_paged_lookup(checksum.k, global_logical_index, physical_id, 0,
-                                  work_unit);
+              assignment.batch_sequence_index * assignment.blocks_per_sequence + terminal_logical_block;
+          oracle_mix_paged_lookup(checksum.k, global_logical_index, physical_id, 0, work_unit);
           const size_t physical_offset =
-              static_cast<size_t>(physical_id) * assignment.block_bytes +
-              assignment.decode_append_offset;
-          oracle_apply_paged_append(assignment.k_layer_pool + physical_offset,
-                                    assignment.append_record_bytes, scenario_seed,
-                                    work_unit, assignment.layer_index,
-                                    assignment.batch_sequence_index,
+              static_cast<size_t>(physical_id) * assignment.block_bytes + assignment.decode_append_offset;
+          oracle_apply_paged_append(assignment.k_layer_pool + physical_offset, assignment.append_record_bytes,
+                                    scenario_seed, work_unit, assignment.layer_index, assignment.batch_sequence_index,
                                     LlmChecksumComponent::K);
-          oracle_apply_paged_append(assignment.v_layer_pool + physical_offset,
-                                    assignment.append_record_bytes, scenario_seed,
-                                    work_unit, assignment.layer_index,
-                                    assignment.batch_sequence_index,
+          oracle_apply_paged_append(assignment.v_layer_pool + physical_offset, assignment.append_record_bytes,
+                                    scenario_seed, work_unit, assignment.layer_index, assignment.batch_sequence_index,
                                     LlmChecksumComponent::V);
         }
-
-        for (uint64_t logical_block = assignment.first_logical_block;
-             logical_block < assignment_end; ++logical_block) {
-          const uint32_t physical_id = assignment.block_table_row[logical_block];
-          const uint64_t global_logical_index =
-              assignment.batch_sequence_index * assignment.blocks_per_sequence +
-              logical_block;
-          oracle_mix_paged_lookup(checksum.k, global_logical_index, physical_id, 1,
-                                  work_unit);
-          const size_t visit_bytes = logical_block == terminal_logical_block
-                                         ? assignment.last_block_valid_bytes
-                                         : assignment.block_bytes;
-          oracle_absorb(checksum.k,
-                        assignment.k_layer_pool +
-                            static_cast<size_t>(physical_id) * assignment.block_bytes,
-                        visit_bytes);
-        }
-        for (uint64_t logical_block = assignment.first_logical_block;
-             logical_block < assignment_end; ++logical_block) {
-          const uint32_t physical_id = assignment.block_table_row[logical_block];
-          const uint64_t global_logical_index =
-              assignment.batch_sequence_index * assignment.blocks_per_sequence +
-              logical_block;
-          oracle_mix_paged_lookup(checksum.v, global_logical_index, physical_id, 2,
-                                  work_unit);
-          const size_t visit_bytes = logical_block == terminal_logical_block
-                                         ? assignment.last_block_valid_bytes
-                                         : assignment.block_bytes;
-          oracle_absorb(checksum.v,
-                        assignment.v_layer_pool +
-                            static_cast<size_t>(physical_id) * assignment.block_bytes,
-                        visit_bytes);
+        for (bool is_k : {true, false}) {
+          LlmReadChecksumComponent& target = is_k ? checksum.k : checksum.v;
+          const uint8_t* const pool = is_k ? assignment.k_layer_pool : assignment.v_layer_pool;
+          const uint64_t visit_kind = is_k ? 1 : 2;
+          for (uint64_t logical_block = assignment.first_logical_block; logical_block < assignment_end;
+               ++logical_block) {
+            const uint32_t physical_id = assignment.block_table_row[logical_block];
+            const uint64_t global_logical_index =
+                assignment.batch_sequence_index * assignment.blocks_per_sequence + logical_block;
+            oracle_mix_paged_lookup(target, global_logical_index, physical_id, visit_kind, work_unit);
+            const size_t visit_bytes = logical_block == terminal_logical_block ? assignment.last_block_valid_bytes
+                                                                               : assignment.block_bytes;
+            oracle_absorb(target, pool + static_cast<size_t>(physical_id) * assignment.block_bytes, visit_bytes);
+          }
         }
       }
     }
@@ -580,150 +502,89 @@ LlmWorkerChecksum oracle_paged_worker_run(const LlmPagedLayerDescriptor* layers,
   return checksum;
 }
 
-void oracle_paged_prefill_write_block(
-    uint8_t* destination, size_t byte_count, uint64_t seed,
-    size_t operation, size_t layer, size_t batch, LlmPrefillKvDomain domain,
-    size_t first_logical_byte) {
+void oracle_paged_prefill_write_block(uint8_t* destination, size_t byte_count, uint64_t seed, size_t operation,
+                                      size_t layer, size_t batch, LlmPrefillKvDomain domain,
+                                      size_t first_logical_byte) {
   for (size_t offset = 0; offset < byte_count; ++offset) {
-    destination[offset] = oracle_prefill_byte(
-        seed, operation, layer, batch, domain, first_logical_byte + offset);
+    destination[offset] = oracle_prefill_byte(seed, operation, layer, batch, domain, first_logical_byte + offset);
   }
 }
 
-void oracle_paged_prefill_absorb_physical_visit(
-    LlmReadChecksumComponent& state, const uint8_t* source,
-    size_t first_logical_byte, size_t byte_count) {
-  if (byte_count == 0) {
-    return;
-  }
+void oracle_paged_prefill_absorb_physical_visit(LlmReadChecksumComponent& state, const uint8_t* source,
+                                                size_t first_logical_byte, size_t byte_count) {
+  if (byte_count == 0) return;
   for (size_t offset = 0; offset < byte_count; ++offset) {
     const size_t logical_byte = first_logical_byte + offset;
-    const uint64_t contribution =
-        static_cast<uint64_t>(source[offset])
-        << (8 * (logical_byte % sizeof(uint64_t)));
-    if (((logical_byte / sizeof(uint64_t)) & 1U) == 0U) {
-      state.state_a += contribution;
-    } else {
-      state.state_b += contribution;
-    }
+    const uint64_t contribution = static_cast<uint64_t>(source[offset]) << (8 * (logical_byte % sizeof(uint64_t)));
+    (((logical_byte / sizeof(uint64_t)) & 1U) == 0U ? state.state_a : state.state_b) += contribution;
   }
   state.exact_bytes_read += byte_count;
   ++state.span_count;
 }
 
-LlmWorkerChecksum oracle_paged_prefill_worker_run(
-    const LlmPagedPrefillLayerDescriptor* layers, size_t layer_count,
-    const LlmPagedPrefillKvAssignmentDescriptor* assignments,
-    size_t operation_count, uint64_t scenario_flags, uint64_t scenario_seed) {
-  LlmWorkerChecksum checksum{
-      oracle_initial(LlmChecksumComponent::Weight), {}, {}};
+LlmWorkerChecksum oracle_paged_prefill_worker_run(const LlmPagedPrefillLayerDescriptor* layers, size_t layer_count,
+                                                  const LlmPagedPrefillKvAssignmentDescriptor* assignments,
+                                                  size_t operation_count, uint64_t scenario_flags,
+                                                  uint64_t scenario_seed) {
+  LlmWorkerChecksum checksum{oracle_initial(LlmChecksumComponent::Weight), {}, {}};
   for (size_t operation = 0; operation < operation_count; ++operation) {
     for (size_t local_layer = 0; local_layer < layer_count; ++local_layer) {
       const LlmPagedPrefillLayerDescriptor& layer = layers[local_layer];
       if ((scenario_flags & kLlmScenarioFlagWeight) != 0) {
         oracle_absorb(checksum.weight, layer.weight_ptr, layer.weight_bytes);
       }
-      if ((scenario_flags & kLlmScenarioFlagKv) == 0) {
-        continue;
-      }
+      if ((scenario_flags & kLlmScenarioFlagKv) == 0) continue;
 
-      for (size_t local_assignment = 0;
-           local_assignment < layer.assignment_count; ++local_assignment) {
+      for (size_t local_assignment = 0; local_assignment < layer.assignment_count; ++local_assignment) {
         const LlmPagedPrefillKvAssignmentDescriptor& assignment =
             assignments[layer.first_assignment_index + local_assignment];
-        if (assignment.owned_block_count == 0) {
-          continue;
-        }
-        const size_t assignment_end =
-            assignment.first_logical_block + assignment.owned_block_count;
+        if (assignment.owned_block_count == 0) continue;
+        const size_t assignment_end = assignment.first_logical_block + assignment.owned_block_count;
 
         // The write phase is deliberately separate from the tiled read phase.
-        for (size_t logical_block = assignment.first_logical_block;
-             logical_block < assignment_end; ++logical_block) {
-          const uint32_t physical_id =
-              assignment.block_table_row[logical_block];
+        for (size_t logical_block = assignment.first_logical_block; logical_block < assignment_end; ++logical_block) {
+          const uint32_t physical_id = assignment.block_table_row[logical_block];
           const size_t global_logical_index =
-              assignment.batch_sequence_index *
-                  assignment.blocks_per_sequence +
-              logical_block;
-          oracle_mix_paged_lookup(checksum.k, global_logical_index,
-                                  physical_id, 0, operation);
+              assignment.batch_sequence_index * assignment.blocks_per_sequence + logical_block;
+          oracle_mix_paged_lookup(checksum.k, global_logical_index, physical_id, 0, operation);
           const size_t logical_byte = logical_block * assignment.block_bytes;
-          const size_t physical_byte =
-              static_cast<size_t>(physical_id) * assignment.block_bytes;
-          const size_t write_bytes =
-              logical_block + 1 == assignment.blocks_per_sequence
-                  ? assignment.last_block_valid_bytes
-                  : assignment.block_bytes;
-          oracle_paged_prefill_write_block(
-              assignment.k_layer_pool + physical_byte, write_bytes,
-              scenario_seed, operation, assignment.layer_index,
-              assignment.batch_sequence_index, LlmPrefillKvDomain::K,
-              logical_byte);
-          oracle_paged_prefill_write_block(
-              assignment.v_layer_pool + physical_byte, write_bytes,
-              scenario_seed, operation, assignment.layer_index,
-              assignment.batch_sequence_index, LlmPrefillKvDomain::V,
-              logical_byte);
+          const size_t physical_byte = static_cast<size_t>(physical_id) * assignment.block_bytes;
+          const size_t write_bytes = logical_block + 1 == assignment.blocks_per_sequence
+                                         ? assignment.last_block_valid_bytes
+                                         : assignment.block_bytes;
+          oracle_paged_prefill_write_block(assignment.k_layer_pool + physical_byte, write_bytes, scenario_seed,
+                                           operation, assignment.layer_index, assignment.batch_sequence_index,
+                                           LlmPrefillKvDomain::K, logical_byte);
+          oracle_paged_prefill_write_block(assignment.v_layer_pool + physical_byte, write_bytes, scenario_seed,
+                                           operation, assignment.layer_index, assignment.batch_sequence_index,
+                                           LlmPrefillKvDomain::V, logical_byte);
         }
 
-        const size_t first_owned_token =
-            assignment.first_logical_block * assignment.block_tokens;
-        size_t tile_end =
-            (first_owned_token / assignment.attention_query_tile_tokens) *
-            assignment.attention_query_tile_tokens;
+        const size_t first_owned_token = assignment.first_logical_block * assignment.block_tokens;
+        size_t tile_end = (first_owned_token / assignment.attention_query_tile_tokens) *
+                          assignment.attention_query_tile_tokens;
         while (tile_end < assignment.prompt_tokens) {
-          tile_end += std::min<size_t>(
-              assignment.attention_query_tile_tokens,
-              assignment.prompt_tokens - tile_end);
+          tile_end += std::min<size_t>(assignment.attention_query_tile_tokens, assignment.prompt_tokens - tile_end);
           const size_t prefix_bytes = tile_end * assignment.record_bytes;
           const size_t prefix_blocks =
-              tile_end / assignment.block_tokens +
-              (tile_end % assignment.block_tokens == 0 ? 0 : 1);
+              tile_end / assignment.block_tokens + (tile_end % assignment.block_tokens == 0 ? 0 : 1);
           const size_t visit_end = std::min(prefix_blocks, assignment_end);
-          if (visit_end <= assignment.first_logical_block) {
-            continue;
-          }
+          if (visit_end <= assignment.first_logical_block) continue;
 
-          for (size_t logical_block = assignment.first_logical_block;
-               logical_block < visit_end; ++logical_block) {
-            const uint32_t physical_id =
-                assignment.block_table_row[logical_block];
-            const size_t global_logical_index =
-                assignment.batch_sequence_index *
-                    assignment.blocks_per_sequence +
-                logical_block;
-            oracle_mix_paged_lookup(checksum.k, global_logical_index,
-                                    physical_id, 1, operation);
-            const size_t logical_byte = logical_block * assignment.block_bytes;
-            const size_t visit_bytes =
-                std::min<size_t>(assignment.block_bytes,
-                                 prefix_bytes - logical_byte);
-            const size_t physical_byte =
-                static_cast<size_t>(physical_id) * assignment.block_bytes;
-            oracle_paged_prefill_absorb_physical_visit(
-                checksum.k, assignment.k_layer_pool + physical_byte,
-                logical_byte, visit_bytes);
-          }
-          for (size_t logical_block = assignment.first_logical_block;
-               logical_block < visit_end; ++logical_block) {
-            const uint32_t physical_id =
-                assignment.block_table_row[logical_block];
-            const size_t global_logical_index =
-                assignment.batch_sequence_index *
-                    assignment.blocks_per_sequence +
-                logical_block;
-            oracle_mix_paged_lookup(checksum.v, global_logical_index,
-                                    physical_id, 2, operation);
-            const size_t logical_byte = logical_block * assignment.block_bytes;
-            const size_t visit_bytes =
-                std::min<size_t>(assignment.block_bytes,
-                                 prefix_bytes - logical_byte);
-            const size_t physical_byte =
-                static_cast<size_t>(physical_id) * assignment.block_bytes;
-            oracle_paged_prefill_absorb_physical_visit(
-                checksum.v, assignment.v_layer_pool + physical_byte,
-                logical_byte, visit_bytes);
+          for (bool is_k : {true, false}) {
+            LlmReadChecksumComponent& target = is_k ? checksum.k : checksum.v;
+            const uint8_t* const pool = is_k ? assignment.k_layer_pool : assignment.v_layer_pool;
+            const uint64_t visit_kind = is_k ? 1 : 2;
+            for (size_t logical_block = assignment.first_logical_block; logical_block < visit_end; ++logical_block) {
+              const uint32_t physical_id = assignment.block_table_row[logical_block];
+              const size_t global_logical_index =
+                  assignment.batch_sequence_index * assignment.blocks_per_sequence + logical_block;
+              oracle_mix_paged_lookup(target, global_logical_index, physical_id, visit_kind, operation);
+              const size_t logical_byte = logical_block * assignment.block_bytes;
+              const size_t visit_bytes = std::min<size_t>(assignment.block_bytes, prefix_bytes - logical_byte);
+              const size_t physical_byte = static_cast<size_t>(physical_id) * assignment.block_bytes;
+              oracle_paged_prefill_absorb_physical_visit(target, pool + physical_byte, logical_byte, visit_bytes);
+            }
           }
         }
       }
@@ -747,8 +608,8 @@ void expect_worker_equal(const LlmWorkerChecksum& actual, const LlmWorkerChecksu
 
 // Four direct ABI calls keep these fault examples scoped to the shared weight
 // span. They do not exercise KV writes, lookup mixing, or backend acceptance.
-LlmWorkerChecksum run_weights_only_fault_probe(size_t profile, const uint8_t* bytes,
-                                               size_t byte_count, size_t work_units) {
+LlmWorkerChecksum run_weights_only_fault_probe(size_t profile, const uint8_t* bytes, size_t byte_count,
+                                               size_t work_units) {
   LlmWorkerChecksum actual{};
   constexpr uint64_t seed = 424242;
   switch (profile) {
@@ -785,29 +646,17 @@ LlmMemoryWorkPlan build_real_executor_plan(const LlmGeometryRequest& geometry, s
   request.mapping_granularity_bytes = static_cast<size_t>(getpagesize());
   request.base_seed = 0x0123456789ABCDEFULL;
   LlmMemoryWorkPlan preliminary = build_llm_memory_work_plan(request);
-  if (!preliminary.valid) {
-    return preliminary;
-  }
+  if (!preliminary.valid) return preliminary;
   const LlmExecutorAuxiliaryEstimate auxiliary = calculate_llm_executor_auxiliary_estimate(preliminary);
-  if (!auxiliary.valid) {
-    return preliminary;
-  }
+  if (!auxiliary.valid) return preliminary;
   request.checksum_auxiliary_bytes = auxiliary.checksum_auxiliary_bytes;
   request.orchestration_auxiliary_bytes = auxiliary.orchestration_auxiliary_bytes;
   return build_llm_memory_work_plan(request);
 }
 
-LlmMemoryWorkPlan build_real_prefill_executor_plan(
-    size_t workers, size_t prompt_tokens = 5,
-    size_t query_tile_tokens = 2, size_t record_bytes = 33) {
-  LlmGeometryRequest geometry;
-  geometry.active_weight_bytes = 257;
-  geometry.layer_count = 2;
-  geometry.query_head_count = 2;
-  geometry.kv_head_count = 1;
-  geometry.head_dimension = record_bytes;
-  geometry.kv_element_bytes = 1;
-  geometry.batch_size = 2;
+LlmMemoryWorkPlan build_real_prefill_executor_plan(size_t workers, size_t prompt_tokens = 5,
+                                                   size_t query_tile_tokens = 2, size_t record_bytes = 33) {
+  LlmGeometryRequest geometry{257, 2, 2, 1, record_bytes, 1, 0, 2};
   geometry.phase = LlmPhase::Prefill;
   geometry.kv_layout = LlmKvLayout::Contiguous;
   geometry.prompt_tokens = prompt_tokens;
@@ -834,7 +683,6 @@ struct ManualDescriptorFixture {
         v[sequence][byte] = static_cast<uint8_t>((byte * 29 + sequence * 11 + 7) & 0xFF);
       }
     }
-
     layers[0] = {weights[0].data() + 1, 33, 0, 2, 0, 0};
     layers[1] = {weights[1].data() + 3, 47, 2, 2, 1, 0};
     constexpr std::array<size_t, 4> kVisible = {37, 33, 19, 41};
@@ -842,18 +690,16 @@ struct ManualDescriptorFixture {
     constexpr std::array<size_t, 4> kAppendBytes = {17, 17, 11, 14};
     constexpr std::array<size_t, 4> kRecordOffsets = {0, 3, 5, 1};
     for (size_t index = 0; index < sequences.size(); ++index) {
-      sequences[index] = {
-          k[index].data(),
-          kVisible[index],
-          v[index].data(),
-          kVisible[index],
-          k[index].data() + kAppendOffset[index],
-          kAppendBytes[index],
-          v[index].data() + kAppendOffset[index],
-          kAppendBytes[index],
-          index % 2,
-          kRecordOffsets[index],
-      };
+      sequences[index] = {k[index].data(),
+                          kVisible[index],
+                          v[index].data(),
+                          kVisible[index],
+                          k[index].data() + kAppendOffset[index],
+                          kAppendBytes[index],
+                          v[index].data() + kAppendOffset[index],
+                          kAppendBytes[index],
+                          index % 2,
+                          kRecordOffsets[index]};
     }
   }
 };
@@ -869,18 +715,11 @@ struct ManualPagedDescriptorFixture {
   static constexpr size_t kAppendBytes = 7;
 
   std::array<std::array<uint8_t, 64>, kLayerCount> weights{};
-  std::array<std::array<uint8_t, kPhysicalBlocksPerLayer * kBlockBytes>,
-             kLayerCount>
-      k_pools{};
-  std::array<std::array<uint8_t, kPhysicalBlocksPerLayer * kBlockBytes>,
-             kLayerCount>
-      v_pools{};
-  std::array<std::array<std::array<uint32_t, kBlocksPerSequence>, kBatchCount>,
-             kLayerCount>
-      tables{};
+  std::array<std::array<uint8_t, kPhysicalBlocksPerLayer * kBlockBytes>, kLayerCount> k_pools{};
+  std::array<std::array<uint8_t, kPhysicalBlocksPerLayer * kBlockBytes>, kLayerCount> v_pools{};
+  std::array<std::array<std::array<uint32_t, kBlocksPerSequence>, kBatchCount>, kLayerCount> tables{};
   std::array<LlmPagedLayerDescriptor, kLayerCount> layers{};
-  std::array<LlmPagedKvAssignmentDescriptor, kLayerCount * kBatchCount>
-      assignments{};
+  std::array<LlmPagedKvAssignmentDescriptor, kLayerCount * kBatchCount> assignments{};
 
   ManualPagedDescriptorFixture() {
     tables[0][0] = {2, 5, 1};
@@ -891,28 +730,21 @@ struct ManualPagedDescriptorFixture {
 
     constexpr std::array<uint64_t, kLayerCount> kLayerIndices = {4, 9};
     for (size_t layer = 0; layer < kLayerCount; ++layer) {
-      layers[layer] = {weights[layer].data() + 1 + layer,
-                       33 + 7 * layer,
-                       layer * kBatchCount,
-                       kBatchCount,
-                       kLayerIndices[layer],
-                       0};
+      layers[layer] = {weights[layer].data() + 1 + layer, 33 + 7 * layer, layer * kBatchCount, kBatchCount,
+                       kLayerIndices[layer], 0};
       for (size_t batch = 0; batch < kBatchCount; ++batch) {
-        const size_t index = layer * kBatchCount + batch;
-        assignments[index] = {
-            tables[layer][batch].data(),
-            k_pools[layer].data(),
-            v_pools[layer].data(),
-            0,
-            kBlocksPerSequence,
-            kBlocksPerSequence,
-            kBlockBytes,
-            kLastBlockValidBytes,
-            kAppendOffset,
-            kAppendBytes,
-            kLayerIndices[layer],
-            batch,
-        };
+        assignments[layer * kBatchCount + batch] = {tables[layer][batch].data(),
+                                                    k_pools[layer].data(),
+                                                    v_pools[layer].data(),
+                                                    0,
+                                                    kBlocksPerSequence,
+                                                    kBlocksPerSequence,
+                                                    kBlockBytes,
+                                                    kLastBlockValidBytes,
+                                                    kAppendOffset,
+                                                    kAppendBytes,
+                                                    kLayerIndices[layer],
+                                                    batch};
       }
     }
   }
@@ -920,14 +752,11 @@ struct ManualPagedDescriptorFixture {
   void initialize_storage() {
     for (size_t layer = 0; layer < kLayerCount; ++layer) {
       for (size_t byte = 0; byte < weights[layer].size(); ++byte) {
-        weights[layer][byte] =
-            static_cast<uint8_t>((byte * 17 + layer * 31 + 3) & 0xFF);
+        weights[layer][byte] = static_cast<uint8_t>((byte * 17 + layer * 31 + 3) & 0xFF);
       }
       for (size_t byte = 0; byte < k_pools[layer].size(); ++byte) {
-        k_pools[layer][byte] =
-            static_cast<uint8_t>((byte * 19 + layer * 23 + 5) & 0xFF);
-        v_pools[layer][byte] =
-            static_cast<uint8_t>((byte * 29 + layer * 11 + 7) & 0xFF);
+        k_pools[layer][byte] = static_cast<uint8_t>((byte * 19 + layer * 23 + 5) & 0xFF);
+        v_pools[layer][byte] = static_cast<uint8_t>((byte * 29 + layer * 11 + 7) & 0xFF);
       }
     }
   }
@@ -935,7 +764,18 @@ struct ManualPagedDescriptorFixture {
 
 }  // namespace
 
-TEST(LlmMemoryKernelIntegrationTest, AllCpuWeightSpansExposeBoundedParityCollisions) {
+TEST(LlmMemoryKernelIntegrationTest, AllCpuWeightSpansParityCollisionsAndReadMutationDetectionIntegration) {
+  const auto expected_weight_oracle = [](size_t profile, const uint8_t* bytes, size_t byte_count, size_t work_units) {
+    LlmWorkerChecksum expected = profile < 2
+                                     ? oracle_initial_worker()
+                                     : LlmWorkerChecksum{oracle_initial(LlmChecksumComponent::Weight), {}, {}};
+    for (size_t unit = 0; unit < work_units; ++unit) {
+      oracle_absorb(expected.weight, bytes, byte_count);
+    }
+    return expected;
+  };
+
+  // Bounded parity-collision probes across all four CPU weight kernels.
   const std::array<uint64_t, 8> original = {11, 23, 37, 43, 59, 67, 79, 83};
   auto swapped = original;
   std::rotate(swapped.begin(), swapped.begin() + 4, swapped.end());
@@ -948,20 +788,34 @@ TEST(LlmMemoryKernelIntegrationTest, AllCpuWeightSpansExposeBoundedParityCollisi
   ASSERT_NE(original, cancelling);
   ASSERT_NE(original, one_bit);
 
+  // The final 32 bytes duplicate the first 32. The frozen expected workload is
+  // exactly the first 64 bytes, twice. Mutations retain that original oracle;
+  // these selected descriptor faults do not model every possible kernel bug.
+  const std::array<uint64_t, 12> contents = {11, 23, 37, 43, 59, 67, 79, 83, 11, 23, 37, 43};
+  constexpr size_t planned_bytes = 64;
+  constexpr size_t planned_work_units = 2;
+  const auto* content_bytes = reinterpret_cast<const uint8_t*>(contents.data());
+  struct Mutation {
+    const char* name;
+    size_t span_bytes;
+    size_t work_units;
+  };
+  constexpr std::array<Mutation, 4> kMutations = {{{"skip-32-byte-range", 32, 2},
+                                                   {"duplicate-32-byte-range", 96, 2},
+                                                   {"missing-work-unit", 64, 1},
+                                                   {"extra-work-unit", 64, 3}}};
+
   for (size_t profile = 0; profile < 4; ++profile) {
-    SCOPED_TRACE(profile);
+    SCOPED_TRACE(::testing::Message() << "profile=" << profile);
     for (size_t work_units : {1U, 2U}) {
-      SCOPED_TRACE(work_units);
-      LlmWorkerChecksum expected = profile < 2
-          ? oracle_initial_worker()
-          : LlmWorkerChecksum{oracle_initial(LlmChecksumComponent::Weight), {}, {}};
-      for (size_t unit = 0; unit < work_units; ++unit) {
-        oracle_absorb(expected.weight, reinterpret_cast<const uint8_t*>(original.data()), sizeof(original));
-      }
-      for (const auto* contents : std::array<const std::array<uint64_t, 8>*, 3>{&original, &swapped, &cancelling}) {
-        const auto actual = run_weights_only_fault_probe(
-            profile, reinterpret_cast<const uint8_t*>(contents->data()), sizeof(original), work_units);
-        expect_worker_equal(actual, expected);
+      SCOPED_TRACE(::testing::Message() << "parity-work-units=" << work_units);
+      const LlmWorkerChecksum expected = expected_weight_oracle(
+          profile, reinterpret_cast<const uint8_t*>(original.data()), sizeof(original), work_units);
+      for (const auto* sample : std::array<const std::array<uint64_t, 8>*, 3>{&original, &swapped, &cancelling}) {
+        expect_worker_equal(
+            run_weights_only_fault_probe(profile, reinterpret_cast<const uint8_t*>(sample->data()), sizeof(original),
+                                         work_units),
+            expected);
       }
       const auto changed = run_weights_only_fault_probe(
           profile, reinterpret_cast<const uint8_t*>(one_bit.data()), sizeof(original), work_units);
@@ -969,45 +823,23 @@ TEST(LlmMemoryKernelIntegrationTest, AllCpuWeightSpansExposeBoundedParityCollisi
       EXPECT_EQ(changed.weight.exact_bytes_read, expected.weight.exact_bytes_read);
       EXPECT_EQ(changed.weight.span_count, expected.weight.span_count);
     }
-  }
-}
 
-TEST(LlmMemoryKernelIntegrationTest, AllCpuWeightSpansDetectBoundedReadAndWorkUnitMutations) {
-  // The final 32 bytes duplicate the first 32. The frozen expected workload is
-  // exactly the first 64 bytes, twice. Mutations retain that original oracle;
-  // these selected descriptor faults do not model every possible kernel bug.
-  const std::array<uint64_t, 12> contents = {11, 23, 37, 43, 59, 67, 79, 83, 11, 23, 37, 43};
-  constexpr size_t planned_bytes = 64;
-  constexpr size_t planned_work_units = 2;
-  const auto* bytes = reinterpret_cast<const uint8_t*>(contents.data());
-  struct Mutation {
-    const char* name;
-    size_t span_bytes;
-    size_t work_units;
-  };
-  const std::array<Mutation, 4> mutations = {{{"skip-32-byte-range", 32, 2},
-                                            {"duplicate-32-byte-range", 96, 2},
-                                            {"missing-work-unit", 64, 1},
-                                            {"extra-work-unit", 64, 3}}};
-  for (size_t profile = 0; profile < 4; ++profile) {
-    SCOPED_TRACE(profile);
-    LlmWorkerChecksum expected = profile < 2
-        ? oracle_initial_worker()
-        : LlmWorkerChecksum{oracle_initial(LlmChecksumComponent::Weight), {}, {}};
-    for (size_t unit = 0; unit < planned_work_units; ++unit) {
-      oracle_absorb(expected.weight, bytes, planned_bytes);
-    }
-    expect_worker_equal(run_weights_only_fault_probe(profile, bytes, planned_bytes, planned_work_units), expected);
-    for (const auto& mutation : mutations) {
+    const LlmWorkerChecksum expected_planned =
+        expected_weight_oracle(profile, content_bytes, planned_bytes, planned_work_units);
+    expect_worker_equal(run_weights_only_fault_probe(profile, content_bytes, planned_bytes, planned_work_units),
+                        expected_planned);
+    for (const auto& mutation : kMutations) {
       SCOPED_TRACE(mutation.name);
-      const auto actual = run_weights_only_fault_probe(profile, bytes, mutation.span_bytes, mutation.work_units);
-      EXPECT_NE(actual.weight.exact_bytes_read, expected.weight.exact_bytes_read);
+      const auto actual =
+          run_weights_only_fault_probe(profile, content_bytes, mutation.span_bytes, mutation.work_units);
+      EXPECT_NE(actual.weight.exact_bytes_read, expected_planned.weight.exact_bytes_read);
       EXPECT_EQ(actual.weight.exact_bytes_read, mutation.span_bytes * mutation.work_units);
       EXPECT_EQ(actual.weight.span_count, mutation.work_units);
-      EXPECT_TRUE(actual.weight.state_a != expected.weight.state_a || actual.weight.state_b != expected.weight.state_b);
+      EXPECT_TRUE(actual.weight.state_a != expected_planned.weight.state_a ||
+                  actual.weight.state_b != expected_planned.weight.state_b);
       // No KV descriptors or resources were used by any of these probes.
-      expect_component_equal(actual.k, expected.k);
-      expect_component_equal(actual.v, expected.v);
+      expect_component_equal(actual.k, expected_planned.k);
+      expect_component_equal(actual.v, expected_planned.v);
     }
   }
 }
@@ -1189,76 +1021,109 @@ TEST(LlmMemoryKernelIntegrationTest, MultiLayerBatchStepScenariosMatchIndependen
   }
 }
 
-TEST(LlmMemoryKernelIntegrationTest, PreservesIntegerAndFullVectorCalleeSavedRegisters) {
-  alignas(64) std::array<uint8_t, 513> weight{};
-  alignas(64) std::array<uint8_t, 513> k{};
-  alignas(64) std::array<uint8_t, 513> v{};
-  for (size_t byte = 0; byte < weight.size(); ++byte) {
-    weight[byte] = static_cast<uint8_t>((byte * 17 + 3) & 0xFF);
-    k[byte] = static_cast<uint8_t>((byte * 19 + 5) & 0xFF);
-    v[byte] = static_cast<uint8_t>((byte * 23 + 7) & 0xFF);
-  }
-  LlmLayerDescriptor layer{weight.data(), weight.size(), 0, 1, 0, 0};
-  LlmKvSequenceDescriptor sequence{k.data(), k.size(), v.data(), v.size(), k.data(),
-                                   k.size(), v.data(), v.size(), 0,        0};
-  LlmWorkerChecksum output{};
-  const std::array<uintptr_t, 7> arguments = {
-      reinterpret_cast<uintptr_t>(&layer),  reinterpret_cast<uintptr_t>(&sequence), 1, 1, kLlmScenarioFlagMixed, 0,
-      reinterpret_cast<uintptr_t>(&output),
+TEST(LlmMemoryKernelIntegrationTest, AllFourLlmKernelsPreserveCalleeSavedRegistersIntegration) {
+  const auto verify_callee_saved = [](auto kernel, const void* layers, const void* kv, size_t layer_count,
+                                      size_t work_units, uint64_t flags, uint64_t seed, LlmWorkerChecksum& output) {
+    const std::array<uintptr_t, 7> arguments = {
+        reinterpret_cast<uintptr_t>(layers), reinterpret_cast<uintptr_t>(kv), layer_count, work_units, flags, seed,
+        reinterpret_cast<uintptr_t>(&output),
+    };
+    EXPECT_EQ(verify_llm_kernel_callee_saved_registers_asm(reinterpret_cast<uintptr_t>(kernel), arguments.data()), 1u);
   };
-  EXPECT_EQ(verify_llm_kernel_callee_saved_registers_asm(reinterpret_cast<uintptr_t>(&llm_decode_memory_asm),
-                                                         arguments.data()),
-            1u);
-  const OracleWorkerRun expected = oracle_worker_run(&layer, 1, &sequence, 1, kLlmScenarioFlagMixed, 0);
-  expect_worker_equal(output, expected.checksum);
-}
 
-TEST(LlmMemoryKernelIntegrationTest, MultiWorkerProductionExecutorRealAsmCoversExactPlannerRanges) {
-  for (size_t workers : {1u, 3u}) {
-    SCOPED_TRACE(workers);
-    const LlmMemoryWorkPlan plan = build_real_executor_plan({workers == 1 ? 257u : 513u, 2, 4, 2, 7, 1, 3, 2}, workers);
-    ASSERT_TRUE(plan.valid) << plan.reason_code;
-    const LlmCpuExecutionPlan* cpu_plan = get_llm_cpu_execution_plan(plan);
-    ASSERT_NE(cpu_plan, nullptr);
-    ASSERT_EQ(cpu_plan->effective_workers, workers);
-    LlmExecutionResources resources;
-    const LlmResourcePreparationResult prepared = prepare_llm_execution_resources(plan, resources);
-    ASSERT_TRUE(prepared.valid) << prepared.reason_code;
-    const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(plan, LlmScenario::Mixed, 2, true);
-    ASSERT_TRUE(scenario.valid) << scenario.reason_code;
-
-    std::vector<OracleWorkerRun> independent;
-    independent.reserve(cpu_plan->effective_workers);
-    for (size_t worker = 0; worker < cpu_plan->effective_workers; ++worker) {
-      independent.push_back(oracle_worker_run(resources.worker_layers(worker), cpu_plan->layer_descriptors_per_worker,
-                                              resources.worker_sequences(worker), scenario.work_units,
-                                              kLlmScenarioFlagMixed, scenario.scenario_seed));
+  {
+    SCOPED_TRACE("decode-contiguous");
+    alignas(64) std::array<uint8_t, 513> weight{};
+    alignas(64) std::array<uint8_t, 513> k{};
+    alignas(64) std::array<uint8_t, 513> v{};
+    for (size_t byte = 0; byte < weight.size(); ++byte) {
+      weight[byte] = static_cast<uint8_t>((byte * 17 + 3) & 0xFF);
+      k[byte] = static_cast<uint8_t>((byte * 19 + 5) & 0xFF);
+      v[byte] = static_cast<uint8_t>((byte * 23 + 7) & 0xFF);
     }
-    auto timer = HighResTimer::create();
-    ASSERT_TRUE(timer.has_value());
-    const LlmExecutorResult result =
-        execute_llm_scenario(plan, scenario, resources, *timer, production_llm_kernel_adapter());
-    ASSERT_TRUE(result.valid) << result.reason_code;
-    EXPECT_TRUE(result.kernel_succeeded);
-    EXPECT_EQ(result.reason_code, LlmExecutorReason::VALID);
-    EXPECT_TRUE(std::isfinite(result.elapsed_seconds));
-    EXPECT_GT(result.elapsed_seconds, 0.0);
-    EXPECT_TRUE(result.checksum_valid);
-    EXPECT_EQ(result.created_workers, cpu_plan->effective_workers);
-    EXPECT_EQ(result.completed_workers, cpu_plan->effective_workers);
-    ASSERT_EQ(result.actual_checksums.size(), independent.size());
+    LlmLayerDescriptor layer{weight.data(), weight.size(), 0, 1, 0, 0};
+    LlmKvSequenceDescriptor sequence{k.data(), k.size(), v.data(), v.size(), k.data(),
+                                     k.size(), v.data(), v.size(), 0,        0};
+    const OracleWorkerRun expected = oracle_worker_run(&layer, 1, &sequence, 1, kLlmScenarioFlagMixed, 0);
+    LlmWorkerChecksum output{};
+    verify_callee_saved(&llm_decode_memory_asm, &layer, &sequence, 1, 1, kLlmScenarioFlagMixed, 0, output);
+    expect_worker_equal(output, expected.checksum);
+  }
 
-    uint64_t weight_bytes = 0;
-    uint64_t kv_read_bytes = 0;
-    for (size_t worker = 0; worker < independent.size(); ++worker) {
-      SCOPED_TRACE(::testing::Message() << "worker=" << worker);
-      expect_worker_equal(result.actual_checksums[worker], independent[worker].checksum);
-      weight_bytes += result.actual_checksums[worker].weight.exact_bytes_read;
-      kv_read_bytes +=
-          result.actual_checksums[worker].k.exact_bytes_read + result.actual_checksums[worker].v.exact_bytes_read;
+  {
+    SCOPED_TRACE("decode-paged");
+    constexpr uint64_t kSeed = 0xA5A55A5AF0F00F0FULL;
+    ManualPagedDescriptorFixture fixture;
+    const LlmWorkerChecksum expected = oracle_paged_worker_run(
+        fixture.layers.data(), fixture.layers.size(), fixture.assignments.data(), 1, kLlmScenarioFlagMixed, kSeed);
+    const auto expected_k = fixture.k_pools;
+    const auto expected_v = fixture.v_pools;
+    fixture.initialize_storage();
+
+    LlmWorkerChecksum output{};
+    verify_callee_saved(&llm_decode_memory_paged_asm, fixture.layers.data(), fixture.assignments.data(),
+                        fixture.layers.size(), 1, kLlmScenarioFlagMixed, kSeed, output);
+    expect_worker_equal(output, expected);
+    EXPECT_EQ(fixture.k_pools, expected_k);
+    EXPECT_EQ(fixture.v_pools, expected_v);
+  }
+
+  {
+    SCOPED_TRACE("prefill-contiguous");
+    constexpr size_t kPromptTokens = 5;
+    constexpr size_t kRecordBytes = 33;
+    constexpr size_t kOperations = 2;
+    constexpr uint64_t kSeed = 0xA5A55A5AF0F00F0FULL;
+    alignas(64) std::array<uint8_t, 513> weight{};
+    alignas(64) std::array<uint8_t, kPromptTokens * kRecordBytes> k{};
+    alignas(64) std::array<uint8_t, kPromptTokens * kRecordBytes> v{};
+    for (size_t byte = 0; byte < weight.size(); ++byte) {
+      weight[byte] = static_cast<uint8_t>((byte * 17 + 3) & 0xFF);
     }
-    EXPECT_EQ(weight_bytes, scenario.weight_read_bytes);
-    EXPECT_EQ(kv_read_bytes, scenario.kv_read_bytes);
+    LlmPrefillLayerDescriptor layer{weight.data(), weight.size(), 0, 1, 9, 0};
+    LlmPrefillKvSequenceDescriptor owner{k.data(), v.data(), 0, kPromptTokens, kPromptTokens, 2, kRecordBytes, 9, 4, 0};
+    const LlmWorkerChecksum expected =
+        oracle_prefill_worker_run(&layer, 1, &owner, kOperations, kLlmScenarioFlagMixed, kSeed);
+    LlmWorkerChecksum output{};
+    verify_callee_saved(&llm_prefill_memory_asm, &layer, &owner, 1, kOperations, kLlmScenarioFlagMixed, kSeed, output);
+    expect_worker_equal(output, expected);
+  }
+
+  {
+    SCOPED_TRACE("prefill-paged");
+    constexpr size_t kPromptTokens = 5;
+    constexpr size_t kQueryTileTokens = 2;
+    constexpr size_t kBlockTokens = 2;
+    constexpr size_t kRecordBytes = 33;
+    constexpr size_t kBlockCount = 3;
+    constexpr size_t kBlockBytes = kBlockTokens * kRecordBytes;
+    constexpr size_t kLastBlockValidBytes = kRecordBytes;
+    constexpr size_t kOperations = 2;
+    constexpr uint64_t kSeed = 0xD1B54A32D192ED03ULL;
+    alignas(64) std::array<uint8_t, 513> weight{};
+    for (size_t byte = 0; byte < weight.size(); ++byte) {
+      weight[byte] = static_cast<uint8_t>((byte * 17 + 3) & 0xFF);
+    }
+    const std::array<uint32_t, kBlockCount> table = {2, 0, 1};
+    alignas(64) std::array<uint8_t, kBlockCount * kBlockBytes> k{};
+    alignas(64) std::array<uint8_t, kBlockCount * kBlockBytes> v{};
+    auto expected_k = k;
+    auto expected_v = v;
+    LlmPagedPrefillLayerDescriptor layer{weight.data(), weight.size(), 0, 1, 9, 0};
+    LlmPagedPrefillKvAssignmentDescriptor expected_assignment{
+        table.data(), expected_k.data(), expected_v.data(), 0, kBlockCount, kBlockCount, kBlockTokens, kBlockBytes,
+        kLastBlockValidBytes, kPromptTokens, kQueryTileTokens, kRecordBytes, 9, 4};
+    const LlmWorkerChecksum expected = oracle_paged_prefill_worker_run(
+        &layer, 1, &expected_assignment, kOperations, kLlmScenarioFlagMixed, kSeed);
+    LlmPagedPrefillKvAssignmentDescriptor actual_assignment = expected_assignment;
+    actual_assignment.k_layer_pool = k.data();
+    actual_assignment.v_layer_pool = v.data();
+    LlmWorkerChecksum output{};
+    verify_callee_saved(&llm_prefill_memory_paged_asm, &layer, &actual_assignment, 1, kOperations,
+                        kLlmScenarioFlagMixed, kSeed, output);
+    expect_worker_equal(output, expected);
+    EXPECT_EQ(k, expected_k);
+    EXPECT_EQ(v, expected_v);
   }
 }
 
@@ -1377,75 +1242,82 @@ TEST(LlmMemoryKernelIntegrationTest,
   EXPECT_EQ(actual.v.span_count, actual.k.span_count);
 }
 
-TEST(LlmMemoryKernelIntegrationTest,
-     PagedWrongSameMultiplicityBlockTableDoesNotMatchOracle) {
+TEST(LlmMemoryKernelIntegrationTest, PagedDecodeAndPrefillWrongSameMultiplicityBlockTableRejectedIntegration) {
   constexpr size_t kBlocks = 3;
-  constexpr size_t kBlockBytes = 17;
   const std::array<uint32_t, kBlocks> correct_table = {2, 0, 1};
   const std::array<uint32_t, kBlocks> wrong_table = {0, 2, 1};
-  EXPECT_TRUE(std::is_permutation(correct_table.begin(), correct_table.end(),
-                                  wrong_table.begin(), wrong_table.end()));
+  ASSERT_TRUE(
+      std::is_permutation(correct_table.begin(), correct_table.end(), wrong_table.begin(), wrong_table.end()));
 
-  std::array<uint8_t, kBlocks * kBlockBytes> k_pool{};
-  std::array<uint8_t, kBlocks * kBlockBytes> v_pool{};
-  for (size_t block = 0; block < kBlocks; ++block) {
-    for (size_t byte = 0; byte < kBlockBytes; ++byte) {
-      // Identical physical blocks isolate lookup identity from read contents.
-      k_pool[block * kBlockBytes + byte] =
-          static_cast<uint8_t>((byte * 19 + 5) & 0xFF);
-      v_pool[block * kBlockBytes + byte] =
-          static_cast<uint8_t>((byte * 29 + 7) & 0xFF);
+  const auto fill_identical_blocks = [](uint8_t* k_pool, uint8_t* v_pool, size_t block_bytes) {
+    for (size_t block = 0; block < kBlocks; ++block) {
+      for (size_t byte = 0; byte < block_bytes; ++byte) {
+        // Identical physical blocks isolate lookup identity from read contents.
+        k_pool[block * block_bytes + byte] = static_cast<uint8_t>((byte * 19 + 5) & 0xFF);
+        v_pool[block * block_bytes + byte] = static_cast<uint8_t>((byte * 29 + 7) & 0xFF);
+      }
     }
-  }
-  LlmPagedLayerDescriptor layer{nullptr, 0, 0, 1, 0, 0};
-  LlmPagedKvAssignmentDescriptor assignment{
-      correct_table.data(), k_pool.data(), v_pool.data(), 0, kBlocks, kBlocks,
-      kBlockBytes, kBlockBytes, 0, 0, 0, 0};
-  const LlmWorkerChecksum expected = oracle_paged_worker_run(
-      &layer, 1, &assignment, 2, kLlmScenarioFlagKv, 99);
-
-  assignment.block_table_row = wrong_table.data();
-  LlmWorkerChecksum actual{};
-  llm_decode_memory_paged_asm(&layer, &assignment, 1, 2,
-                              kLlmScenarioFlagKv, 99, &actual);
-  EXPECT_EQ(actual.k.exact_bytes_read, expected.k.exact_bytes_read);
-  EXPECT_EQ(actual.k.span_count, expected.k.span_count);
-  EXPECT_EQ(actual.v.exact_bytes_read, expected.v.exact_bytes_read);
-  EXPECT_EQ(actual.v.span_count, expected.v.span_count);
-  EXPECT_TRUE(actual.k.state_a != expected.k.state_a ||
-              actual.k.state_b != expected.k.state_b);
-  EXPECT_TRUE(actual.v.state_a != expected.v.state_a ||
-              actual.v.state_b != expected.v.state_b);
-}
-
-TEST(LlmMemoryKernelIntegrationTest,
-     PagedPreservesIntegerAndFullVectorCalleeSavedRegisters) {
-  constexpr uint64_t kSeed = 0xA5A55A5AF0F00F0FULL;
-  ManualPagedDescriptorFixture fixture;
-  const LlmWorkerChecksum expected = oracle_paged_worker_run(
-      fixture.layers.data(), fixture.layers.size(), fixture.assignments.data(),
-      1, kLlmScenarioFlagMixed, kSeed);
-  const auto expected_k = fixture.k_pools;
-  const auto expected_v = fixture.v_pools;
-  fixture.initialize_storage();
-
-  LlmWorkerChecksum output{};
-  const std::array<uintptr_t, 7> arguments = {
-      reinterpret_cast<uintptr_t>(fixture.layers.data()),
-      reinterpret_cast<uintptr_t>(fixture.assignments.data()),
-      fixture.layers.size(),
-      1,
-      kLlmScenarioFlagMixed,
-      kSeed,
-      reinterpret_cast<uintptr_t>(&output),
   };
-  EXPECT_EQ(verify_llm_kernel_callee_saved_registers_asm(
-                reinterpret_cast<uintptr_t>(&llm_decode_memory_paged_asm),
-                arguments.data()),
-            1u);
-  expect_worker_equal(output, expected);
-  EXPECT_EQ(fixture.k_pools, expected_k);
-  EXPECT_EQ(fixture.v_pools, expected_v);
+  const auto expect_lookup_mismatch = [](const LlmWorkerChecksum& actual, const LlmWorkerChecksum& expected) {
+    EXPECT_EQ(actual.k.exact_bytes_read, expected.k.exact_bytes_read);
+    EXPECT_EQ(actual.k.span_count, expected.k.span_count);
+    EXPECT_EQ(actual.v.exact_bytes_read, expected.v.exact_bytes_read);
+    EXPECT_EQ(actual.v.span_count, expected.v.span_count);
+    EXPECT_TRUE(actual.k.state_a != expected.k.state_a || actual.k.state_b != expected.k.state_b);
+    EXPECT_TRUE(actual.v.state_a != expected.v.state_a || actual.v.state_b != expected.v.state_b);
+  };
+
+  {
+    SCOPED_TRACE("decode-paged");
+    constexpr size_t kBlockBytes = 17;
+    std::array<uint8_t, kBlocks * kBlockBytes> k_pool{};
+    std::array<uint8_t, kBlocks * kBlockBytes> v_pool{};
+    fill_identical_blocks(k_pool.data(), v_pool.data(), kBlockBytes);
+
+    LlmPagedLayerDescriptor layer{nullptr, 0, 0, 1, 0, 0};
+    LlmPagedKvAssignmentDescriptor assignment{correct_table.data(), k_pool.data(), v_pool.data(), 0, kBlocks, kBlocks,
+                                              kBlockBytes,          kBlockBytes,   0,             0, 0,       0};
+    const LlmWorkerChecksum expected = oracle_paged_worker_run(&layer, 1, &assignment, 2, kLlmScenarioFlagKv, 99);
+
+    assignment.block_table_row = wrong_table.data();
+    LlmWorkerChecksum actual{};
+    llm_decode_memory_paged_asm(&layer, &assignment, 1, 2, kLlmScenarioFlagKv, 99, &actual);
+    expect_lookup_mismatch(actual, expected);
+  }
+
+  {
+    SCOPED_TRACE("prefill-paged");
+    constexpr size_t kPromptTokens = 5;
+    constexpr size_t kQueryTileTokens = 2;
+    constexpr size_t kBlockTokens = 2;
+    constexpr size_t kRecordBytes = 17;
+    constexpr size_t kBlockBytes = kBlockTokens * kRecordBytes;
+    constexpr size_t kLastBlockValidBytes = kRecordBytes;
+    constexpr size_t kOperations = 2;
+    constexpr uint64_t kSeed = 0xA5A55A5AF0F00F0FULL;
+    std::array<uint8_t, kBlocks * kBlockBytes> initial_k{};
+    std::array<uint8_t, kBlocks * kBlockBytes> initial_v{};
+    fill_identical_blocks(initial_k.data(), initial_v.data(), kBlockBytes);
+    auto expected_k = initial_k;
+    auto expected_v = initial_v;
+    auto actual_k = initial_k;
+    auto actual_v = initial_v;
+
+    LlmPagedPrefillLayerDescriptor layer{nullptr, 0, 0, 1, 0, 0};
+    LlmPagedPrefillKvAssignmentDescriptor expected_assignment{
+        correct_table.data(), expected_k.data(), expected_v.data(), 0, kBlocks, kBlocks, kBlockTokens, kBlockBytes,
+        kLastBlockValidBytes, kPromptTokens, kQueryTileTokens, kRecordBytes, 0, 0};
+    const LlmWorkerChecksum expected =
+        oracle_paged_prefill_worker_run(&layer, 1, &expected_assignment, kOperations, kLlmScenarioFlagKv, kSeed);
+    LlmPagedPrefillKvAssignmentDescriptor actual_assignment = expected_assignment;
+    actual_assignment.block_table_row = wrong_table.data();
+    actual_assignment.k_layer_pool = actual_k.data();
+    actual_assignment.v_layer_pool = actual_v.data();
+
+    LlmWorkerChecksum actual{};
+    llm_prefill_memory_paged_asm(&layer, &actual_assignment, 1, kOperations, kLlmScenarioFlagKv, kSeed, &actual);
+    expect_lookup_mismatch(actual, expected);
+  }
 }
 
 TEST(LlmMemoryKernelIntegrationTest,
@@ -1524,41 +1396,6 @@ TEST(LlmMemoryKernelIntegrationTest,
                                     LlmPrefillKvDomain::V, logical_byte));
     }
   }
-}
-
-TEST(LlmMemoryKernelIntegrationTest,
-     PrefillPreservesIntegerAndFullVectorCalleeSavedRegisters) {
-  constexpr size_t kPromptTokens = 5;
-  constexpr size_t kRecordBytes = 33;
-  constexpr size_t kOperations = 2;
-  constexpr uint64_t kSeed = 0xA5A55A5AF0F00F0FULL;
-  alignas(64) std::array<uint8_t, 513> weight{};
-  alignas(64) std::array<uint8_t, kPromptTokens * kRecordBytes> k{};
-  alignas(64) std::array<uint8_t, kPromptTokens * kRecordBytes> v{};
-  for (size_t byte = 0; byte < weight.size(); ++byte) {
-    weight[byte] = static_cast<uint8_t>((byte * 17 + 3) & 0xFF);
-  }
-  LlmPrefillLayerDescriptor layer{weight.data(), weight.size(), 0, 1, 9, 0};
-  LlmPrefillKvSequenceDescriptor owner{
-      k.data(), v.data(), 0, kPromptTokens, kPromptTokens, 2,
-      kRecordBytes, 9, 4, 0};
-  const LlmWorkerChecksum expected = oracle_prefill_worker_run(
-      &layer, 1, &owner, kOperations, kLlmScenarioFlagMixed, kSeed);
-  LlmWorkerChecksum output{};
-  const std::array<uintptr_t, 7> arguments = {
-      reinterpret_cast<uintptr_t>(&layer),
-      reinterpret_cast<uintptr_t>(&owner),
-      1,
-      kOperations,
-      kLlmScenarioFlagMixed,
-      kSeed,
-      reinterpret_cast<uintptr_t>(&output),
-  };
-  EXPECT_EQ(verify_llm_kernel_callee_saved_registers_asm(
-                reinterpret_cast<uintptr_t>(&llm_prefill_memory_asm),
-                arguments.data()),
-            1u);
-  expect_worker_equal(output, expected);
 }
 
 TEST(LlmMemoryKernelIntegrationTest, PagedPrefillGoldenGeometryAndExactRecordTailsMatchIndependentOracle) {
@@ -1802,183 +1639,96 @@ TEST(LlmMemoryKernelIntegrationTest, PagedPrefillMultiLayerBatchTileAndOperation
   EXPECT_EQ(actual.v.span_count, actual.k.span_count);
 }
 
-TEST(LlmMemoryKernelIntegrationTest, PagedPrefillWrongSameMultiplicityBlockTableDoesNotMatchOracle) {
-  constexpr size_t kPromptTokens = 5;
-  constexpr size_t kQueryTileTokens = 2;
-  constexpr size_t kBlockTokens = 2;
-  constexpr size_t kRecordBytes = 17;
-  constexpr size_t kBlockCount = 3;
-  constexpr size_t kBlockBytes = kBlockTokens * kRecordBytes;
-  constexpr size_t kLastBlockValidBytes = kRecordBytes;
-  constexpr size_t kOperations = 2;
-  constexpr uint64_t kSeed = 0xA5A55A5AF0F00F0FULL;
-  const std::array<uint32_t, kBlockCount> correct_table = {2, 0, 1};
-  const std::array<uint32_t, kBlockCount> wrong_table = {0, 2, 1};
-  ASSERT_TRUE(std::is_permutation(correct_table.begin(), correct_table.end(),
-                                  wrong_table.begin(), wrong_table.end()));
-
-  std::array<uint8_t, kBlockCount * kBlockBytes> initial_k{};
-  std::array<uint8_t, kBlockCount * kBlockBytes> initial_v{};
-  for (size_t block = 0; block < kBlockCount; ++block) {
-    for (size_t byte = 0; byte < kBlockBytes; ++byte) {
-      // Identical blocks ensure the mismatch is bound to lookup identity, not
-      // to different initial physical payload contents.
-      initial_k[block * kBlockBytes + byte] =
-          static_cast<uint8_t>((byte * 19 + 5) & 0xFF);
-      initial_v[block * kBlockBytes + byte] =
-          static_cast<uint8_t>((byte * 29 + 7) & 0xFF);
+TEST(LlmMemoryKernelIntegrationTest, MultiWorkerProductionExecutorRealAsmDecodeAndPrefillIntegration) {
+  const auto verify_real_execution = [](const LlmMemoryWorkPlan& plan, const LlmScenarioWorkPlan& scenario,
+                                        const LlmExecutionResources& resources,
+                                        const std::vector<LlmWorkerChecksum>& expected, size_t workers,
+                                        bool check_post_validation) {
+    auto timer = HighResTimer::create();
+    ASSERT_TRUE(timer.has_value());
+    const LlmExecutorResult result =
+        execute_llm_scenario(plan, scenario, resources, *timer, production_llm_kernel_adapter());
+    ASSERT_TRUE(result.valid) << result.reason_code;
+    EXPECT_TRUE(result.kernel_succeeded);
+    EXPECT_EQ(result.reason_code, LlmExecutorReason::VALID);
+    EXPECT_TRUE(std::isfinite(result.elapsed_seconds));
+    EXPECT_GT(result.elapsed_seconds, 0.0);
+    EXPECT_TRUE(result.checksum_evaluated);
+    EXPECT_TRUE(result.checksum_valid);
+    EXPECT_EQ(result.created_workers, workers);
+    EXPECT_EQ(result.completed_workers, workers);
+    if (check_post_validation) {
+      EXPECT_TRUE(result.post_validation_evaluated);
+      EXPECT_TRUE(result.post_validation_valid);
     }
-  }
-  auto expected_k = initial_k;
-  auto expected_v = initial_v;
-  auto actual_k = initial_k;
-  auto actual_v = initial_v;
-  LlmPagedPrefillLayerDescriptor layer{nullptr, 0, 0, 1, 0, 0};
-  LlmPagedPrefillKvAssignmentDescriptor expected_assignment{
-      correct_table.data(), expected_k.data(), expected_v.data(),
-      0, kBlockCount, kBlockCount, kBlockTokens, kBlockBytes,
-      kLastBlockValidBytes, kPromptTokens, kQueryTileTokens, kRecordBytes,
-      0, 0};
-  const LlmWorkerChecksum expected = oracle_paged_prefill_worker_run(
-      &layer, 1, &expected_assignment, kOperations,
-      kLlmScenarioFlagKv, kSeed);
-  LlmPagedPrefillKvAssignmentDescriptor actual_assignment =
-      expected_assignment;
-  actual_assignment.block_table_row = wrong_table.data();
-  actual_assignment.k_layer_pool = actual_k.data();
-  actual_assignment.v_layer_pool = actual_v.data();
+    ASSERT_EQ(result.actual_checksums.size(), expected.size());
 
-  LlmWorkerChecksum actual{};
-  llm_prefill_memory_paged_asm(
-      &layer, &actual_assignment, 1, kOperations,
-      kLlmScenarioFlagKv, kSeed, &actual);
-  EXPECT_EQ(actual.k.exact_bytes_read, expected.k.exact_bytes_read);
-  EXPECT_EQ(actual.k.span_count, expected.k.span_count);
-  EXPECT_EQ(actual.v.exact_bytes_read, expected.v.exact_bytes_read);
-  EXPECT_EQ(actual.v.span_count, expected.v.span_count);
-  EXPECT_TRUE(actual.k.state_a != expected.k.state_a ||
-              actual.k.state_b != expected.k.state_b);
-  EXPECT_TRUE(actual.v.state_a != expected.v.state_a ||
-              actual.v.state_b != expected.v.state_b);
-}
-
-TEST(LlmMemoryKernelIntegrationTest, PagedPrefillPreservesIntegerAndFullVectorCalleeSavedRegisters) {
-  constexpr size_t kPromptTokens = 5;
-  constexpr size_t kQueryTileTokens = 2;
-  constexpr size_t kBlockTokens = 2;
-  constexpr size_t kRecordBytes = 33;
-  constexpr size_t kBlockCount = 3;
-  constexpr size_t kBlockBytes = kBlockTokens * kRecordBytes;
-  constexpr size_t kLastBlockValidBytes = kRecordBytes;
-  constexpr size_t kOperations = 2;
-  constexpr uint64_t kSeed = 0xD1B54A32D192ED03ULL;
-  alignas(64) std::array<uint8_t, 513> weight{};
-  for (size_t byte = 0; byte < weight.size(); ++byte) {
-    weight[byte] = static_cast<uint8_t>((byte * 17 + 3) & 0xFF);
-  }
-  const std::array<uint32_t, kBlockCount> table = {2, 0, 1};
-  alignas(64) std::array<uint8_t, kBlockCount * kBlockBytes> k{};
-  alignas(64) std::array<uint8_t, kBlockCount * kBlockBytes> v{};
-  auto expected_k = k;
-  auto expected_v = v;
-  LlmPagedPrefillLayerDescriptor layer{
-      weight.data(), weight.size(), 0, 1, 9, 0};
-  LlmPagedPrefillKvAssignmentDescriptor expected_assignment{
-      table.data(), expected_k.data(), expected_v.data(),
-      0, kBlockCount, kBlockCount, kBlockTokens, kBlockBytes,
-      kLastBlockValidBytes, kPromptTokens, kQueryTileTokens, kRecordBytes,
-      9, 4};
-  const LlmWorkerChecksum expected = oracle_paged_prefill_worker_run(
-      &layer, 1, &expected_assignment, kOperations,
-      kLlmScenarioFlagMixed, kSeed);
-  LlmPagedPrefillKvAssignmentDescriptor actual_assignment =
-      expected_assignment;
-  actual_assignment.k_layer_pool = k.data();
-  actual_assignment.v_layer_pool = v.data();
-  LlmWorkerChecksum output{};
-  const std::array<uintptr_t, 7> arguments = {
-      reinterpret_cast<uintptr_t>(&layer),
-      reinterpret_cast<uintptr_t>(&actual_assignment),
-      1,
-      kOperations,
-      kLlmScenarioFlagMixed,
-      kSeed,
-      reinterpret_cast<uintptr_t>(&output),
+    uint64_t weight_bytes = 0;
+    uint64_t kv_read_bytes = 0;
+    for (size_t worker = 0; worker < expected.size(); ++worker) {
+      SCOPED_TRACE(::testing::Message() << "worker=" << worker);
+      expect_worker_equal(result.actual_checksums[worker], expected[worker]);
+      weight_bytes += result.actual_checksums[worker].weight.exact_bytes_read;
+      kv_read_bytes +=
+          result.actual_checksums[worker].k.exact_bytes_read + result.actual_checksums[worker].v.exact_bytes_read;
+    }
+    EXPECT_EQ(weight_bytes, scenario.weight_read_bytes);
+    EXPECT_EQ(kv_read_bytes, scenario.kv_read_bytes);
   };
-  EXPECT_EQ(verify_llm_kernel_callee_saved_registers_asm(
-                reinterpret_cast<uintptr_t>(&llm_prefill_memory_paged_asm),
-                arguments.data()),
-            1u);
-  expect_worker_equal(output, expected);
-  EXPECT_EQ(k, expected_k);
-  EXPECT_EQ(v, expected_v);
-}
 
-TEST(LlmMemoryKernelIntegrationTest,
-     PrefillProductionExecutorOneAndThreeWorkersAllScenariosMatchByteOracle) {
+  for (size_t workers : {1u, 3u}) {
+    SCOPED_TRACE(::testing::Message() << "decode workers=" << workers);
+    const LlmMemoryWorkPlan plan =
+        build_real_executor_plan({workers == 1 ? 257u : 513u, 2, 4, 2, 7, 1, 3, 2}, workers);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    const LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
+    ASSERT_NE(cpu_plan, nullptr);
+    ASSERT_EQ(cpu_plan->effective_workers, workers);
+    LlmExecutionResources resources;
+    const LlmResourcePreparationResult prepared = prepare_llm_execution_resources(plan, resources);
+    ASSERT_TRUE(prepared.valid) << prepared.reason_code;
+    const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(plan, LlmScenario::Mixed, 2, true);
+    ASSERT_TRUE(scenario.valid) << scenario.reason_code;
+
+    std::vector<LlmWorkerChecksum> expected;
+    expected.reserve(workers);
+    for (size_t worker = 0; worker < workers; ++worker) {
+      expected.push_back(oracle_worker_run(resources.worker_layers(worker), cpu_plan->layer_descriptors_per_worker,
+                                           resources.worker_sequences(worker), scenario.work_units,
+                                           kLlmScenarioFlagMixed, scenario.scenario_seed)
+                             .checksum);
+    }
+    verify_real_execution(plan, scenario, resources, expected, workers, false);
+  }
+
   constexpr size_t kOperations = 2;
   for (size_t workers : {1U, 3U}) {
-    for (LlmScenario scenario : {LlmScenario::WeightsOnly,
-                                 LlmScenario::KvOnly,
-                                 LlmScenario::Mixed}) {
-      SCOPED_TRACE(::testing::Message()
-                   << "workers=" << workers
-                   << " scenario=" << llm_scenario_to_string(scenario));
-      const LlmMemoryWorkPlan plan =
-          build_real_prefill_executor_plan(workers);
+    for (LlmScenario scenario : {LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed}) {
+      SCOPED_TRACE(::testing::Message() << "prefill workers=" << workers
+                                        << " scenario=" << llm_scenario_to_string(scenario));
+      const LlmMemoryWorkPlan plan = build_real_prefill_executor_plan(workers);
       ASSERT_TRUE(plan.valid) << plan.reason_code;
-      const LlmCpuExecutionPlan* const cpu_plan =
-          get_llm_cpu_execution_plan(plan);
+      const LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
       ASSERT_NE(cpu_plan, nullptr);
       ASSERT_TRUE(cpu_plan->prefill.has_value());
       ASSERT_EQ(cpu_plan->effective_workers, workers);
       LlmExecutionResources resources;
-      const LlmResourcePreparationResult prepared =
-          prepare_llm_execution_resources(plan, resources);
+      const LlmResourcePreparationResult prepared = prepare_llm_execution_resources(plan, resources);
       ASSERT_TRUE(prepared.valid) << prepared.reason_code;
-      const LlmScenarioWorkPlan scenario_plan =
-          build_llm_scenario_work_plan(plan, scenario, kOperations, true);
+      const LlmScenarioWorkPlan scenario_plan = build_llm_scenario_work_plan(plan, scenario, kOperations, true);
       ASSERT_TRUE(scenario_plan.valid) << scenario_plan.reason_code;
 
       std::vector<LlmWorkerChecksum> expected;
       expected.reserve(workers);
       for (size_t worker = 0; worker < workers; ++worker) {
         expected.push_back(oracle_prefill_worker_run(
-            resources.worker_prefill_layers(worker),
-            cpu_plan->layer_descriptors_per_worker,
+            resources.worker_prefill_layers(worker), cpu_plan->layer_descriptors_per_worker,
             (llm_scenario_flags(scenario) & kLlmScenarioFlagKv) == 0
                 ? nullptr
                 : resources.worker_prefill_sequences(worker, scenario),
-            kOperations, llm_scenario_flags(scenario),
-            scenario_plan.scenario_seed));
+            kOperations, llm_scenario_flags(scenario), scenario_plan.scenario_seed));
       }
-
-      auto timer = HighResTimer::create();
-      ASSERT_TRUE(timer.has_value());
-      const LlmExecutorResult result = execute_llm_scenario(
-          plan, scenario_plan, resources, *timer,
-          production_llm_kernel_adapter());
-      ASSERT_TRUE(result.valid) << result.reason_code;
-      EXPECT_TRUE(result.kernel_succeeded);
-      EXPECT_TRUE(result.checksum_evaluated);
-      EXPECT_TRUE(result.checksum_valid);
-      EXPECT_TRUE(result.post_validation_evaluated);
-      EXPECT_TRUE(result.post_validation_valid);
-      ASSERT_EQ(result.actual_checksums.size(), workers);
-
-      uint64_t weight_bytes = 0;
-      uint64_t kv_read_bytes = 0;
-      for (size_t worker = 0; worker < workers; ++worker) {
-        SCOPED_TRACE(::testing::Message() << "worker=" << worker);
-        expect_worker_equal(result.actual_checksums[worker],
-                            expected[worker]);
-        weight_bytes +=
-            result.actual_checksums[worker].weight.exact_bytes_read;
-        kv_read_bytes += result.actual_checksums[worker].k.exact_bytes_read +
-                         result.actual_checksums[worker].v.exact_bytes_read;
-      }
-      EXPECT_EQ(weight_bytes, scenario_plan.weight_read_bytes);
-      EXPECT_EQ(kv_read_bytes, scenario_plan.kv_read_bytes);
+      verify_real_execution(plan, scenario_plan, resources, expected, workers, true);
     }
   }
 }

@@ -42,13 +42,9 @@ constexpr uint64_t kPagedPhysical = 0x9FB21C651E98DF25ULL;
 constexpr uint64_t kPagedWord = 0xC13FA9A902A6328FULL;
 constexpr uint64_t kPrefillPhaseDomain = 0x50524546494C4C31ULL;
 
-const LlmCpuExecutionPlan& cpu_execution_plan(
-    const LlmMemoryWorkPlan& plan) {
-  const LlmCpuExecutionPlan* const cpu_plan =
-      get_llm_cpu_execution_plan(plan);
-  if (cpu_plan == nullptr) {
-    throw std::logic_error("expected CPU execution plan");
-  }
+const LlmCpuExecutionPlan& cpu_execution_plan(const LlmMemoryWorkPlan& plan) {
+  const LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
+  if (cpu_plan == nullptr) throw std::logic_error("expected CPU execution plan");
   return *cpu_plan;
 }
 
@@ -64,55 +60,35 @@ LlmMemoryWorkPlanRequest plan_request(const LlmGeometryRequest& geometry, size_t
 }
 
 LlmMemoryWorkPlan build_executor_ready_plan(const LlmGeometryRequest& geometry, size_t workers = 2) {
-  LlmMemoryWorkPlanRequest request = plan_request(geometry, workers);
-  LlmMemoryWorkPlan plan = build_llm_memory_work_plan(request);
-  if (!plan.valid) {
-    return plan;
-  }
-  const LlmExecutorAuxiliaryEstimate auxiliary =
-      calculate_llm_executor_auxiliary_estimate(plan);
-  if (!auxiliary.valid) {
-    return plan;
-  }
-  readmit_llm_memory_work_plan(plan, auxiliary.checksum_auxiliary_bytes,
-                              auxiliary.orchestration_auxiliary_bytes);
+  LlmMemoryWorkPlan plan = build_llm_memory_work_plan(plan_request(geometry, workers));
+  if (!plan.valid) return plan;
+  const LlmExecutorAuxiliaryEstimate auxiliary = calculate_llm_executor_auxiliary_estimate(plan);
+  if (!auxiliary.valid) return plan;
+  readmit_llm_memory_work_plan(plan, auxiliary.checksum_auxiliary_bytes, auxiliary.orchestration_auxiliary_bytes);
   return plan;
 }
 
-LlmGeometryRequest paged_geometry(size_t visible_tokens,
-                                  size_t block_tokens,
-                                  size_t record_bytes = 33,
-                                  size_t layers = 2,
-                                  size_t batch = 2) {
-  LlmGeometryRequest geometry{257, layers, 1, 1, record_bytes, 1,
-                              visible_tokens, batch};
+LlmGeometryRequest paged_geometry(size_t visible_tokens, size_t block_tokens, size_t record_bytes = 33,
+                                  size_t layers = 2, size_t batch = 2) {
+  LlmGeometryRequest geometry{257, layers, 1, 1, record_bytes, 1, visible_tokens, batch};
   geometry.kv_block_tokens = block_tokens;
   geometry.kv_layout = LlmKvLayout::Paged;
   return geometry;
 }
 
-LlmGeometryRequest prefill_geometry(size_t prompt_tokens = 7,
-                                    size_t query_tile_tokens = 3,
-                                    size_t record_bytes = 33,
-                                    size_t layers = 2,
-                                    size_t batch = 2) {
-  LlmGeometryRequest geometry{257, layers, 1, 1, record_bytes, 1, 0,
-                              batch};
+LlmGeometryRequest prefill_geometry(size_t prompt_tokens = 7, size_t query_tile_tokens = 3, size_t record_bytes = 33,
+                                    size_t layers = 2, size_t batch = 2) {
+  LlmGeometryRequest geometry{257, layers, 1, 1, record_bytes, 1, 0, batch};
   geometry.phase = LlmPhase::Prefill;
   geometry.prompt_tokens = prompt_tokens;
   geometry.attention_query_tile_tokens = query_tile_tokens;
   return geometry;
 }
 
-LlmGeometryRequest paged_prefill_geometry(size_t prompt_tokens = 7,
-                                          size_t query_tile_tokens = 3,
-                                          size_t block_tokens = 2,
-                                          size_t record_bytes = 33,
-                                          size_t layers = 2,
+LlmGeometryRequest paged_prefill_geometry(size_t prompt_tokens = 7, size_t query_tile_tokens = 3,
+                                          size_t block_tokens = 2, size_t record_bytes = 33, size_t layers = 2,
                                           size_t batch = 2) {
-  LlmGeometryRequest geometry =
-      prefill_geometry(prompt_tokens, query_tile_tokens, record_bytes, layers,
-                       batch);
+  LlmGeometryRequest geometry = prefill_geometry(prompt_tokens, query_tile_tokens, record_bytes, layers, batch);
   geometry.kv_layout = LlmKvLayout::Paged;
   geometry.kv_block_tokens = block_tokens;
   return geometry;
@@ -123,21 +99,16 @@ uint8_t expected_buffer_byte(uint64_t seed, size_t absolute_byte) {
   return static_cast<uint8_t>(word >> (8 * (absolute_byte % 8)));
 }
 
-uint8_t expected_paged_buffer_byte(uint64_t seed, size_t layer,
-                                   uint32_t physical_block,
-                                   size_t block_byte) {
-  const uint64_t word =
-      seed + kPagedLayer * (static_cast<uint64_t>(layer) + 1) +
-      kPagedPhysical * (static_cast<uint64_t>(physical_block) + 1) +
-      kPagedWord * (static_cast<uint64_t>(block_byte / 8) + 1);
+uint8_t expected_paged_buffer_byte(uint64_t seed, size_t layer, uint32_t physical_block, size_t block_byte) {
+  const uint64_t word = seed + kPagedLayer * (static_cast<uint64_t>(layer) + 1) +
+                        kPagedPhysical * (static_cast<uint64_t>(physical_block) + 1) +
+                        kPagedWord * (static_cast<uint64_t>(block_byte / 8) + 1);
   return static_cast<uint8_t>(word >> (8 * (block_byte % 8)));
 }
 
 uint64_t load_partial(const uint8_t* bytes, size_t count) {
   uint64_t word = 0;
-  for (size_t index = 0; index < count; ++index) {
-    word |= static_cast<uint64_t>(bytes[index]) << (8 * index);
-  }
+  for (size_t index = 0; index < count; ++index) word |= static_cast<uint64_t>(bytes[index]) << (8 * index);
   return word;
 }
 
@@ -145,13 +116,8 @@ LlmStaticSpanReference reference_span(const uint8_t* bytes, size_t count) {
   LlmStaticSpanReference reference{};
   reference.span_bytes = count;
   for (size_t offset = 0, word_index = 0; offset < count; offset += 8, ++word_index) {
-    const size_t word_bytes = std::min<size_t>(8, count - offset);
-    const uint64_t word = load_partial(bytes + offset, word_bytes);
-    if ((word_index % 2) == 0) {
-      reference.span_even += word;
-    } else {
-      reference.span_odd += word;
-    }
+    const uint64_t word = load_partial(bytes + offset, std::min<size_t>(8, count - offset));
+    ((word_index % 2) == 0 ? reference.span_even : reference.span_odd) += word;
   }
   return reference;
 }
@@ -159,9 +125,7 @@ LlmStaticSpanReference reference_span(const uint8_t* bytes, size_t count) {
 uint64_t rotate_left(uint64_t value, unsigned int amount) { return (value << amount) | (value >> (64 - amount)); }
 
 void absorb(LlmReadChecksumComponent& state, const uint8_t* bytes, size_t count) {
-  if (count == 0) {
-    return;
-  }
+  if (count == 0) return;
   const LlmStaticSpanReference reference = reference_span(bytes, count);
   const uint64_t ordinal = state.span_count;
   state.state_a = rotate_left(state.state_a + reference.span_even + kGolden * (ordinal + 1), 17);
@@ -181,9 +145,7 @@ uint64_t scalar_append_word(uint64_t seed, uint64_t step, uint64_t layer, uint64
 void apply_append(std::vector<uint8_t>& visible, const uint8_t* visible_pointer, const uint8_t* append_pointer,
                   size_t append_bytes, size_t record_byte_offset, uint64_t seed, uint64_t step, uint64_t layer,
                   uint64_t batch, LlmChecksumComponent component) {
-  if (append_bytes == 0) {
-    return;
-  }
+  if (append_bytes == 0) return;
   const size_t local_offset = static_cast<size_t>(append_pointer - visible_pointer);
   ASSERT_LE(local_offset + append_bytes, visible.size());
   for (size_t byte = 0; byte < append_bytes; ++byte) {
@@ -209,9 +171,7 @@ std::vector<LlmWorkerChecksum> scalar_expected(const LlmMemoryWorkPlan& model, c
         if ((llm_scenario_flags(scenario.scenario) & kLlmScenarioFlagWeight) != 0) {
           absorb(expected[worker].weight, layer_descriptor.weight_ptr, layer_descriptor.weight_bytes);
         }
-        if ((llm_scenario_flags(scenario.scenario) & kLlmScenarioFlagKv) == 0) {
-          continue;
-        }
+        if ((llm_scenario_flags(scenario.scenario) & kLlmScenarioFlagKv) == 0) continue;
         for (size_t local = 0; local < layer_descriptor.sequence_count; ++local) {
           const LlmKvSequenceDescriptor& sequence = sequences[layer_descriptor.first_sequence_index + local];
           std::vector<uint8_t> k_visible(sequence.k_visible_ptr, sequence.k_visible_ptr + sequence.k_visible_bytes);
@@ -231,53 +191,34 @@ std::vector<LlmWorkerChecksum> scalar_expected(const LlmMemoryWorkPlan& model, c
   return expected;
 }
 
-uint8_t scalar_prefill_byte(uint64_t seed, size_t operation, size_t layer,
-                            size_t batch, LlmPrefillKvDomain domain,
+uint8_t scalar_prefill_byte(uint64_t seed, size_t operation, size_t layer, size_t batch, LlmPrefillKvDomain domain,
                             size_t logical_byte) {
-  const uint64_t domain_value = domain == LlmPrefillKvDomain::K
-                                    ? kAppendKDomain
-                                    : kAppendVDomain;
+  const uint64_t domain_value = domain == LlmPrefillKvDomain::K ? kAppendKDomain : kAppendVDomain;
   const uint64_t logical_word = logical_byte / sizeof(uint64_t);
-  const uint64_t word =
-      seed + kPrefillPhaseDomain +
-      kGolden * (static_cast<uint64_t>(operation) + 1) +
-      kAppendLayer * (static_cast<uint64_t>(layer) + 1) +
-      kAppendBatch * (static_cast<uint64_t>(batch) + 1) + domain_value +
-      kAppendWord * (logical_word + 1);
-  return static_cast<uint8_t>(
-      word >> (8 * (logical_byte % sizeof(uint64_t))));
+  const uint64_t word = seed + kPrefillPhaseDomain + kGolden * (static_cast<uint64_t>(operation) + 1) +
+                        kAppendLayer * (static_cast<uint64_t>(layer) + 1) +
+                        kAppendBatch * (static_cast<uint64_t>(batch) + 1) + domain_value +
+                        kAppendWord * (logical_word + 1);
+  return static_cast<uint8_t>(word >> (8 * (logical_byte % sizeof(uint64_t))));
 }
 
-void scalar_mix_paged_lookup(LlmReadChecksumComponent& state,
-                             uint64_t global_logical_index,
-                             uint32_t physical_block_id,
+void scalar_mix_paged_lookup(LlmReadChecksumComponent& state, uint64_t global_logical_index, uint32_t physical_block_id,
                              uint64_t visit_kind, uint64_t operation) {
-  const uint64_t term =
-      (global_logical_index + 1) *
-          (static_cast<uint64_t>(physical_block_id) + 1) +
-      (visit_kind + 1) * kAppendBatch +
-      (operation + 1) * kAppendLayer;
+  const uint64_t term = (global_logical_index + 1) * (static_cast<uint64_t>(physical_block_id) + 1) +
+                        (visit_kind + 1) * kAppendBatch + (operation + 1) * kAppendLayer;
   state.state_a = rotate_left(state.state_a + term + kGolden, 13);
   state.state_b = rotate_left(state.state_b ^ (term + kAppendWord), 31);
 }
 
-void scalar_absorb_prefill_visit(LlmReadChecksumComponent& state,
-                                 uint64_t seed, size_t operation,
-                                 size_t layer, size_t batch,
-                                 LlmPrefillKvDomain domain,
-                                 size_t first_logical_byte,
+void scalar_absorb_prefill_visit(LlmReadChecksumComponent& state, uint64_t seed, size_t operation, size_t layer,
+                                 size_t batch, LlmPrefillKvDomain domain, size_t first_logical_byte,
                                  size_t byte_count) {
   for (size_t offset = 0; offset < byte_count; ++offset) {
     const size_t logical_byte = first_logical_byte + offset;
     const uint64_t contribution =
-        static_cast<uint64_t>(scalar_prefill_byte(
-            seed, operation, layer, batch, domain, logical_byte))
+        static_cast<uint64_t>(scalar_prefill_byte(seed, operation, layer, batch, domain, logical_byte))
         << (8 * (logical_byte % sizeof(uint64_t)));
-    if (((logical_byte / sizeof(uint64_t)) & 1U) == 0U) {
-      state.state_a += contribution;
-    } else {
-      state.state_b += contribution;
-    }
+    (((logical_byte / sizeof(uint64_t)) & 1U) == 0U ? state.state_a : state.state_b) += contribution;
   }
   state.exact_bytes_read += byte_count;
   ++state.span_count;
@@ -288,9 +229,9 @@ struct PagedPrefillScalarExpected {
   uint64_t lookup_count = 0;
 };
 
-PagedPrefillScalarExpected scalar_paged_prefill_expected(
-    const LlmMemoryWorkPlan& model, const LlmScenarioWorkPlan& scenario,
-    const LlmExecutionResources& resources) {
+PagedPrefillScalarExpected scalar_paged_prefill_expected(const LlmMemoryWorkPlan& model,
+                                                         const LlmScenarioWorkPlan& scenario,
+                                                         const LlmExecutionResources& resources) {
   const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(model);
   PagedPrefillScalarExpected result;
   result.workers.resize(cpu_plan.effective_workers);
@@ -301,108 +242,58 @@ PagedPrefillScalarExpected scalar_paged_prefill_expected(
   for (size_t worker = 0; worker < cpu_plan.effective_workers; ++worker) {
     LlmWorkerChecksum& checksum = result.workers[worker];
     checksum.weight = initial_llm_read_checksum(LlmChecksumComponent::Weight);
-    const LlmPagedPrefillLayerDescriptor* const layers =
-        resources.worker_paged_prefill_layers(worker);
+    const LlmPagedPrefillLayerDescriptor* const layers = resources.worker_paged_prefill_layers(worker);
     const LlmPagedPrefillKvAssignmentDescriptor* const assignments =
-        reads_kv ? resources.worker_paged_prefill_assignments(
-                       worker, scenario.scenario)
-                 : nullptr;
+        reads_kv ? resources.worker_paged_prefill_assignments(worker, scenario.scenario) : nullptr;
     if (layers == nullptr || (reads_kv && assignments == nullptr)) {
       throw std::logic_error("missing paged-prefill descriptors");
     }
 
     for (size_t operation = 0; operation < scenario.work_units; ++operation) {
-      for (size_t local_layer = 0;
-           local_layer < cpu_plan.layer_descriptors_per_worker;
-           ++local_layer) {
+      for (size_t local_layer = 0; local_layer < cpu_plan.layer_descriptors_per_worker; ++local_layer) {
         const LlmPagedPrefillLayerDescriptor& layer = layers[local_layer];
-        if (reads_weight) {
-          absorb(checksum.weight, layer.weight_ptr, layer.weight_bytes);
-        }
-        if (!reads_kv) {
-          continue;
-        }
-        for (size_t local_assignment = 0;
-             local_assignment < layer.assignment_count; ++local_assignment) {
+        if (reads_weight) absorb(checksum.weight, layer.weight_ptr, layer.weight_bytes);
+        if (!reads_kv) continue;
+        for (size_t local_assignment = 0; local_assignment < layer.assignment_count; ++local_assignment) {
           const LlmPagedPrefillKvAssignmentDescriptor& assignment =
               assignments[layer.first_assignment_index + local_assignment];
-          const size_t assignment_end =
-              assignment.first_logical_block + assignment.owned_block_count;
-          if (assignment.owned_block_count == 0) {
-            continue;
-          }
+          if (assignment.owned_block_count == 0) continue;
+          const size_t assignment_end = assignment.first_logical_block + assignment.owned_block_count;
 
-          for (size_t logical_block = assignment.first_logical_block;
-               logical_block < assignment_end; ++logical_block) {
-            const uint32_t physical_id =
-                assignment.block_table_row[logical_block];
+          for (size_t logical_block = assignment.first_logical_block; logical_block < assignment_end; ++logical_block) {
+            const uint32_t physical_id = assignment.block_table_row[logical_block];
             const size_t global_logical_index =
-                assignment.batch_sequence_index *
-                    assignment.blocks_per_sequence +
-                logical_block;
-            scalar_mix_paged_lookup(checksum.k, global_logical_index,
-                                    physical_id, 0, operation);
+                assignment.batch_sequence_index * assignment.blocks_per_sequence + logical_block;
+            scalar_mix_paged_lookup(checksum.k, global_logical_index, physical_id, 0, operation);
             ++result.lookup_count;
           }
 
-          const size_t first_owned_token =
-              assignment.first_logical_block * assignment.block_tokens;
-          size_t tile_end =
-              (first_owned_token / assignment.attention_query_tile_tokens) *
-              assignment.attention_query_tile_tokens;
+          const size_t first_owned_token = assignment.first_logical_block * assignment.block_tokens;
+          size_t tile_end = (first_owned_token / assignment.attention_query_tile_tokens) *
+                            assignment.attention_query_tile_tokens;
           while (tile_end < assignment.prompt_tokens) {
-            tile_end += std::min<size_t>(
-                assignment.attention_query_tile_tokens,
-                assignment.prompt_tokens - tile_end);
+            tile_end += std::min<size_t>(assignment.attention_query_tile_tokens, assignment.prompt_tokens - tile_end);
             const size_t prefix_bytes = tile_end * assignment.record_bytes;
             const size_t prefix_blocks =
-                tile_end / assignment.block_tokens +
-                (tile_end % assignment.block_tokens != 0 ? 1 : 0);
+                tile_end / assignment.block_tokens + (tile_end % assignment.block_tokens != 0 ? 1 : 0);
             const size_t visit_end = std::min(prefix_blocks, assignment_end);
 
-            for (size_t logical_block = assignment.first_logical_block;
-                 logical_block < visit_end; ++logical_block) {
-              const uint32_t physical_id =
-                  assignment.block_table_row[logical_block];
-              const size_t global_logical_index =
-                  assignment.batch_sequence_index *
-                      assignment.blocks_per_sequence +
-                  logical_block;
-              const size_t first_logical_byte =
-                  logical_block * assignment.block_bytes;
-              const size_t visit_bytes = std::min<size_t>(
-                  assignment.block_bytes,
-                  prefix_bytes - first_logical_byte);
-              scalar_mix_paged_lookup(checksum.k, global_logical_index,
-                                      physical_id, 1, operation);
-              ++result.lookup_count;
-              scalar_absorb_prefill_visit(
-                  checksum.k, scenario.scenario_seed, operation,
-                  assignment.layer_index,
-                  assignment.batch_sequence_index, LlmPrefillKvDomain::K,
-                  first_logical_byte, visit_bytes);
-            }
-            for (size_t logical_block = assignment.first_logical_block;
-                 logical_block < visit_end; ++logical_block) {
-              const uint32_t physical_id =
-                  assignment.block_table_row[logical_block];
-              const size_t global_logical_index =
-                  assignment.batch_sequence_index *
-                      assignment.blocks_per_sequence +
-                  logical_block;
-              const size_t first_logical_byte =
-                  logical_block * assignment.block_bytes;
-              const size_t visit_bytes = std::min<size_t>(
-                  assignment.block_bytes,
-                  prefix_bytes - first_logical_byte);
-              scalar_mix_paged_lookup(checksum.v, global_logical_index,
-                                      physical_id, 2, operation);
-              ++result.lookup_count;
-              scalar_absorb_prefill_visit(
-                  checksum.v, scenario.scenario_seed, operation,
-                  assignment.layer_index,
-                  assignment.batch_sequence_index, LlmPrefillKvDomain::V,
-                  first_logical_byte, visit_bytes);
+            for (bool is_k : {true, false}) {
+              LlmReadChecksumComponent& target = is_k ? checksum.k : checksum.v;
+              const uint64_t visit_kind = is_k ? 1 : 2;
+              const LlmPrefillKvDomain domain = is_k ? LlmPrefillKvDomain::K : LlmPrefillKvDomain::V;
+              for (size_t logical_block = assignment.first_logical_block; logical_block < visit_end; ++logical_block) {
+                const uint32_t physical_id = assignment.block_table_row[logical_block];
+                const size_t global_logical_index =
+                    assignment.batch_sequence_index * assignment.blocks_per_sequence + logical_block;
+                const size_t first_logical_byte = logical_block * assignment.block_bytes;
+                const size_t visit_bytes =
+                    std::min<size_t>(assignment.block_bytes, prefix_bytes - first_logical_byte);
+                scalar_mix_paged_lookup(target, global_logical_index, physical_id, visit_kind, operation);
+                ++result.lookup_count;
+                scalar_absorb_prefill_visit(target, scenario.scenario_seed, operation, assignment.layer_index,
+                                            assignment.batch_sequence_index, domain, first_logical_byte, visit_bytes);
+              }
             }
           }
         }
@@ -605,7 +496,7 @@ class LlmMemoryExecutorTest : public FakeMemorySystemCallsTest {};
 
 }  // namespace
 
-TEST_F(LlmMemoryExecutorTest, BufferAndAppendGeneratorsMatchIndependentGoldenVectors) {
+TEST_F(LlmMemoryExecutorTest, GeneratorsAndRunFoldMatchGoldenVectors) {
   EXPECT_EQ(llm_buffer_pattern_word(0, 0), 0x9E3779B97F4A7C15ULL);
   EXPECT_EQ(llm_buffer_pattern_word(0, 1), 0x3C6EF372FE94F82AULL);
   EXPECT_EQ(llm_buffer_pattern_word(std::numeric_limits<uint64_t>::max(), 0), 0x9E3779B97F4A7C14ULL);
@@ -619,67 +510,106 @@ TEST_F(LlmMemoryExecutorTest, BufferAndAppendGeneratorsMatchIndependentGoldenVec
   EXPECT_EQ(llm_scenario_flags(LlmScenario::KvOnly), 2u);
   EXPECT_EQ(llm_scenario_flags(LlmScenario::Mixed), 3u);
   EXPECT_EQ(llm_scenario_flags(static_cast<LlmScenario>(255)), 0u);
+
+  LlmWorkerChecksum worker;
+  worker.weight = initial_llm_read_checksum(LlmChecksumComponent::Weight);
+  worker.k = initial_llm_read_checksum(LlmChecksumComponent::K);
+  worker.v = initial_llm_read_checksum(LlmChecksumComponent::V);
+  std::array<uint8_t, 19> span{};
+  for (size_t index = 0; index < span.size(); ++index) {
+    span[index] = static_cast<uint8_t>(index);
+  }
+  absorb(worker.weight, span.data(), span.size());
+  const LlmRunChecksum folded = fold_llm_worker_checksums(&worker, 1);
+  EXPECT_EQ(folded.state_a, 0xBCA46801BE6585DBULL);
+  EXPECT_EQ(folded.state_b, 0xEAAC493C97E06CF7ULL);
 }
 
-TEST_F(LlmMemoryExecutorTest, AuxiliaryAdmissionFailsBeforeMmapAndExactEstimateCanBeReplanned) {
+TEST_F(LlmMemoryExecutorTest, BufferAllocationAdmissionAtomicCleanupAndVariantRejection) {
   const LlmGeometryRequest geometry = {64, 1, 1, 1, 19, 1, 2, 1};
-  LlmMemoryWorkPlanRequest request = plan_request(geometry, 2);
-  const LlmMemoryWorkPlan under_budgeted = build_llm_memory_work_plan(request);
-  ASSERT_TRUE(under_budgeted.valid) << under_budgeted.reason_code;
-  const LlmExecutorAuxiliaryEstimate estimate = calculate_llm_executor_auxiliary_estimate(under_budgeted);
-  ASSERT_TRUE(estimate.valid) << estimate.reason_code;
-  EXPECT_GT(estimate.checksum_auxiliary_bytes, 0u);
-  EXPECT_GT(estimate.orchestration_auxiliary_bytes, 0u);
-  EXPECT_EQ(estimate.total_auxiliary_bytes, estimate.checksum_auxiliary_bytes + estimate.orchestration_auxiliary_bytes);
 
-  LlmBufferSet buffers;
-  const LlmBufferAllocationResult rejected = allocate_llm_buffers(under_budgeted, buffers);
-  EXPECT_FALSE(rejected.valid);
-  EXPECT_EQ(rejected.reason_code, LlmExecutorReason::MEMORY_BUDGET_EXCEEDED);
-  EXPECT_FALSE(buffers.complete());
-  EXPECT_EQ(state.map_calls, 0u);
+  {
+    SCOPED_TRACE("auxiliary-admission");
+    LlmMemoryWorkPlanRequest request = plan_request(geometry, 2);
+    const LlmMemoryWorkPlan under_budgeted = build_llm_memory_work_plan(request);
+    ASSERT_TRUE(under_budgeted.valid) << under_budgeted.reason_code;
+    const LlmExecutorAuxiliaryEstimate estimate = calculate_llm_executor_auxiliary_estimate(under_budgeted);
+    ASSERT_TRUE(estimate.valid) << estimate.reason_code;
+    EXPECT_GT(estimate.checksum_auxiliary_bytes, 0u);
+    EXPECT_GT(estimate.orchestration_auxiliary_bytes, 0u);
+    EXPECT_EQ(estimate.total_auxiliary_bytes,
+              estimate.checksum_auxiliary_bytes + estimate.orchestration_auxiliary_bytes);
 
-  request.checksum_auxiliary_bytes = estimate.checksum_auxiliary_bytes;
-  request.orchestration_auxiliary_bytes = estimate.orchestration_auxiliary_bytes;
-  const LlmMemoryWorkPlan admitted = build_llm_memory_work_plan(request);
-  ASSERT_TRUE(admitted.valid) << admitted.reason_code;
-  const LlmBufferAllocationResult allocated = allocate_llm_buffers(admitted, buffers);
-  ASSERT_TRUE(allocated.valid) << allocated.reason_code;
-  EXPECT_TRUE(buffers.complete());
-  EXPECT_EQ(state.map_calls, 3u);
-  EXPECT_EQ(state.advise_calls, 3u);
-  EXPECT_EQ(state.last_advice, MADV_WILLNEED);
-  EXPECT_EQ(allocated.memory_budget.request.checksum_auxiliary_bytes, estimate.checksum_auxiliary_bytes);
-}
+    LlmBufferSet buffers;
+    const LlmBufferAllocationResult rejected = allocate_llm_buffers(under_budgeted, buffers);
+    EXPECT_FALSE(rejected.valid);
+    EXPECT_EQ(rejected.reason_code, LlmExecutorReason::MEMORY_BUDGET_EXCEEDED);
+    EXPECT_FALSE(buffers.complete());
+    EXPECT_EQ(state.map_calls, 0u);
 
-TEST_F(LlmMemoryExecutorTest, ThreeMappingAllocationIsAtomicForEveryFailurePosition) {
-  const LlmMemoryWorkPlan plan = build_executor_ready_plan({64, 1, 1, 1, 19, 1, 2, 1}, 2);
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
+    request.checksum_auxiliary_bytes = estimate.checksum_auxiliary_bytes;
+    request.orchestration_auxiliary_bytes = estimate.orchestration_auxiliary_bytes;
+    const LlmMemoryWorkPlan admitted = build_llm_memory_work_plan(request);
+    ASSERT_TRUE(admitted.valid) << admitted.reason_code;
+    const LlmBufferAllocationResult allocated = allocate_llm_buffers(admitted, buffers);
+    ASSERT_TRUE(allocated.valid) << allocated.reason_code;
+    EXPECT_TRUE(buffers.complete());
+    EXPECT_EQ(state.map_calls, 3u);
+    EXPECT_EQ(state.advise_calls, 3u);
+    EXPECT_EQ(state.last_advice, MADV_WILLNEED);
+    EXPECT_EQ(allocated.memory_budget.request.checksum_auxiliary_bytes, estimate.checksum_auxiliary_bytes);
+  }
 
-  LlmBufferSet retained;
-  ASSERT_TRUE(allocate_llm_buffers(plan, retained).valid);
-  const std::array<void*, 3> retained_pointers = {retained.weight.get(), retained.k.get(), retained.v.get()};
+  state = {};
+  {
+    SCOPED_TRACE("atomic-cleanup");
+    const LlmMemoryWorkPlan plan = build_executor_ready_plan(geometry, 2);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
 
-  const size_t maps_before_replacement = state.map_calls;
-  const LlmBufferAllocationResult replacement = allocate_llm_buffers(plan, retained);
-  EXPECT_FALSE(replacement.valid);
-  EXPECT_EQ(replacement.reason_code, LlmExecutorReason::OUTPUT_NOT_EMPTY);
-  EXPECT_EQ(retained.weight.get(), retained_pointers[0]);
-  EXPECT_EQ(retained.k.get(), retained_pointers[1]);
-  EXPECT_EQ(retained.v.get(), retained_pointers[2]);
-  EXPECT_EQ(state.map_calls, maps_before_replacement);
+    LlmBufferSet retained;
+    ASSERT_TRUE(allocate_llm_buffers(plan, retained).valid);
+    const std::array<void*, 3> retained_pointers = {retained.weight.get(), retained.k.get(), retained.v.get()};
 
-  for (size_t failure_position = 1; failure_position <= 3; ++failure_position) {
-    LlmBufferSet candidate;
-    state.fail_map_on_call = state.map_calls + failure_position;
-    const size_t unmaps_before = state.unmap_calls;
-    testing::internal::CaptureStderr();
-    const LlmBufferAllocationResult result = allocate_llm_buffers(plan, candidate);
-    static_cast<void>(testing::internal::GetCapturedStderr());
-    EXPECT_FALSE(result.valid) << failure_position;
-    EXPECT_FALSE(candidate.complete()) << failure_position;
-    EXPECT_EQ(state.unmap_calls, unmaps_before + failure_position - 1) << failure_position;
-    state.fail_map_on_call = 0;
+    const size_t maps_before_replacement = state.map_calls;
+    const LlmBufferAllocationResult replacement = allocate_llm_buffers(plan, retained);
+    EXPECT_FALSE(replacement.valid);
+    EXPECT_EQ(replacement.reason_code, LlmExecutorReason::OUTPUT_NOT_EMPTY);
+    EXPECT_EQ(retained.weight.get(), retained_pointers[0]);
+    EXPECT_EQ(retained.k.get(), retained_pointers[1]);
+    EXPECT_EQ(retained.v.get(), retained_pointers[2]);
+    EXPECT_EQ(state.map_calls, maps_before_replacement);
+
+    for (size_t failure_position = 1; failure_position <= 3; ++failure_position) {
+      LlmBufferSet candidate;
+      state.fail_map_on_call = state.map_calls + failure_position;
+      const size_t unmaps_before = state.unmap_calls;
+      testing::internal::CaptureStderr();
+      const LlmBufferAllocationResult result = allocate_llm_buffers(plan, candidate);
+      static_cast<void>(testing::internal::GetCapturedStderr());
+      EXPECT_FALSE(result.valid) << failure_position;
+      EXPECT_FALSE(candidate.complete()) << failure_position;
+      EXPECT_EQ(state.unmap_calls, unmaps_before + failure_position - 1) << failure_position;
+      state.fail_map_on_call = 0;
+    }
+  }
+
+  state = {};
+  {
+    SCOPED_TRACE("backend-variant-mismatch");
+    LlmMemoryWorkPlan plan = build_executor_ready_plan(geometry, 2);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    plan.backend_execution_plan = LlmMetalExecutionPlan{};
+
+    const LlmExecutorAuxiliaryEstimate auxiliary = calculate_llm_executor_auxiliary_estimate(plan);
+    EXPECT_FALSE(auxiliary.valid);
+    EXPECT_EQ(auxiliary.reason_code, LlmExecutorReason::INVALID_WORK_PLAN);
+
+    LlmBufferSet buffers;
+    const LlmBufferAllocationResult allocation = allocate_llm_buffers(plan, buffers);
+    EXPECT_FALSE(allocation.valid);
+    EXPECT_EQ(allocation.reason_code, LlmExecutorReason::INVALID_WORK_PLAN);
+    EXPECT_FALSE(buffers.complete());
+    EXPECT_EQ(state.map_calls, 0u);
   }
 }
 
@@ -759,21 +689,16 @@ TEST_F(LlmMemoryExecutorTest, PreparationMaterializesExactDescriptorsPatternsAnd
   EXPECT_TRUE(resources.valid);
 }
 
-TEST_F(LlmMemoryExecutorTest,
-       PrefillPreparationMaterializesScenarioSetsAndWeightsOnlyUsesNullKv) {
-  const LlmMemoryWorkPlan plan =
-      build_executor_ready_plan(prefill_geometry(), 3);
+TEST_F(LlmMemoryExecutorTest, PrefillPreparationMaterializesScenarioSetsAndWeightsOnlyUsesNullKv) {
+  const LlmMemoryWorkPlan plan = build_executor_ready_plan(prefill_geometry(), 3);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
   const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
   ASSERT_TRUE(cpu_plan.prefill.has_value());
-  const size_t rows =
-      plan.geometry.layer_count * plan.geometry.batch_size;
-  ASSERT_EQ(cpu_plan.sequence_descriptors_per_worker,
-            rows * kLlmScenarioCount);
+  const size_t rows = plan.geometry.layer_count * plan.geometry.batch_size;
+  ASSERT_EQ(cpu_plan.sequence_descriptors_per_worker, rows * kLlmScenarioCount);
 
   LlmExecutionResources resources;
-  const LlmResourcePreparationResult prepared =
-      prepare_llm_execution_resources(plan, resources);
+  const LlmResourcePreparationResult prepared = prepare_llm_execution_resources(plan, resources);
   ASSERT_TRUE(prepared.valid) << prepared.reason_code;
   EXPECT_EQ(resources.layer_descriptors, nullptr);
   EXPECT_EQ(resources.sequence_descriptors, nullptr);
@@ -784,34 +709,24 @@ TEST_F(LlmMemoryExecutorTest,
   EXPECT_NE(resources.weight_references, nullptr);
   EXPECT_EQ(resources.k_references, nullptr);
   EXPECT_EQ(resources.v_references, nullptr);
-  EXPECT_EQ(resources.initialization.k_bytes,
-            plan.geometry.k_mapping_bytes);
-  EXPECT_EQ(resources.initialization.v_bytes,
-            plan.geometry.v_mapping_bytes);
+  EXPECT_EQ(resources.initialization.k_bytes, plan.geometry.k_mapping_bytes);
+  EXPECT_EQ(resources.initialization.v_bytes, plan.geometry.v_mapping_bytes);
 
-  const auto* const k =
-      static_cast<const uint8_t*>(resources.buffers.k.get());
-  const auto* const v =
-      static_cast<const uint8_t*>(resources.buffers.v.get());
+  const auto* const k = static_cast<const uint8_t*>(resources.buffers.k.get());
+  const auto* const v = static_cast<const uint8_t*>(resources.buffers.v.get());
   for (size_t worker = 0; worker < cpu_plan.effective_workers; ++worker) {
-    const LlmPrefillLayerDescriptor* const layers =
-        resources.worker_prefill_layers(worker);
+    const LlmPrefillLayerDescriptor* const layers = resources.worker_prefill_layers(worker);
     ASSERT_NE(layers, nullptr);
     for (size_t layer = 0; layer < plan.geometry.layer_count; ++layer) {
-      EXPECT_EQ(layers[layer].first_sequence_index,
-                layer * plan.geometry.batch_size);
-      EXPECT_EQ(layers[layer].sequence_count,
-                plan.geometry.batch_size);
+      EXPECT_EQ(layers[layer].first_sequence_index, layer * plan.geometry.batch_size);
+      EXPECT_EQ(layers[layer].sequence_count, plan.geometry.batch_size);
       EXPECT_EQ(layers[layer].layer_index, layer);
       EXPECT_EQ(layers[layer].reserved_zero, 0u);
     }
     const LlmPrefillKvSequenceDescriptor* const weights =
-        resources.worker_prefill_sequences(worker,
-                                           LlmScenario::WeightsOnly);
-    const LlmPrefillKvSequenceDescriptor* const kv =
-        resources.worker_prefill_sequences(worker, LlmScenario::KvOnly);
-    const LlmPrefillKvSequenceDescriptor* const mixed =
-        resources.worker_prefill_sequences(worker, LlmScenario::Mixed);
+        resources.worker_prefill_sequences(worker, LlmScenario::WeightsOnly);
+    const LlmPrefillKvSequenceDescriptor* const kv = resources.worker_prefill_sequences(worker, LlmScenario::KvOnly);
+    const LlmPrefillKvSequenceDescriptor* const mixed = resources.worker_prefill_sequences(worker, LlmScenario::Mixed);
     ASSERT_NE(weights, nullptr);
     ASSERT_NE(kv, nullptr);
     ASSERT_NE(mixed, nullptr);
@@ -821,44 +736,32 @@ TEST_F(LlmMemoryExecutorTest,
       EXPECT_EQ(weights[row].k_owned_ptr, nullptr);
       EXPECT_EQ(weights[row].v_owned_ptr, nullptr);
       EXPECT_EQ(weights[row].owned_token_count, 0u);
-      for (const LlmPrefillKvSequenceDescriptor* descriptor :
-           {kv + row, mixed + row}) {
-        const size_t descriptor_end =
-            descriptor->first_token + descriptor->owned_token_count;
-        EXPECT_LE(descriptor_end,
-                  plan.geometry.prefill->prompt_tokens);
-        EXPECT_EQ(descriptor->prompt_tokens,
-                  plan.geometry.prefill->prompt_tokens);
-        EXPECT_EQ(descriptor->attention_query_tile_tokens,
-                  plan.geometry.prefill->attention_query_tile_tokens);
-        EXPECT_EQ(descriptor->record_bytes,
-                  plan.geometry.k_or_v_record_bytes_per_layer);
+      for (const LlmPrefillKvSequenceDescriptor* descriptor : {kv + row, mixed + row}) {
+        EXPECT_LE(descriptor->first_token + descriptor->owned_token_count, plan.geometry.prefill->prompt_tokens);
+        EXPECT_EQ(descriptor->prompt_tokens, plan.geometry.prefill->prompt_tokens);
+        EXPECT_EQ(descriptor->attention_query_tile_tokens, plan.geometry.prefill->attention_query_tile_tokens);
+        EXPECT_EQ(descriptor->record_bytes, plan.geometry.k_or_v_record_bytes_per_layer);
         EXPECT_EQ(descriptor->reserved_zero, 0u);
         if (descriptor->owned_token_count != 0) {
           EXPECT_GE(descriptor->k_owned_ptr, k);
-          EXPECT_LT(descriptor->k_owned_ptr,
-                    k + plan.geometry.k_mapping_bytes);
+          EXPECT_LT(descriptor->k_owned_ptr, k + plan.geometry.k_mapping_bytes);
           EXPECT_GE(descriptor->v_owned_ptr, v);
-          EXPECT_LT(descriptor->v_owned_ptr,
-                    v + plan.geometry.v_mapping_bytes);
+          EXPECT_LT(descriptor->v_owned_ptr, v + plan.geometry.v_mapping_bytes);
         }
       }
     }
   }
 
-  const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(
-      plan, LlmScenario::WeightsOnly, 2, true);
+  const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(plan, LlmScenario::WeightsOnly, 2, true);
   ASSERT_TRUE(scenario.valid) << scenario.reason_code;
-  const LlmExpectedChecksumResult expected =
-      calculate_llm_expected_checksums(plan, scenario, resources);
+  const LlmExpectedChecksumResult expected = calculate_llm_expected_checksums(plan, scenario, resources);
   ASSERT_TRUE(expected.valid) << expected.reason_code;
   ScopedExecutorTimer timer_scope;
   auto timer = HighResTimer::create();
   ASSERT_TRUE(timer.has_value());
   FakeKernelContext context;
   context.expected = &expected.workers;
-  const LlmExecutorResult result = execute_llm_scenario(
-      plan, scenario, resources, *timer, {fake_kernel, &context});
+  const LlmExecutorResult result = execute_llm_scenario(plan, scenario, resources, *timer, {fake_kernel, &context});
   ASSERT_TRUE(result.valid) << result.reason_code;
   ASSERT_EQ(context.invocations.size(), cpu_plan.effective_workers);
   for (const LlmKernelInvocation& invocation : context.invocations) {
@@ -867,85 +770,62 @@ TEST_F(LlmMemoryExecutorTest,
     EXPECT_EQ(invocation.sequences, nullptr);
     EXPECT_EQ(invocation.paged_layers, nullptr);
     EXPECT_EQ(invocation.paged_assignments, nullptr);
-    EXPECT_EQ(invocation.prefill_layers,
-              resources.worker_prefill_layers(invocation.worker_index));
+    EXPECT_EQ(invocation.prefill_layers, resources.worker_prefill_layers(invocation.worker_index));
     EXPECT_EQ(invocation.prefill_sequences, nullptr);
     EXPECT_EQ(invocation.work_unit_count, 2u);
     EXPECT_EQ(invocation.scenario_flags, kLlmScenarioFlagWeight);
   }
 }
 
-TEST_F(LlmMemoryExecutorTest,
-       PrefillNoallocCanonicalValidatorAcceptsExactTileBoundaries) {
-  struct Case {
-    size_t prompt_tokens;
-    size_t query_tile_tokens;
-    size_t record_bytes;
-    size_t workers;
-  };
-  constexpr std::array<Case, 3> kCases = {
-      {{4, 1, 31, 1}, {3, 3, 32, 3}, {5, 2, 33, 3}}};
-  for (const Case& test_case : kCases) {
-    SCOPED_TRACE(::testing::Message()
-                 << "P=" << test_case.prompt_tokens
-                 << " Q=" << test_case.query_tile_tokens
-                 << " R=" << test_case.record_bytes
-                 << " workers=" << test_case.workers);
-    const LlmMemoryWorkPlan plan = build_executor_ready_plan(
-        prefill_geometry(test_case.prompt_tokens,
-                         test_case.query_tile_tokens,
-                         test_case.record_bytes),
-        test_case.workers);
-    ASSERT_TRUE(plan.valid) << plan.reason_code;
-    EXPECT_TRUE(validate_llm_prefill_cpu_execution_evidence(plan));
+TEST_F(LlmMemoryExecutorTest, PrefillCanonicalValidatorAcceptsExactBoundariesAndRejectsTampering) {
+  {
+    SCOPED_TRACE("exact-tile-boundaries");
+    struct Case {
+      size_t prompt_tokens;
+      size_t query_tile_tokens;
+      size_t record_bytes;
+      size_t workers;
+    };
+    constexpr std::array<Case, 3> kCases = {{{4, 1, 31, 1}, {3, 3, 32, 3}, {5, 2, 33, 3}}};
+    for (const Case& test_case : kCases) {
+      SCOPED_TRACE(::testing::Message() << "P=" << test_case.prompt_tokens << " Q=" << test_case.query_tile_tokens
+                                        << " R=" << test_case.record_bytes << " workers=" << test_case.workers);
+      const LlmMemoryWorkPlan plan = build_executor_ready_plan(
+          prefill_geometry(test_case.prompt_tokens, test_case.query_tile_tokens, test_case.record_bytes),
+          test_case.workers);
+      ASSERT_TRUE(plan.valid) << plan.reason_code;
+      EXPECT_TRUE(validate_llm_prefill_cpu_execution_evidence(plan));
 
-    LlmExecutionResources resources;
-    const LlmResourcePreparationResult result =
-        prepare_llm_execution_resources(plan, resources);
-    EXPECT_TRUE(result.valid) << result.reason_code;
+      LlmExecutionResources resources;
+      const LlmResourcePreparationResult result = prepare_llm_execution_resources(plan, resources);
+      EXPECT_TRUE(result.valid) << result.reason_code;
+    }
   }
-}
 
-TEST_F(LlmMemoryExecutorTest,
-       PrefillCanonicalOwnershipAndIdentityTamperingIsRejectedBeforeMmap) {
+  state = {};
   for (size_t tamper = 0; tamper < 9; ++tamper) {
     SCOPED_TRACE(::testing::Message() << "tamper=" << tamper);
-    LlmMemoryWorkPlan plan =
-        build_executor_ready_plan(prefill_geometry(), 2);
+    LlmMemoryWorkPlan plan = build_executor_ready_plan(prefill_geometry(), 2);
     ASSERT_TRUE(plan.valid) << plan.reason_code;
-    LlmCpuExecutionPlan* const cpu_plan =
-        get_llm_cpu_execution_plan(plan);
+    LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
     ASSERT_NE(cpu_plan, nullptr);
     ASSERT_TRUE(cpu_plan->prefill.has_value());
-    const size_t rows =
-        plan.geometry.layer_count * plan.geometry.batch_size;
+    const size_t rows = plan.geometry.layer_count * plan.geometry.batch_size;
     LlmPrefillCpuScenarioExecutionPlan& kv_scenario =
-        cpu_plan->prefill->scenarios[
-            static_cast<size_t>(LlmScenario::KvOnly)];
+        cpu_plan->prefill->scenarios[static_cast<size_t>(LlmScenario::KvOnly)];
 
     if (tamper == 0) {
-      const size_t scenario_base =
-          static_cast<size_t>(LlmScenario::KvOnly) * rows;
+      const size_t scenario_base = static_cast<size_t>(LlmScenario::KvOnly) * rows;
       std::array<size_t, 2> ordered_workers = {0, 1};
-      std::sort(ordered_workers.begin(), ordered_workers.end(),
-                [&](size_t lhs, size_t rhs) {
-                  return cpu_plan->workers[lhs]
-                             .prefill_sequences[scenario_base]
-                             .first_token <
-                         cpu_plan->workers[rhs]
-                             .prefill_sequences[scenario_base]
-                             .first_token;
-                });
-      LlmPrefillKvSequenceRangeTemplate& left =
-          cpu_plan->workers[ordered_workers[0]]
-              .prefill_sequences[scenario_base];
-      LlmPrefillKvSequenceRangeTemplate& right =
-          cpu_plan->workers[ordered_workers[1]]
-              .prefill_sequences[scenario_base];
+      std::sort(ordered_workers.begin(), ordered_workers.end(), [&](size_t lhs, size_t rhs) {
+        return cpu_plan->workers[lhs].prefill_sequences[scenario_base].first_token <
+               cpu_plan->workers[rhs].prefill_sequences[scenario_base].first_token;
+      });
+      LlmPrefillKvSequenceRangeTemplate& left = cpu_plan->workers[ordered_workers[0]].prefill_sequences[scenario_base];
+      LlmPrefillKvSequenceRangeTemplate& right = cpu_plan->workers[ordered_workers[1]].prefill_sequences[scenario_base];
       ASSERT_GT(left.owned_token_count, 0u);
       ASSERT_GT(right.owned_token_count, 0u);
-      const size_t record_bytes =
-          plan.geometry.k_or_v_record_bytes_per_layer;
+      const size_t record_bytes = plan.geometry.k_or_v_record_bytes_per_layer;
       if (left.owned_token_count > 1) {
         --left.owned_token_count;
         left.k_owned.span_bytes -= record_bytes;
@@ -968,8 +848,7 @@ TEST_F(LlmMemoryExecutorTest,
       }
     } else if (tamper == 1) {
       ASSERT_GT(kv_scenario.ownership_scopes.size(), 1u);
-      std::swap(kv_scenario.ownership_scopes[0],
-                kv_scenario.ownership_scopes[1]);
+      std::swap(kv_scenario.ownership_scopes[0], kv_scenario.ownership_scopes[1]);
     } else if (tamper == 2) {
       ASSERT_FALSE(kv_scenario.ownership_scopes.empty());
       kv_scenario.ownership_scopes[0].identity += "|tampered=1";
@@ -983,10 +862,8 @@ TEST_F(LlmMemoryExecutorTest,
       ASSERT_FALSE(cpu_plan->workers[0].prefill_sequences.empty());
       cpu_plan->workers[0].prefill_sequences.pop_back();
     } else {
-      const size_t scenario_base =
-          static_cast<size_t>(LlmScenario::KvOnly) * rows;
-      LlmPrefillKvSequenceRangeTemplate& descriptor =
-          cpu_plan->workers[0].prefill_sequences[scenario_base];
+      const size_t scenario_base = static_cast<size_t>(LlmScenario::KvOnly) * rows;
+      LlmPrefillKvSequenceRangeTemplate& descriptor = cpu_plan->workers[0].prefill_sequences[scenario_base];
       ASSERT_GT(descriptor.owned_token_count, 0u);
       if (tamper == 6) {
         ++descriptor.v_owned.offset_bytes;
@@ -997,8 +874,7 @@ TEST_F(LlmMemoryExecutorTest,
 
     const size_t map_calls_before = state.map_calls;
     LlmExecutionResources resources;
-    const LlmResourcePreparationResult result =
-        prepare_llm_execution_resources(plan, resources);
+    const LlmResourcePreparationResult result = prepare_llm_execution_resources(plan, resources);
     EXPECT_FALSE(result.valid);
     EXPECT_EQ(result.reason_code, LlmExecutorReason::INVALID_WORK_PLAN);
     EXPECT_EQ(state.map_calls, map_calls_before);
@@ -1008,69 +884,29 @@ TEST_F(LlmMemoryExecutorTest,
   }
 }
 
-TEST_F(LlmMemoryExecutorTest,
-       PrefillBoundaryCorruptionFailsExcludedPostValidationIntegration) {
-  const LlmMemoryWorkPlan plan =
-      build_executor_ready_plan(prefill_geometry(), 2);
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  LlmExecutionResources resources;
-  const LlmResourcePreparationResult prepared =
-      prepare_llm_execution_resources(plan, resources);
-  ASSERT_TRUE(prepared.valid) << prepared.reason_code;
-  const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(
-      plan, LlmScenario::Mixed, 2, true);
-  ASSERT_TRUE(scenario.valid) << scenario.reason_code;
-  PrefillCorruptionContext context;
-  ScopedExecutorTimer timer_scope;
-  auto timer = HighResTimer::create();
-  ASSERT_TRUE(timer.has_value());
-
-  const LlmExecutorResult result = execute_llm_scenario(
-      plan, scenario, resources, *timer,
-      {prefill_corrupting_kernel, &context});
-  EXPECT_TRUE(context.corrupted.load(std::memory_order_acquire));
-  EXPECT_FALSE(result.valid);
-  EXPECT_EQ(result.reason_code,
-            LlmExecutorReason::PREFILL_POST_VALIDATION_FAILED);
-  EXPECT_TRUE(result.kernel_succeeded);
-  EXPECT_TRUE(result.checksum_evaluated);
-  EXPECT_TRUE(result.checksum_valid);
-  EXPECT_TRUE(result.post_validation_evaluated);
-  EXPECT_FALSE(result.post_validation_valid);
-}
-
-TEST_F(LlmMemoryExecutorTest,
-       PagedPrefillAdmissionMaterializesScenarioMajorAbiAndPhysicalReferences) {
-  LlmMemoryWorkPlanRequest request =
-      plan_request(paged_prefill_geometry(7, 3, 2, 33, 2, 2), 3);
+TEST_F(LlmMemoryExecutorTest, PagedPrefillAdmissionMaterializesScenarioMajorAbiAndPhysicalReferences) {
+  LlmMemoryWorkPlanRequest request = plan_request(paged_prefill_geometry(7, 3, 2, 33, 2, 2), 3);
   LlmMemoryWorkPlan plan = build_llm_memory_work_plan(request);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
-  const LlmExecutorAuxiliaryEstimate estimate =
-      calculate_llm_executor_auxiliary_estimate(plan);
+  const LlmExecutorAuxiliaryEstimate estimate = calculate_llm_executor_auxiliary_estimate(plan);
   ASSERT_TRUE(estimate.valid) << estimate.reason_code;
   const size_t maps_before_rejection = state.map_calls;
   LlmBufferSet rejected_buffers;
-  const LlmBufferAllocationResult rejected =
-      allocate_llm_buffers(plan, rejected_buffers);
+  const LlmBufferAllocationResult rejected = allocate_llm_buffers(plan, rejected_buffers);
   EXPECT_FALSE(rejected.valid);
-  EXPECT_EQ(rejected.reason_code,
-            LlmExecutorReason::MEMORY_BUDGET_EXCEEDED);
+  EXPECT_EQ(rejected.reason_code, LlmExecutorReason::MEMORY_BUDGET_EXCEEDED);
   EXPECT_EQ(state.map_calls, maps_before_rejection);
 
-  readmit_llm_memory_work_plan(plan, estimate.checksum_auxiliary_bytes,
-                              estimate.orchestration_auxiliary_bytes);
+  readmit_llm_memory_work_plan(plan, estimate.checksum_auxiliary_bytes, estimate.orchestration_auxiliary_bytes);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
   const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
   ASSERT_TRUE(cpu_plan.prefill.has_value());
   ASSERT_TRUE(cpu_plan.paged.has_value());
   const LlmPagedCpuExecutionPlan& paged = *cpu_plan.paged;
-  const size_t rows =
-      plan.geometry.layer_count * plan.geometry.batch_size;
-  ASSERT_EQ(cpu_plan.sequence_descriptors_per_worker,
-            rows * kLlmScenarioCount);
+  const size_t rows = plan.geometry.layer_count * plan.geometry.batch_size;
+  ASSERT_EQ(cpu_plan.sequence_descriptors_per_worker, rows * kLlmScenarioCount);
   LlmExecutionResources resources;
-  const LlmResourcePreparationResult prepared =
-      prepare_llm_execution_resources(plan, resources);
+  const LlmResourcePreparationResult prepared = prepare_llm_execution_resources(plan, resources);
   ASSERT_TRUE(prepared.valid) << prepared.reason_code;
   ASSERT_TRUE(resources.valid);
   EXPECT_EQ(resources.layer_descriptors, nullptr);
@@ -1084,76 +920,47 @@ TEST_F(LlmMemoryExecutorTest,
   ASSERT_NE(resources.paged_k_block_references, nullptr);
   ASSERT_NE(resources.paged_v_block_references, nullptr);
   EXPECT_EQ(resources.block_table, paged.block_table());
-  EXPECT_EQ(resources.block_table_entries,
-            paged.layout.block_table_entries);
+  EXPECT_EQ(resources.block_table_entries, paged.layout.block_table_entries);
   EXPECT_TRUE(resources.initialization.block_table_read_only);
-  EXPECT_EQ(resources.initialization.block_table_logical_bytes,
-            paged.block_table_logical_bytes);
-  EXPECT_EQ(resources.initialization.block_table_mapping_bytes,
-            paged.block_table_mapping_bytes);
-  EXPECT_EQ(resources.initialization.weight_bytes,
-            plan.geometry.active_weight_bytes_per_work_unit);
-  EXPECT_EQ(resources.initialization.k_bytes,
-            paged.layout.memory.k_physical_bytes);
-  EXPECT_EQ(resources.initialization.v_bytes,
-            paged.layout.memory.v_physical_bytes);
-  EXPECT_EQ(resources.initialization.k_layout_padding_bytes,
-            paged.layout.memory.k_layout_padding_bytes);
-  EXPECT_EQ(resources.initialization.v_layout_padding_bytes,
-            paged.layout.memory.v_layout_padding_bytes);
+  EXPECT_EQ(resources.initialization.block_table_logical_bytes, paged.block_table_logical_bytes);
+  EXPECT_EQ(resources.initialization.block_table_mapping_bytes, paged.block_table_mapping_bytes);
+  EXPECT_EQ(resources.initialization.weight_bytes, plan.geometry.active_weight_bytes_per_work_unit);
+  EXPECT_EQ(resources.initialization.k_bytes, paged.layout.memory.k_physical_bytes);
+  EXPECT_EQ(resources.initialization.v_bytes, paged.layout.memory.v_physical_bytes);
+  EXPECT_EQ(resources.initialization.k_layout_padding_bytes, paged.layout.memory.k_layout_padding_bytes);
+  EXPECT_EQ(resources.initialization.v_layout_padding_bytes, paged.layout.memory.v_layout_padding_bytes);
 
-  const auto* const weight =
-      static_cast<const uint8_t*>(resources.buffers.weight.get());
-  const auto* const k =
-      static_cast<const uint8_t*>(resources.buffers.k.get());
-  const auto* const v =
-      static_cast<const uint8_t*>(resources.buffers.v.get());
-  const size_t layer_pool_bytes =
-      paged.layout.physical_blocks_per_layer * paged.layout.block_bytes;
-  std::vector<size_t> valid_bytes_by_physical(
-      paged.layout.physical_blocks_per_layer, 0);
+  const auto* const weight = static_cast<const uint8_t*>(resources.buffers.weight.get());
+  const auto* const k = static_cast<const uint8_t*>(resources.buffers.k.get());
+  const auto* const v = static_cast<const uint8_t*>(resources.buffers.v.get());
+  const size_t layer_pool_bytes = paged.layout.physical_blocks_per_layer * paged.layout.block_bytes;
+  std::vector<size_t> valid_bytes_by_physical(paged.layout.physical_blocks_per_layer, 0);
   for (size_t batch = 0; batch < paged.layout.batch_size; ++batch) {
-    for (size_t logical_block = 0;
-         logical_block < paged.layout.blocks_per_sequence; ++logical_block) {
-      const uint32_t physical_id =
-          resources.block_table[batch * paged.layout.blocks_per_sequence +
-                                logical_block];
+    for (size_t logical_block = 0; logical_block < paged.layout.blocks_per_sequence; ++logical_block) {
+      const uint32_t physical_id = resources.block_table[batch * paged.layout.blocks_per_sequence + logical_block];
       ASSERT_LT(physical_id, valid_bytes_by_physical.size());
-      valid_bytes_by_physical[physical_id] =
-          logical_block + 1 == paged.layout.blocks_per_sequence
-              ? paged.layout.last_block_valid_bytes
-              : paged.layout.block_bytes;
+      valid_bytes_by_physical[physical_id] = logical_block + 1 == paged.layout.blocks_per_sequence
+                                                 ? paged.layout.last_block_valid_bytes
+                                                 : paged.layout.block_bytes;
     }
   }
   for (size_t layer = 0; layer < paged.layout.layer_count; ++layer) {
-    for (uint32_t physical_id = 0;
-         physical_id < paged.layout.physical_blocks_per_layer;
-         ++physical_id) {
-      SCOPED_TRACE(::testing::Message()
-                   << "layer=" << layer << " physical=" << physical_id);
+    for (uint32_t physical_id = 0; physical_id < paged.layout.physical_blocks_per_layer; ++physical_id) {
+      SCOPED_TRACE(::testing::Message() << "layer=" << layer << " physical=" << physical_id);
       ASSERT_GT(valid_bytes_by_physical[physical_id], 0u);
       const size_t block_offset =
-          layer * layer_pool_bytes +
-          static_cast<size_t>(physical_id) * paged.layout.block_bytes;
-      for (size_t block_byte = 0;
-           block_byte < paged.layout.block_bytes; ++block_byte) {
+          layer * layer_pool_bytes + static_cast<size_t>(physical_id) * paged.layout.block_bytes;
+      for (size_t block_byte = 0; block_byte < paged.layout.block_bytes; ++block_byte) {
         EXPECT_EQ(k[block_offset + block_byte],
-                  expected_paged_buffer_byte(
-                      plan.k_buffer_seed, layer, physical_id, block_byte));
+                  expected_paged_buffer_byte(plan.k_buffer_seed, layer, physical_id, block_byte));
         EXPECT_EQ(v[block_offset + block_byte],
-                  expected_paged_buffer_byte(
-                      plan.v_buffer_seed, layer, physical_id, block_byte));
+                  expected_paged_buffer_byte(plan.v_buffer_seed, layer, physical_id, block_byte));
       }
-      const size_t reference_index =
-          layer * paged.layout.physical_blocks_per_layer + physical_id;
-      const LlmStaticSpanReference expected_k = reference_span(
-          k + block_offset, valid_bytes_by_physical[physical_id]);
-      const LlmStaticSpanReference expected_v = reference_span(
-          v + block_offset, valid_bytes_by_physical[physical_id]);
-      const LlmStaticSpanReference& actual_k =
-          resources.paged_k_block_references[reference_index];
-      const LlmStaticSpanReference& actual_v =
-          resources.paged_v_block_references[reference_index];
+      const size_t reference_index = layer * paged.layout.physical_blocks_per_layer + physical_id;
+      const LlmStaticSpanReference expected_k = reference_span(k + block_offset, valid_bytes_by_physical[physical_id]);
+      const LlmStaticSpanReference expected_v = reference_span(v + block_offset, valid_bytes_by_physical[physical_id]);
+      const LlmStaticSpanReference& actual_k = resources.paged_k_block_references[reference_index];
+      const LlmStaticSpanReference& actual_v = resources.paged_v_block_references[reference_index];
       EXPECT_EQ(actual_k.span_even, expected_k.span_even);
       EXPECT_EQ(actual_k.span_odd, expected_k.span_odd);
       EXPECT_EQ(actual_k.span_bytes, expected_k.span_bytes);
@@ -1164,85 +971,55 @@ TEST_F(LlmMemoryExecutorTest,
   }
 
   for (size_t worker = 0; worker < cpu_plan.effective_workers; ++worker) {
-    const LlmPagedPrefillLayerDescriptor* const layers =
-        resources.worker_paged_prefill_layers(worker);
+    const LlmPagedPrefillLayerDescriptor* const layers = resources.worker_paged_prefill_layers(worker);
     const LlmPagedPrefillKvAssignmentDescriptor* const weights =
-        resources.worker_paged_prefill_assignments(
-            worker, LlmScenario::WeightsOnly);
+        resources.worker_paged_prefill_assignments(worker, LlmScenario::WeightsOnly);
     const LlmPagedPrefillKvAssignmentDescriptor* const kv =
-        resources.worker_paged_prefill_assignments(worker,
-                                                   LlmScenario::KvOnly);
+        resources.worker_paged_prefill_assignments(worker, LlmScenario::KvOnly);
     const LlmPagedPrefillKvAssignmentDescriptor* const mixed =
-        resources.worker_paged_prefill_assignments(worker,
-                                                   LlmScenario::Mixed);
+        resources.worker_paged_prefill_assignments(worker, LlmScenario::Mixed);
     ASSERT_NE(layers, nullptr);
     ASSERT_NE(weights, nullptr);
     ASSERT_NE(kv, nullptr);
     ASSERT_NE(mixed, nullptr);
     EXPECT_EQ(kv - weights, static_cast<ptrdiff_t>(rows));
     EXPECT_EQ(mixed - kv, static_cast<ptrdiff_t>(rows));
-    EXPECT_EQ(resources.worker_paged_prefill_layers(
-                  cpu_plan.effective_workers),
-              nullptr);
-    EXPECT_EQ(resources.worker_paged_prefill_assignments(
-                  worker, static_cast<LlmScenario>(255)),
-              nullptr);
+    EXPECT_EQ(resources.worker_paged_prefill_layers(cpu_plan.effective_workers), nullptr);
+    EXPECT_EQ(resources.worker_paged_prefill_assignments(worker, static_cast<LlmScenario>(255)), nullptr);
 
     for (size_t layer = 0; layer < plan.geometry.layer_count; ++layer) {
-      const LlmLayerRangeTemplate& source =
-          cpu_plan.workers[worker].layers[layer];
+      const LlmLayerRangeTemplate& source = cpu_plan.workers[worker].layers[layer];
       EXPECT_EQ(layers[layer].weight_ptr,
-                source.weight.span_bytes == 0
-                    ? nullptr
-                    : weight + source.weight.offset_bytes);
+                source.weight.span_bytes == 0 ? nullptr : weight + source.weight.offset_bytes);
       EXPECT_EQ(layers[layer].weight_bytes, source.weight.span_bytes);
-      EXPECT_EQ(layers[layer].first_assignment_index,
-                layer * plan.geometry.batch_size);
-      EXPECT_EQ(layers[layer].assignment_count,
-                plan.geometry.batch_size);
+      EXPECT_EQ(layers[layer].first_assignment_index, layer * plan.geometry.batch_size);
+      EXPECT_EQ(layers[layer].assignment_count, plan.geometry.batch_size);
       EXPECT_EQ(layers[layer].layer_index, layer);
       EXPECT_EQ(layers[layer].reserved_zero, 0u);
     }
-    for (size_t scenario_index = 0;
-         scenario_index < kLlmScenarioCount; ++scenario_index) {
+    for (size_t scenario_index = 0; scenario_index < kLlmScenarioCount; ++scenario_index) {
       const LlmPagedPrefillKvAssignmentDescriptor* const descriptors =
-          resources.worker_paged_prefill_assignments(
-              worker, static_cast<LlmScenario>(scenario_index));
+          resources.worker_paged_prefill_assignments(worker, static_cast<LlmScenario>(scenario_index));
       for (size_t row = 0; row < rows; ++row) {
         const LlmPagedPrefillKvAssignmentTemplate& source =
-            cpu_plan.workers[worker].paged_prefill_assignments[
-                scenario_index * rows + row];
-        const LlmPagedPrefillKvAssignmentDescriptor& descriptor =
-            descriptors[row];
+            cpu_plan.workers[worker].paged_prefill_assignments[scenario_index * rows + row];
+        const LlmPagedPrefillKvAssignmentDescriptor& descriptor = descriptors[row];
         EXPECT_EQ(descriptor.block_table_row,
-                  resources.block_table +
-                      source.batch_sequence_index *
-                          paged.layout.blocks_per_sequence);
-        EXPECT_EQ(descriptor.k_layer_pool,
-                  k + source.layer_index * layer_pool_bytes);
-        EXPECT_EQ(descriptor.v_layer_pool,
-                  v + source.layer_index * layer_pool_bytes);
-        EXPECT_EQ(descriptor.first_logical_block,
-                  source.first_logical_block);
+                  resources.block_table + source.batch_sequence_index * paged.layout.blocks_per_sequence);
+        EXPECT_EQ(descriptor.k_layer_pool, k + source.layer_index * layer_pool_bytes);
+        EXPECT_EQ(descriptor.v_layer_pool, v + source.layer_index * layer_pool_bytes);
+        EXPECT_EQ(descriptor.first_logical_block, source.first_logical_block);
         EXPECT_EQ(descriptor.owned_block_count, source.block_count);
-        EXPECT_EQ(descriptor.blocks_per_sequence,
-                  paged.layout.blocks_per_sequence);
-        EXPECT_EQ(descriptor.block_tokens,
-                  paged.layout.kv_block_tokens);
+        EXPECT_EQ(descriptor.blocks_per_sequence, paged.layout.blocks_per_sequence);
+        EXPECT_EQ(descriptor.block_tokens, paged.layout.kv_block_tokens);
         EXPECT_EQ(descriptor.block_bytes, paged.layout.block_bytes);
-        EXPECT_EQ(descriptor.last_block_valid_bytes,
-                  paged.layout.last_block_valid_bytes);
-        EXPECT_EQ(descriptor.prompt_tokens,
-                  plan.geometry.prefill->prompt_tokens);
-        EXPECT_EQ(descriptor.attention_query_tile_tokens,
-                  plan.geometry.prefill->attention_query_tile_tokens);
-        EXPECT_EQ(descriptor.record_bytes,
-                  plan.geometry.k_or_v_record_bytes_per_layer);
+        EXPECT_EQ(descriptor.last_block_valid_bytes, paged.layout.last_block_valid_bytes);
+        EXPECT_EQ(descriptor.prompt_tokens, plan.geometry.prefill->prompt_tokens);
+        EXPECT_EQ(descriptor.attention_query_tile_tokens, plan.geometry.prefill->attention_query_tile_tokens);
+        EXPECT_EQ(descriptor.record_bytes, plan.geometry.k_or_v_record_bytes_per_layer);
         EXPECT_EQ(descriptor.layer_index, source.layer_index);
-        EXPECT_EQ(descriptor.batch_sequence_index,
-                  source.batch_sequence_index);
-        if (scenario_index ==
-            static_cast<size_t>(LlmScenario::WeightsOnly)) {
+        EXPECT_EQ(descriptor.batch_sequence_index, source.batch_sequence_index);
+        if (scenario_index == static_cast<size_t>(LlmScenario::WeightsOnly)) {
           EXPECT_EQ(descriptor.first_logical_block, 0u);
           EXPECT_EQ(descriptor.owned_block_count, 0u);
         }
@@ -1251,34 +1028,51 @@ TEST_F(LlmMemoryExecutorTest,
   }
 }
 
-TEST_F(LlmMemoryExecutorTest,
-       PagedPrefillExpectedChecksumMatchesIndependentOracleAndExactMetadata) {
+TEST_F(LlmMemoryExecutorTest, ExpectedChecksumsMatchIndependentOraclesForDecodeAndPagedPrefill) {
+  {
+    SCOPED_TRACE("decode-contiguous");
+    const LlmMemoryWorkPlan plan = build_executor_ready_plan({257, 2, 4, 2, 7, 1, 3, 2}, 3);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    LlmExecutionResources resources;
+    const LlmResourcePreparationResult prepared = prepare_llm_execution_resources(plan, resources);
+    ASSERT_TRUE(prepared.valid) << prepared.reason_code;
+
+    for (LlmScenario scenario : {LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed}) {
+      const LlmScenarioWorkPlan scenario_plan = build_llm_scenario_work_plan(plan, scenario, 2, true);
+      ASSERT_TRUE(scenario_plan.valid) << scenario_plan.reason_code;
+      const LlmExpectedChecksumResult actual = calculate_llm_expected_checksums(plan, scenario_plan, resources);
+      ASSERT_TRUE(actual.valid) << actual.reason_code;
+      const std::vector<LlmWorkerChecksum> expected = scalar_expected(plan, scenario_plan, resources);
+      ASSERT_EQ(actual.workers.size(), expected.size());
+      for (size_t worker = 0; worker < expected.size(); ++worker) {
+        SCOPED_TRACE(::testing::Message() << llm_scenario_to_string(scenario) << " worker " << worker);
+        expect_worker_equal(actual.workers[worker], expected[worker]);
+      }
+      const LlmRunChecksum folded = fold_llm_worker_checksums(expected.data(), expected.size());
+      EXPECT_EQ(actual.run_checksum.state_a, folded.state_a);
+      EXPECT_EQ(actual.run_checksum.state_b, folded.state_b);
+    }
+  }
+
   std::array<uint64_t, kLlmScenarioCount> single_worker_lookups{};
   for (size_t workers : {1U, 3U}) {
-    const LlmMemoryWorkPlan plan = build_executor_ready_plan(
-        paged_prefill_geometry(7, 3, 2, 33, 2, 2), workers);
+    state = {};
+    const LlmMemoryWorkPlan plan = build_executor_ready_plan(paged_prefill_geometry(7, 3, 2, 33, 2, 2), workers);
     ASSERT_TRUE(plan.valid) << plan.reason_code;
     ASSERT_TRUE(plan.prefill_plan.has_value());
     LlmExecutionResources resources;
-    const LlmResourcePreparationResult prepared =
-        prepare_llm_execution_resources(plan, resources);
+    const LlmResourcePreparationResult prepared = prepare_llm_execution_resources(plan, resources);
     ASSERT_TRUE(prepared.valid) << prepared.reason_code;
 
-    for (LlmScenario scenario_kind : {LlmScenario::WeightsOnly,
-                                      LlmScenario::KvOnly,
-                                      LlmScenario::Mixed}) {
-      SCOPED_TRACE(::testing::Message()
-                   << "workers=" << workers
-                   << " scenario=" << llm_scenario_to_string(scenario_kind));
+    for (LlmScenario scenario_kind : {LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed}) {
+      SCOPED_TRACE(::testing::Message() << "paged-prefill workers=" << workers
+                                        << " scenario=" << llm_scenario_to_string(scenario_kind));
       const size_t scenario_index = static_cast<size_t>(scenario_kind);
-      const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(
-          plan, scenario_kind, 2, true);
+      const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(plan, scenario_kind, 2, true);
       ASSERT_TRUE(scenario.valid) << scenario.reason_code;
-      const LlmExpectedChecksumResult actual =
-          calculate_llm_expected_checksums(plan, scenario, resources);
+      const LlmExpectedChecksumResult actual = calculate_llm_expected_checksums(plan, scenario, resources);
       ASSERT_TRUE(actual.valid) << actual.reason_code;
-      const PagedPrefillScalarExpected expected =
-          scalar_paged_prefill_expected(plan, scenario, resources);
+      const PagedPrefillScalarExpected expected = scalar_paged_prefill_expected(plan, scenario, resources);
       ASSERT_EQ(actual.workers.size(), expected.workers.size());
       for (size_t worker = 0; worker < expected.workers.size(); ++worker) {
         SCOPED_TRACE(::testing::Message() << "worker=" << worker);
@@ -1289,91 +1083,51 @@ TEST_F(LlmMemoryExecutorTest,
       uint64_t kv_bytes = 0;
       for (const LlmWorkerChecksum& checksum : expected.workers) {
         weight_bytes += checksum.weight.exact_bytes_read;
-        kv_bytes += checksum.k.exact_bytes_read +
-                    checksum.v.exact_bytes_read;
+        kv_bytes += checksum.k.exact_bytes_read + checksum.v.exact_bytes_read;
       }
       EXPECT_EQ(weight_bytes, scenario.weight_read_bytes);
       EXPECT_EQ(kv_bytes, scenario.kv_read_bytes);
-      EXPECT_EQ(expected.lookup_count,
-                scenario.layout_metadata_lookup_count);
+      EXPECT_EQ(expected.lookup_count, scenario.layout_metadata_lookup_count);
       EXPECT_EQ(scenario.layout_metadata_read_bytes,
-                expected.lookup_count *
-                    Constants::LLM_KV_BLOCK_TABLE_ENTRY_BYTES);
+                expected.lookup_count * Constants::LLM_KV_BLOCK_TABLE_ENTRY_BYTES);
       EXPECT_EQ(scenario.accounted_bytes_per_work_unit,
                 scenario.effective_model_payload_bytes_per_work_unit +
                     scenario.layout_metadata_read_bytes_per_work_unit);
       const uint64_t formula_lookups =
           scenario_kind == LlmScenario::WeightsOnly
               ? 0
-              : plan.prefill_plan
-                        ->layout_metadata_lookups_per_work_unit *
-                    scenario.work_units;
+              : plan.prefill_plan->layout_metadata_lookups_per_work_unit * scenario.work_units;
       EXPECT_EQ(expected.lookup_count, formula_lookups);
       if (workers == 1) {
         single_worker_lookups[scenario_index] = expected.lookup_count;
       } else {
-        EXPECT_EQ(expected.lookup_count,
-                  single_worker_lookups[scenario_index]);
+        EXPECT_EQ(expected.lookup_count, single_worker_lookups[scenario_index]);
       }
     }
   }
 }
 
-TEST_F(LlmMemoryExecutorTest,
-       PagedPrefillMultiTokenTerminalBlockKeepsDecodeOffsetInapplicableIntegration) {
-  const LlmMemoryWorkPlan plan = build_executor_ready_plan(
-      paged_prefill_geometry(6, 2, 4, 8, 2, 2), 1);
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
-  ASSERT_TRUE(cpu_plan.paged.has_value());
-  EXPECT_EQ(plan.geometry.decode_append_offset_in_last_block, 0u);
-  EXPECT_EQ(cpu_plan.paged->layout.decode_append_offset_in_last_block, 8u);
-
-  LlmExecutionResources resources;
-  const LlmResourcePreparationResult prepared =
-      prepare_llm_execution_resources(plan, resources);
-  ASSERT_TRUE(prepared.valid) << prepared.reason_code;
-  const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(
-      plan, LlmScenario::Mixed, 2, true);
-  ASSERT_TRUE(scenario.valid) << scenario.reason_code;
-
-  ScopedExecutorTimer timer_scope;
-  auto timer = HighResTimer::create();
-  ASSERT_TRUE(timer.has_value());
-  const LlmExecutorResult executed =
-      execute_llm_scenario(plan, scenario, resources, *timer);
-  ASSERT_TRUE(executed.valid) << executed.reason_code;
-  EXPECT_TRUE(executed.checksum_valid);
-  EXPECT_TRUE(executed.post_validation_valid);
-}
-
-TEST_F(LlmMemoryExecutorTest,
-       PagedPrefillStructuralAndIdentityTamperingIsRejectedBeforeMmap) {
+TEST_F(LlmMemoryExecutorTest, PagedAndPagedPrefillTamperingRejectedBeforeExecution) {
   for (size_t tamper = 0; tamper < 13; ++tamper) {
-    SCOPED_TRACE(::testing::Message() << "tamper=" << tamper);
-    LlmMemoryWorkPlan plan = build_executor_ready_plan(
-        paged_prefill_geometry(7, 3, 2, 33, 2, 2), 3);
+    state = {};
+    SCOPED_TRACE(::testing::Message() << "paged-prefill-tamper=" << tamper);
+    LlmMemoryWorkPlan plan = build_executor_ready_plan(paged_prefill_geometry(7, 3, 2, 33, 2, 2), 3);
     ASSERT_TRUE(plan.valid) << plan.reason_code;
-    LlmCpuExecutionPlan* const cpu_plan =
-        get_llm_cpu_execution_plan(plan);
+    LlmCpuExecutionPlan* const cpu_plan = get_llm_cpu_execution_plan(plan);
     ASSERT_NE(cpu_plan, nullptr);
     ASSERT_TRUE(cpu_plan->prefill.has_value());
     ASSERT_TRUE(cpu_plan->paged.has_value());
-    const size_t rows =
-        plan.geometry.layer_count * plan.geometry.batch_size;
-    const size_t kv_base =
-        static_cast<size_t>(LlmScenario::KvOnly) * rows;
+    const size_t rows = plan.geometry.layer_count * plan.geometry.batch_size;
+    const size_t kv_base = static_cast<size_t>(LlmScenario::KvOnly) * rows;
 
     if (tamper == 0) {
-      ASSERT_FALSE(cpu_plan->workers[0]
-                       .paged_prefill_assignments.empty());
+      ASSERT_FALSE(cpu_plan->workers[0].paged_prefill_assignments.empty());
       cpu_plan->workers[0].paged_prefill_assignments.pop_back();
     } else if (tamper == 1 || tamper == 7) {
       LlmPagedPrefillKvAssignmentTemplate* selected = nullptr;
       for (LlmWorkerWorkPlan& worker : cpu_plan->workers) {
         for (size_t row = 0; row < rows; ++row) {
-          LlmPagedPrefillKvAssignmentTemplate& assignment =
-              worker.paged_prefill_assignments[kv_base + row];
+          LlmPagedPrefillKvAssignmentTemplate& assignment = worker.paged_prefill_assignments[kv_base + row];
           if (assignment.block_count != 0) {
             selected = &assignment;
             break;
@@ -1391,14 +1145,11 @@ TEST_F(LlmMemoryExecutorTest,
       }
     } else if (tamper == 2) {
       LlmPrefillCpuScenarioExecutionPlan& scenario =
-          cpu_plan->prefill->scenarios[
-              static_cast<size_t>(LlmScenario::KvOnly)];
+          cpu_plan->prefill->scenarios[static_cast<size_t>(LlmScenario::KvOnly)];
       ASSERT_FALSE(scenario.ownership_scopes.empty());
       scenario.ownership_scopes[0].identity += "|tampered=1";
     } else if (tamper == 3) {
-      cpu_plan->prefill
-          ->scenarios[static_cast<size_t>(LlmScenario::KvOnly)]
-          .identity += "|tampered=1";
+      cpu_plan->prefill->scenarios[static_cast<size_t>(LlmScenario::KvOnly)].identity += "|tampered=1";
     } else if (tamper == 4) {
       cpu_plan->prefill->identity += "|tampered=1";
     } else if (tamper == 5) {
@@ -1411,8 +1162,7 @@ TEST_F(LlmMemoryExecutorTest,
       cpu_plan->paged->permutation.domain ^= 1;
     } else if (tamper == 10) {
       ASSERT_FALSE(cpu_plan->paged->permutation.sha256.empty());
-      cpu_plan->paged->permutation.sha256.back() =
-          cpu_plan->paged->permutation.sha256.back() == '0' ? '1' : '0';
+      cpu_plan->paged->permutation.sha256.back() = cpu_plan->paged->permutation.sha256.back() == '0' ? '1' : '0';
     } else if (tamper == 11) {
       ASSERT_FALSE(cpu_plan->paged->permutation.identity.empty());
       cpu_plan->paged->permutation.identity.back() ^= 1;
@@ -1423,30 +1173,74 @@ TEST_F(LlmMemoryExecutorTest,
 
     const size_t map_calls_before = state.map_calls;
     LlmExecutionResources resources;
-    const LlmResourcePreparationResult result =
-        prepare_llm_execution_resources(plan, resources);
+    const LlmResourcePreparationResult result = prepare_llm_execution_resources(plan, resources);
     EXPECT_FALSE(result.valid);
-    EXPECT_EQ(result.reason_code,
-              LlmExecutorReason::INVALID_WORK_PLAN);
+    EXPECT_EQ(result.reason_code, LlmExecutorReason::INVALID_WORK_PLAN);
     EXPECT_EQ(state.map_calls, map_calls_before);
     EXPECT_FALSE(resources.valid);
     EXPECT_EQ(resources.paged_prefill_layer_descriptors, nullptr);
     EXPECT_EQ(resources.paged_prefill_assignment_descriptors, nullptr);
   }
+
+  state = {};
+  {
+    SCOPED_TRACE("paged-scenario-metadata-tampering");
+    const LlmMemoryWorkPlan plan = build_executor_ready_plan(paged_geometry(5, 4), 2);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    LlmExecutionResources resources;
+    const LlmResourcePreparationResult prepared = prepare_llm_execution_resources(plan, resources);
+    ASSERT_TRUE(prepared.valid) << prepared.reason_code;
+    const LlmScenarioWorkPlan canonical = build_llm_scenario_work_plan(plan, LlmScenario::Mixed, 2, true);
+    ASSERT_TRUE(canonical.valid) << canonical.reason_code;
+
+    const std::array<size_t LlmScenarioWorkPlan::*, 6> fields = {
+        &LlmScenarioWorkPlan::layout_metadata_lookup_count_per_work_unit,
+        &LlmScenarioWorkPlan::layout_metadata_read_bytes_per_work_unit,
+        &LlmScenarioWorkPlan::accounted_bytes_per_work_unit,
+        &LlmScenarioWorkPlan::layout_metadata_lookup_count,
+        &LlmScenarioWorkPlan::layout_metadata_read_bytes,
+        &LlmScenarioWorkPlan::task_accounted_bytes,
+    };
+    for (size_t LlmScenarioWorkPlan::*field : fields) {
+      LlmScenarioWorkPlan tampered = canonical;
+      ASSERT_GT(tampered.*field, 0u);
+      --(tampered.*field);
+      const LlmExpectedChecksumResult result = calculate_llm_expected_checksums(plan, tampered, resources);
+      EXPECT_FALSE(result.valid);
+      EXPECT_EQ(result.reason_code, LlmExecutorReason::SCENARIO_PLAN_MISMATCH);
+    }
+  }
+
+  state = {};
+  {
+    SCOPED_TRACE("paged-short-reference-geometry");
+    LlmMemoryWorkPlan plan = build_executor_ready_plan(paged_geometry(5, 4), 2);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    LlmCpuExecutionPlan* const cpu = get_llm_cpu_execution_plan(plan);
+    ASSERT_NE(cpu, nullptr);
+    ASSERT_TRUE(cpu->paged.has_value());
+    ASSERT_GT(cpu->paged->layout.total_physical_blocks, 1u);
+    --cpu->paged->layout.total_physical_blocks;
+    const size_t map_calls_before_preparation = state.map_calls;
+
+    LlmExecutionResources resources;
+    const LlmResourcePreparationResult result = prepare_llm_execution_resources(plan, resources);
+    EXPECT_FALSE(result.valid);
+    EXPECT_EQ(result.reason_code, LlmExecutorReason::INVALID_WORK_PLAN);
+    EXPECT_EQ(state.map_calls, map_calls_before_preparation);
+    EXPECT_FALSE(resources.valid);
+  }
 }
 
-TEST_F(LlmMemoryExecutorTest,
-       PagedPreparationMaterializesPhysicalPoolsTableAndDistinctDescriptors) {
-  const LlmMemoryWorkPlan plan =
-      build_executor_ready_plan(paged_geometry(5, 2), 4);
+TEST_F(LlmMemoryExecutorTest, PagedPreparationMaterializesPhysicalPoolsTableAndDistinctDescriptors) {
+  const LlmMemoryWorkPlan plan = build_executor_ready_plan(paged_geometry(5, 2), 4);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
   const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
   ASSERT_TRUE(cpu_plan.paged.has_value());
   const LlmPagedCpuExecutionPlan& paged = *cpu_plan.paged;
 
   LlmExecutionResources resources;
-  const LlmResourcePreparationResult prepared =
-      prepare_llm_execution_resources(plan, resources);
+  const LlmResourcePreparationResult prepared = prepare_llm_execution_resources(plan, resources);
   ASSERT_TRUE(prepared.valid) << prepared.reason_code;
   ASSERT_TRUE(resources.valid);
   EXPECT_EQ(resources.layer_descriptors, nullptr);
@@ -1454,64 +1248,39 @@ TEST_F(LlmMemoryExecutorTest,
   ASSERT_NE(resources.paged_layer_descriptors, nullptr);
   ASSERT_NE(resources.paged_assignment_descriptors, nullptr);
   EXPECT_EQ(resources.block_table, paged.block_table());
-  EXPECT_EQ(resources.block_table_entries,
-            paged.layout.block_table_entries);
-  EXPECT_EQ(resources.paged_block_reference_count,
-            paged.layout.total_physical_blocks);
-  EXPECT_EQ(resources.initialization.weight_bytes,
-            plan.geometry.active_weight_bytes_per_work_unit);
-  EXPECT_EQ(resources.initialization.k_bytes,
-            paged.layout.memory.k_physical_bytes);
-  EXPECT_EQ(resources.initialization.v_bytes,
-            paged.layout.memory.v_physical_bytes);
-  EXPECT_EQ(resources.initialization.block_table_logical_bytes,
-            paged.block_table_logical_bytes);
-  EXPECT_EQ(resources.initialization.block_table_mapping_bytes,
-            paged.block_table_mapping_bytes);
+  EXPECT_EQ(resources.block_table_entries, paged.layout.block_table_entries);
+  EXPECT_EQ(resources.paged_block_reference_count, paged.layout.total_physical_blocks);
+  EXPECT_EQ(resources.initialization.weight_bytes, plan.geometry.active_weight_bytes_per_work_unit);
+  EXPECT_EQ(resources.initialization.k_bytes, paged.layout.memory.k_physical_bytes);
+  EXPECT_EQ(resources.initialization.v_bytes, paged.layout.memory.v_physical_bytes);
+  EXPECT_EQ(resources.initialization.block_table_logical_bytes, paged.block_table_logical_bytes);
+  EXPECT_EQ(resources.initialization.block_table_mapping_bytes, paged.block_table_mapping_bytes);
   EXPECT_TRUE(resources.initialization.block_table_read_only);
-  EXPECT_EQ(resources.initialization.k_layout_padding_bytes,
-            paged.layout.memory.k_layout_padding_bytes);
-  EXPECT_EQ(resources.initialization.v_layout_padding_bytes,
-            paged.layout.memory.v_layout_padding_bytes);
-  EXPECT_EQ(resources.initialization.non_empty_k_spans,
-            paged.layout.total_physical_blocks);
-  EXPECT_EQ(resources.initialization.non_empty_v_spans,
-            paged.layout.total_physical_blocks);
+  EXPECT_EQ(resources.initialization.k_layout_padding_bytes, paged.layout.memory.k_layout_padding_bytes);
+  EXPECT_EQ(resources.initialization.v_layout_padding_bytes, paged.layout.memory.v_layout_padding_bytes);
+  EXPECT_EQ(resources.initialization.non_empty_k_spans, paged.layout.total_physical_blocks);
+  EXPECT_EQ(resources.initialization.non_empty_v_spans, paged.layout.total_physical_blocks);
 
-  const auto* const weight =
-      static_cast<const uint8_t*>(resources.buffers.weight.get());
-  const auto* const k =
-      static_cast<const uint8_t*>(resources.buffers.k.get());
-  const auto* const v =
-      static_cast<const uint8_t*>(resources.buffers.v.get());
-  const size_t layer_pool_bytes =
-      paged.layout.physical_blocks_per_layer * paged.layout.block_bytes;
+  const auto* const weight = static_cast<const uint8_t*>(resources.buffers.weight.get());
+  const auto* const k = static_cast<const uint8_t*>(resources.buffers.k.get());
+  const auto* const v = static_cast<const uint8_t*>(resources.buffers.v.get());
+  const size_t layer_pool_bytes = paged.layout.physical_blocks_per_layer * paged.layout.block_bytes;
   for (size_t layer = 0; layer < paged.layout.layer_count; ++layer) {
-    for (uint32_t physical_id = 0;
-         physical_id < paged.layout.physical_blocks_per_layer;
-         ++physical_id) {
+    for (uint32_t physical_id = 0; physical_id < paged.layout.physical_blocks_per_layer; ++physical_id) {
       const size_t block_offset =
-          layer * layer_pool_bytes +
-          static_cast<size_t>(physical_id) * paged.layout.block_bytes;
+          layer * layer_pool_bytes + static_cast<size_t>(physical_id) * paged.layout.block_bytes;
       for (size_t byte = 0; byte < paged.layout.block_bytes; ++byte) {
-        EXPECT_EQ(k[block_offset + byte],
-                  expected_paged_buffer_byte(plan.k_buffer_seed, layer,
-                                             physical_id, byte));
-        EXPECT_EQ(v[block_offset + byte],
-                  expected_paged_buffer_byte(plan.v_buffer_seed, layer,
-                                             physical_id, byte));
+        EXPECT_EQ(k[block_offset + byte], expected_paged_buffer_byte(plan.k_buffer_seed, layer, physical_id, byte));
+        EXPECT_EQ(v[block_offset + byte], expected_paged_buffer_byte(plan.v_buffer_seed, layer, physical_id, byte));
       }
     }
   }
 
   size_t zero_block_assignments = 0;
-  for (size_t worker_index = 0;
-       worker_index < cpu_plan.effective_workers; ++worker_index) {
+  for (size_t worker_index = 0; worker_index < cpu_plan.effective_workers; ++worker_index) {
     const LlmWorkerWorkPlan& worker = cpu_plan.workers[worker_index];
-    const LlmPagedLayerDescriptor* const layers =
-        resources.worker_paged_layers(worker_index);
-    const LlmPagedKvAssignmentDescriptor* const assignments =
-        resources.worker_paged_assignments(worker_index);
+    const LlmPagedLayerDescriptor* const layers = resources.worker_paged_layers(worker_index);
+    const LlmPagedKvAssignmentDescriptor* const assignments = resources.worker_paged_assignments(worker_index);
     ASSERT_NE(layers, nullptr);
     ASSERT_NE(assignments, nullptr);
     EXPECT_EQ(resources.worker_layers(worker_index), nullptr);
@@ -1519,77 +1288,79 @@ TEST_F(LlmMemoryExecutorTest,
     for (size_t layer = 0; layer < paged.layout.layer_count; ++layer) {
       const LlmLayerRangeTemplate& source = worker.layers[layer];
       EXPECT_EQ(layers[layer].weight_ptr,
-                source.weight.span_bytes == 0
-                    ? nullptr
-                    : weight + source.weight.offset_bytes);
+                source.weight.span_bytes == 0 ? nullptr : weight + source.weight.offset_bytes);
       EXPECT_EQ(layers[layer].weight_bytes, source.weight.span_bytes);
-      EXPECT_EQ(layers[layer].first_assignment_index,
-                source.first_sequence_index);
+      EXPECT_EQ(layers[layer].first_assignment_index, source.first_sequence_index);
       EXPECT_EQ(layers[layer].assignment_count, source.sequence_count);
       EXPECT_EQ(layers[layer].layer_index, source.layer_index);
       EXPECT_EQ(layers[layer].reserved_zero, 0u);
     }
-    for (size_t index = 0;
-         index < cpu_plan.sequence_descriptors_per_worker; ++index) {
-      const LlmPagedKvAssignmentTemplate& source =
-          worker.paged_assignments[index];
+    for (size_t index = 0; index < cpu_plan.sequence_descriptors_per_worker; ++index) {
+      const LlmPagedKvAssignmentTemplate& source = worker.paged_assignments[index];
       const LlmPagedKvAssignmentDescriptor& descriptor = assignments[index];
       EXPECT_EQ(descriptor.block_table_row,
-                resources.block_table +
-                    source.batch_sequence_index *
-                        paged.layout.blocks_per_sequence);
-      EXPECT_EQ(descriptor.k_layer_pool,
-                k + source.layer_index * layer_pool_bytes);
-      EXPECT_EQ(descriptor.v_layer_pool,
-                v + source.layer_index * layer_pool_bytes);
-      EXPECT_EQ(descriptor.first_logical_block,
-                source.first_logical_block);
+                resources.block_table + source.batch_sequence_index * paged.layout.blocks_per_sequence);
+      EXPECT_EQ(descriptor.k_layer_pool, k + source.layer_index * layer_pool_bytes);
+      EXPECT_EQ(descriptor.v_layer_pool, v + source.layer_index * layer_pool_bytes);
+      EXPECT_EQ(descriptor.first_logical_block, source.first_logical_block);
       EXPECT_EQ(descriptor.owned_block_count, source.block_count);
-      EXPECT_EQ(descriptor.blocks_per_sequence,
-                paged.layout.blocks_per_sequence);
+      EXPECT_EQ(descriptor.blocks_per_sequence, paged.layout.blocks_per_sequence);
       EXPECT_EQ(descriptor.block_bytes, paged.layout.block_bytes);
-      EXPECT_EQ(descriptor.last_block_valid_bytes,
-                paged.layout.last_block_valid_bytes);
-      EXPECT_EQ(descriptor.decode_append_offset,
-                paged.layout.decode_append_offset_in_last_block);
-      EXPECT_EQ(descriptor.append_record_bytes,
-                paged.layout.k_or_v_record_bytes_per_layer);
+      EXPECT_EQ(descriptor.last_block_valid_bytes, paged.layout.last_block_valid_bytes);
+      EXPECT_EQ(descriptor.decode_append_offset, paged.layout.decode_append_offset_in_last_block);
+      EXPECT_EQ(descriptor.append_record_bytes, paged.layout.k_or_v_record_bytes_per_layer);
       EXPECT_EQ(descriptor.layer_index, source.layer_index);
-      EXPECT_EQ(descriptor.batch_sequence_index,
-                source.batch_sequence_index);
+      EXPECT_EQ(descriptor.batch_sequence_index, source.batch_sequence_index);
       zero_block_assignments += source.block_count == 0 ? 1 : 0;
     }
   }
   EXPECT_GT(zero_block_assignments, 0u);
 }
 
-TEST_F(LlmMemoryExecutorTest,
-       PagedProductionDispatchPassesAllScenariosAndExactByteTailsIntegration) {
+TEST_F(LlmMemoryExecutorTest, PagedDecodeAndPrefillProductionDispatchAndTailsIntegration) {
+  {
+    SCOPED_TRACE("paged-prefill-terminal-block");
+    const LlmMemoryWorkPlan plan = build_executor_ready_plan(paged_prefill_geometry(6, 2, 4, 8, 2, 2), 1);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    const LlmCpuExecutionPlan& cpu_plan = cpu_execution_plan(plan);
+    ASSERT_TRUE(cpu_plan.paged.has_value());
+    EXPECT_EQ(plan.geometry.decode_append_offset_in_last_block, 0u);
+    EXPECT_EQ(cpu_plan.paged->layout.decode_append_offset_in_last_block, 8u);
+
+    LlmExecutionResources resources;
+    const LlmResourcePreparationResult prepared = prepare_llm_execution_resources(plan, resources);
+    ASSERT_TRUE(prepared.valid) << prepared.reason_code;
+    const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(plan, LlmScenario::Mixed, 2, true);
+    ASSERT_TRUE(scenario.valid) << scenario.reason_code;
+
+    ScopedExecutorTimer timer_scope;
+    auto timer = HighResTimer::create();
+    ASSERT_TRUE(timer.has_value());
+    const LlmExecutorResult executed = execute_llm_scenario(plan, scenario, resources, *timer);
+    ASSERT_TRUE(executed.valid) << executed.reason_code;
+    EXPECT_TRUE(executed.checksum_valid);
+    EXPECT_TRUE(executed.post_validation_valid);
+  }
+
   for (size_t tail_bytes : {31u, 32u, 33u}) {
-    SCOPED_TRACE(::testing::Message() << "tail bytes " << tail_bytes);
-    const LlmMemoryWorkPlan plan = build_executor_ready_plan(
-        paged_geometry(5, 4, tail_bytes, 2, 2), 3);
+    state = {};
+    SCOPED_TRACE(::testing::Message() << "paged-decode tail bytes " << tail_bytes);
+    const LlmMemoryWorkPlan plan = build_executor_ready_plan(paged_geometry(5, 4, tail_bytes, 2, 2), 3);
     ASSERT_TRUE(plan.valid) << plan.reason_code;
     ASSERT_EQ(plan.geometry.last_block_valid_bytes, tail_bytes);
     LlmExecutionResources resources;
-    const LlmResourcePreparationResult prepared =
-        prepare_llm_execution_resources(plan, resources);
+    const LlmResourcePreparationResult prepared = prepare_llm_execution_resources(plan, resources);
     ASSERT_TRUE(prepared.valid) << prepared.reason_code;
 
-    for (LlmScenario scenario : {LlmScenario::WeightsOnly,
-                                 LlmScenario::KvOnly,
-                                 LlmScenario::Mixed,
-                                 LlmScenario::WeightsOnly}) {
-      const LlmScenarioWorkPlan scenario_plan =
-          build_llm_scenario_work_plan(plan, scenario, 2, true);
+    for (LlmScenario scenario :
+         {LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed, LlmScenario::WeightsOnly}) {
+      const LlmScenarioWorkPlan scenario_plan = build_llm_scenario_work_plan(plan, scenario, 2, true);
       ASSERT_TRUE(scenario_plan.valid) << scenario_plan.reason_code;
       ScopedExecutorTimer timer_scope;
       auto timer = HighResTimer::create();
       ASSERT_TRUE(timer.has_value());
-      const LlmExecutorResult result = execute_llm_scenario(
-          plan, scenario_plan, resources, *timer);
-      EXPECT_TRUE(result.valid)
-          << llm_scenario_to_string(scenario) << ": " << result.reason_code;
+      const LlmExecutorResult result = execute_llm_scenario(plan, scenario_plan, resources, *timer);
+      EXPECT_TRUE(result.valid) << llm_scenario_to_string(scenario) << ": " << result.reason_code;
       EXPECT_EQ(result.reason_code, LlmExecutorReason::VALID);
       EXPECT_TRUE(result.checksum_evaluated);
       EXPECT_TRUE(result.checksum_valid);
@@ -1599,232 +1370,121 @@ TEST_F(LlmMemoryExecutorTest,
   }
 }
 
-TEST_F(LlmMemoryExecutorTest,
-       PagedExecutorRejectsTamperedMetadataAndAccountedBytePlans) {
-  const LlmMemoryWorkPlan plan =
-      build_executor_ready_plan(paged_geometry(5, 4), 2);
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  LlmExecutionResources resources;
-  const LlmResourcePreparationResult prepared =
-      prepare_llm_execution_resources(plan, resources);
-  ASSERT_TRUE(prepared.valid) << prepared.reason_code;
-  const LlmScenarioWorkPlan canonical = build_llm_scenario_work_plan(
-      plan, LlmScenario::Mixed, 2, true);
-  ASSERT_TRUE(canonical.valid) << canonical.reason_code;
+TEST_F(LlmMemoryExecutorTest, ExecutorInvocationTimingQosAndFailureHandling) {
+  {
+    SCOPED_TRACE("invocation-timing-qos-and-checksum-boundary");
+    const LlmMemoryWorkPlan plan = build_executor_ready_plan({257, 2, 4, 2, 7, 1, 3, 2}, 3);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    LlmExecutionResources resources;
+    ASSERT_TRUE(prepare_llm_execution_resources(plan, resources).valid);
+    const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(plan, LlmScenario::Mixed, 2, true);
+    ASSERT_TRUE(scenario.valid) << scenario.reason_code;
+    const LlmExpectedChecksumResult expected = calculate_llm_expected_checksums(plan, scenario, resources);
+    ASSERT_TRUE(expected.valid) << expected.reason_code;
 
-  const std::array<size_t LlmScenarioWorkPlan::*, 6> fields = {
-      &LlmScenarioWorkPlan::layout_metadata_lookup_count_per_work_unit,
-      &LlmScenarioWorkPlan::layout_metadata_read_bytes_per_work_unit,
-      &LlmScenarioWorkPlan::accounted_bytes_per_work_unit,
-      &LlmScenarioWorkPlan::layout_metadata_lookup_count,
-      &LlmScenarioWorkPlan::layout_metadata_read_bytes,
-      &LlmScenarioWorkPlan::task_accounted_bytes,
-  };
-  for (size_t LlmScenarioWorkPlan::*field : fields) {
-    LlmScenarioWorkPlan tampered = canonical;
-    ASSERT_GT(tampered.*field, 0u);
-    --(tampered.*field);
+    ScopedExecutorTimer timer_calls;
+    auto timer = HighResTimer::create();
+    ASSERT_TRUE(timer.has_value());
+    FakeKernelContext context;
+    context.expected = &expected.workers;
+    LlmExecutorTestControl control;
+    control.set_worker_qos = fake_worker_qos;
+    control.observe_event = observe_executor_event;
+    control.event_context = &context;
+    const LlmExecutorResult result =
+        execute_llm_scenario(plan, scenario, resources, *timer, {fake_kernel, &context}, &control);
 
-    const LlmExpectedChecksumResult result =
-        calculate_llm_expected_checksums(plan, tampered, resources);
-    EXPECT_FALSE(result.valid);
-    EXPECT_EQ(result.reason_code,
-              LlmExecutorReason::SCENARIO_PLAN_MISMATCH);
-  }
-}
+    ASSERT_TRUE(result.valid) << result.reason_code;
+    const size_t effective_workers = cpu_execution_plan(plan).effective_workers;
+    EXPECT_EQ(result.reason_code, LlmExecutorReason::VALID);
+    EXPECT_DOUBLE_EQ(result.elapsed_seconds, 100.0 / 1e9);
+    EXPECT_EQ(result.requested_workers, effective_workers);
+    EXPECT_EQ(result.created_workers, effective_workers);
+    EXPECT_EQ(result.completed_workers, effective_workers);
+    EXPECT_EQ(result.qos_successful_workers, 1u);
+    EXPECT_EQ(result.qos_failed_workers, effective_workers - 1);
+    EXPECT_TRUE(result.timer_started);
+    EXPECT_TRUE(result.timer_stopped);
+    EXPECT_TRUE(result.kernel_succeeded);
+    EXPECT_TRUE(result.checksum_evaluated);
+    EXPECT_TRUE(result.checksum_valid);
+    EXPECT_EQ(context.calls.load(std::memory_order_relaxed), effective_workers);
 
-TEST_F(LlmMemoryExecutorTest,
-       PagedStructuralValidationRejectsShortReferenceGeometryBeforeMmap) {
-  LlmMemoryWorkPlan plan =
-      build_executor_ready_plan(paged_geometry(5, 4), 2);
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  LlmCpuExecutionPlan* const cpu = get_llm_cpu_execution_plan(plan);
-  ASSERT_NE(cpu, nullptr);
-  ASSERT_TRUE(cpu->paged.has_value());
-  ASSERT_GT(cpu->paged->layout.total_physical_blocks, 1u);
-  --cpu->paged->layout.total_physical_blocks;
-  const size_t map_calls_before_preparation = state.map_calls;
-
-  LlmExecutionResources resources;
-  const LlmResourcePreparationResult result =
-      prepare_llm_execution_resources(plan, resources);
-  EXPECT_FALSE(result.valid);
-  EXPECT_EQ(result.reason_code, LlmExecutorReason::INVALID_WORK_PLAN);
-  EXPECT_EQ(state.map_calls, map_calls_before_preparation);
-  EXPECT_FALSE(resources.valid);
-}
-
-TEST_F(LlmMemoryExecutorTest,
-       BackendVariantMismatchIsRejectedBeforeResourceAllocation) {
-  LlmMemoryWorkPlan plan =
-      build_executor_ready_plan({64, 1, 1, 1, 19, 1, 2, 1}, 2);
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  plan.backend_execution_plan = LlmMetalExecutionPlan{};
-
-  const LlmExecutorAuxiliaryEstimate auxiliary =
-      calculate_llm_executor_auxiliary_estimate(plan);
-  EXPECT_FALSE(auxiliary.valid);
-  EXPECT_EQ(auxiliary.reason_code, LlmExecutorReason::INVALID_WORK_PLAN);
-
-  LlmBufferSet buffers;
-  const LlmBufferAllocationResult allocation =
-      allocate_llm_buffers(plan, buffers);
-  EXPECT_FALSE(allocation.valid);
-  EXPECT_EQ(allocation.reason_code, LlmExecutorReason::INVALID_WORK_PLAN);
-  EXPECT_FALSE(buffers.complete());
-  EXPECT_EQ(state.map_calls, 0u);
-}
-
-TEST_F(LlmMemoryExecutorTest, ExpectedChecksumsMatchIndependentAllScenarioMultiStepOracle) {
-  const LlmMemoryWorkPlan plan = build_executor_ready_plan({257, 2, 4, 2, 7, 1, 3, 2}, 3);
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  LlmExecutionResources resources;
-  const LlmResourcePreparationResult prepared = prepare_llm_execution_resources(plan, resources);
-  ASSERT_TRUE(prepared.valid) << prepared.reason_code;
-
-  for (LlmScenario scenario : {LlmScenario::WeightsOnly, LlmScenario::KvOnly, LlmScenario::Mixed}) {
-    const LlmScenarioWorkPlan scenario_plan = build_llm_scenario_work_plan(plan, scenario, 2, true);
-    ASSERT_TRUE(scenario_plan.valid) << scenario_plan.reason_code;
-    const LlmExpectedChecksumResult actual = calculate_llm_expected_checksums(plan, scenario_plan, resources);
-    ASSERT_TRUE(actual.valid) << actual.reason_code;
-    const std::vector<LlmWorkerChecksum> expected = scalar_expected(plan, scenario_plan, resources);
-    ASSERT_EQ(actual.workers.size(), expected.size());
-    for (size_t worker = 0; worker < expected.size(); ++worker) {
-      SCOPED_TRACE(::testing::Message() << llm_scenario_to_string(scenario) << " worker " << worker);
-      expect_worker_equal(actual.workers[worker], expected[worker]);
+    ASSERT_EQ(context.invocations.size(), effective_workers);
+    for (const LlmKernelInvocation& invocation : context.invocations) {
+      EXPECT_EQ(invocation.layers, resources.worker_layers(invocation.worker_index));
+      EXPECT_EQ(invocation.sequences, resources.worker_sequences(invocation.worker_index));
+      EXPECT_EQ(invocation.layer_count, plan.geometry.layer_count);
+      EXPECT_EQ(invocation.work_unit_count, scenario.work_units);
+      EXPECT_EQ(invocation.scenario_flags, 3u);
+      EXPECT_EQ(invocation.scenario_seed, scenario.scenario_seed);
     }
-    const LlmRunChecksum folded = fold_llm_worker_checksums(expected.data(), expected.size());
-    EXPECT_EQ(actual.run_checksum.state_a, folded.state_a);
-    EXPECT_EQ(actual.run_checksum.state_b, folded.state_b);
+    const size_t timer_started = first_event(context.events, LlmExecutorEvent::TimerStarted);
+    const size_t first_kernel = first_event(context.events, LlmExecutorEvent::KernelStarted);
+    const size_t last_kernel = last_event(context.events, LlmExecutorEvent::KernelCompleted);
+    const size_t timer_stopped = first_event(context.events, LlmExecutorEvent::TimerStopped);
+    const size_t validation = first_event(context.events, LlmExecutorEvent::ChecksumValidationStarted);
+    EXPECT_LT(timer_started, first_kernel);
+    EXPECT_LT(last_kernel, timer_stopped);
+    EXPECT_LT(timer_stopped, validation);
+  }
+
+  state = {};
+  {
+    SCOPED_TRACE("component-mismatch-kernel-failure-and-partial-startup");
+    const LlmMemoryWorkPlan plan = build_executor_ready_plan({128, 1, 1, 1, 16, 1, 2, 1}, 2);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    LlmExecutionResources resources;
+    ASSERT_TRUE(prepare_llm_execution_resources(plan, resources).valid);
+    const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(plan, LlmScenario::Mixed, 1, true);
+    ASSERT_TRUE(scenario.valid);
+    const LlmExpectedChecksumResult expected = calculate_llm_expected_checksums(plan, scenario, resources);
+    ASSERT_TRUE(expected.valid);
+
+    ScopedExecutorTimer timer_calls;
+    auto timer = HighResTimer::create();
+    ASSERT_TRUE(timer.has_value());
+
+    FakeKernelContext mismatch;
+    mismatch.expected = &expected.workers;
+    mismatch.corrupt_worker = 0;
+    LlmExecutorResult result = execute_llm_scenario(plan, scenario, resources, *timer, {fake_kernel, &mismatch});
+    EXPECT_FALSE(result.valid);
+    EXPECT_EQ(result.reason_code, LlmExecutorReason::CHECKSUM_MISMATCH);
+    EXPECT_TRUE(result.checksum_evaluated);
+    EXPECT_FALSE(result.checksum_valid);
+    EXPECT_TRUE(result.post_validation_evaluated);
+    EXPECT_TRUE(result.post_validation_valid);
+    EXPECT_TRUE(result.timer_stopped);
+
+    FakeKernelContext kernel_failure;
+    kernel_failure.expected = &expected.workers;
+    kernel_failure.fail_worker = 0;
+    result = execute_llm_scenario(plan, scenario, resources, *timer, {fake_kernel, &kernel_failure});
+    EXPECT_FALSE(result.valid);
+    EXPECT_EQ(result.reason_code, LlmExecutorReason::KERNEL_FAILED);
+    EXPECT_FALSE(result.kernel_succeeded);
+    EXPECT_TRUE(result.timer_stopped);
+
+    FakeKernelContext startup_failure;
+    startup_failure.expected = &expected.workers;
+    LlmExecutorTestControl control;
+    control.fail_before_worker_index = 1;
+    control.observe_event = observe_executor_event;
+    control.event_context = &startup_failure;
+    result = execute_llm_scenario(plan, scenario, resources, *timer, {fake_kernel, &startup_failure}, &control);
+    EXPECT_FALSE(result.valid);
+    EXPECT_EQ(result.reason_code, LlmExecutorReason::WORKER_STARTUP_FAILED);
+    EXPECT_TRUE(result.worker_startup_failed);
+    EXPECT_FALSE(result.timer_started);
+    EXPECT_FALSE(result.timer_stopped);
+    EXPECT_EQ(startup_failure.calls.load(std::memory_order_relaxed), 0u);
+    EXPECT_NE(first_event(startup_failure.events, LlmExecutorEvent::WorkerCancelled),
+              std::numeric_limits<size_t>::max());
   }
 }
 
-TEST_F(LlmMemoryExecutorTest, RunFoldRetainsEmptyComponentsInCanonicalOrderGolden) {
-  LlmWorkerChecksum worker;
-  worker.weight = initial_llm_read_checksum(LlmChecksumComponent::Weight);
-  worker.k = initial_llm_read_checksum(LlmChecksumComponent::K);
-  worker.v = initial_llm_read_checksum(LlmChecksumComponent::V);
-  std::array<uint8_t, 19> span{};
-  for (size_t index = 0; index < span.size(); ++index) {
-    span[index] = static_cast<uint8_t>(index);
-  }
-  absorb(worker.weight, span.data(), span.size());
-  const LlmRunChecksum folded = fold_llm_worker_checksums(&worker, 1);
-  EXPECT_EQ(folded.state_a, 0xBCA46801BE6585DBULL);
-  EXPECT_EQ(folded.state_b, 0xEAAC493C97E06CF7ULL);
-}
-
-TEST_F(LlmMemoryExecutorTest, FakeKernelExecutorHonorsInvocationTimingQosAndChecksumBoundary) {
-  const LlmMemoryWorkPlan plan = build_executor_ready_plan({257, 2, 4, 2, 7, 1, 3, 2}, 3);
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  LlmExecutionResources resources;
-  ASSERT_TRUE(prepare_llm_execution_resources(plan, resources).valid);
-  const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(plan, LlmScenario::Mixed, 2, true);
-  ASSERT_TRUE(scenario.valid) << scenario.reason_code;
-  const LlmExpectedChecksumResult expected = calculate_llm_expected_checksums(plan, scenario, resources);
-  ASSERT_TRUE(expected.valid) << expected.reason_code;
-
-  ScopedExecutorTimer timer_calls;
-  auto timer = HighResTimer::create();
-  ASSERT_TRUE(timer.has_value());
-  FakeKernelContext context;
-  context.expected = &expected.workers;
-  LlmExecutorTestControl control;
-  control.set_worker_qos = fake_worker_qos;
-  control.observe_event = observe_executor_event;
-  control.event_context = &context;
-  const LlmExecutorResult result =
-      execute_llm_scenario(plan, scenario, resources, *timer, {fake_kernel, &context}, &control);
-
-  ASSERT_TRUE(result.valid) << result.reason_code;
-  const size_t effective_workers =
-      cpu_execution_plan(plan).effective_workers;
-  EXPECT_EQ(result.reason_code, LlmExecutorReason::VALID);
-  EXPECT_DOUBLE_EQ(result.elapsed_seconds, 100.0 / 1e9);
-  EXPECT_EQ(result.requested_workers, effective_workers);
-  EXPECT_EQ(result.created_workers, effective_workers);
-  EXPECT_EQ(result.completed_workers, effective_workers);
-  EXPECT_EQ(result.qos_successful_workers, 1u);
-  EXPECT_EQ(result.qos_failed_workers, effective_workers - 1);
-  EXPECT_TRUE(result.timer_started);
-  EXPECT_TRUE(result.timer_stopped);
-  EXPECT_TRUE(result.kernel_succeeded);
-  EXPECT_TRUE(result.checksum_evaluated);
-  EXPECT_TRUE(result.checksum_valid);
-  EXPECT_EQ(context.calls.load(std::memory_order_relaxed),
-            effective_workers);
-
-  ASSERT_EQ(context.invocations.size(), effective_workers);
-  for (const LlmKernelInvocation& invocation : context.invocations) {
-    EXPECT_EQ(invocation.layers, resources.worker_layers(invocation.worker_index));
-    EXPECT_EQ(invocation.sequences, resources.worker_sequences(invocation.worker_index));
-    EXPECT_EQ(invocation.layer_count, plan.geometry.layer_count);
-    EXPECT_EQ(invocation.work_unit_count, scenario.work_units);
-    EXPECT_EQ(invocation.scenario_flags, 3u);
-    EXPECT_EQ(invocation.scenario_seed, scenario.scenario_seed);
-  }
-  const size_t timer_started = first_event(context.events, LlmExecutorEvent::TimerStarted);
-  const size_t first_kernel = first_event(context.events, LlmExecutorEvent::KernelStarted);
-  const size_t last_kernel = last_event(context.events, LlmExecutorEvent::KernelCompleted);
-  const size_t timer_stopped = first_event(context.events, LlmExecutorEvent::TimerStopped);
-  const size_t validation = first_event(context.events, LlmExecutorEvent::ChecksumValidationStarted);
-  EXPECT_LT(timer_started, first_kernel);
-  EXPECT_LT(last_kernel, timer_stopped);
-  EXPECT_LT(timer_stopped, validation);
-}
-
-TEST_F(LlmMemoryExecutorTest, ExecutorRejectsComponentMismatchKernelFailureAndPartialStartup) {
-  const LlmMemoryWorkPlan plan = build_executor_ready_plan({128, 1, 1, 1, 16, 1, 2, 1}, 2);
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  LlmExecutionResources resources;
-  ASSERT_TRUE(prepare_llm_execution_resources(plan, resources).valid);
-  const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(plan, LlmScenario::Mixed, 1, true);
-  ASSERT_TRUE(scenario.valid);
-  const LlmExpectedChecksumResult expected = calculate_llm_expected_checksums(plan, scenario, resources);
-  ASSERT_TRUE(expected.valid);
-
-  ScopedExecutorTimer timer_calls;
-  auto timer = HighResTimer::create();
-  ASSERT_TRUE(timer.has_value());
-
-  FakeKernelContext mismatch;
-  mismatch.expected = &expected.workers;
-  mismatch.corrupt_worker = 0;
-  LlmExecutorResult result = execute_llm_scenario(plan, scenario, resources, *timer, {fake_kernel, &mismatch});
-  EXPECT_FALSE(result.valid);
-  EXPECT_EQ(result.reason_code, LlmExecutorReason::CHECKSUM_MISMATCH);
-  EXPECT_TRUE(result.checksum_evaluated);
-  EXPECT_FALSE(result.checksum_valid);
-  EXPECT_TRUE(result.post_validation_evaluated);
-  EXPECT_TRUE(result.post_validation_valid);
-  EXPECT_TRUE(result.timer_stopped);
-
-  FakeKernelContext kernel_failure;
-  kernel_failure.expected = &expected.workers;
-  kernel_failure.fail_worker = 0;
-  result = execute_llm_scenario(plan, scenario, resources, *timer, {fake_kernel, &kernel_failure});
-  EXPECT_FALSE(result.valid);
-  EXPECT_EQ(result.reason_code, LlmExecutorReason::KERNEL_FAILED);
-  EXPECT_FALSE(result.kernel_succeeded);
-  EXPECT_TRUE(result.timer_stopped);
-
-  FakeKernelContext startup_failure;
-  startup_failure.expected = &expected.workers;
-  LlmExecutorTestControl control;
-  control.fail_before_worker_index = 1;
-  control.observe_event = observe_executor_event;
-  control.event_context = &startup_failure;
-  result = execute_llm_scenario(plan, scenario, resources, *timer, {fake_kernel, &startup_failure}, &control);
-  EXPECT_FALSE(result.valid);
-  EXPECT_EQ(result.reason_code, LlmExecutorReason::WORKER_STARTUP_FAILED);
-  EXPECT_TRUE(result.worker_startup_failed);
-  EXPECT_FALSE(result.timer_started);
-  EXPECT_FALSE(result.timer_stopped);
-  EXPECT_EQ(startup_failure.calls.load(std::memory_order_relaxed), 0u);
-  EXPECT_NE(first_event(startup_failure.events, LlmExecutorEvent::WorkerCancelled), std::numeric_limits<size_t>::max());
-}
-
-TEST_F(LlmMemoryExecutorTest, ExecutorRejectsZeroElapsedTimeAndContainsKernelExceptions) {
+TEST_F(LlmMemoryExecutorTest, ExecutorZeroElapsedTimerAndKernelExceptionSafety) {
   const LlmMemoryWorkPlan plan = build_executor_ready_plan({128, 1, 1, 1, 16, 1, 2, 1}, 2);
   ASSERT_TRUE(plan.valid) << plan.reason_code;
   LlmExecutionResources resources;
@@ -1833,8 +1493,10 @@ TEST_F(LlmMemoryExecutorTest, ExecutorRejectsZeroElapsedTimeAndContainsKernelExc
   ASSERT_TRUE(scenario.valid) << scenario.reason_code;
   const LlmExpectedChecksumResult expected = calculate_llm_expected_checksums(plan, scenario, resources);
   ASSERT_TRUE(expected.valid) << expected.reason_code;
+  const size_t effective_workers = cpu_execution_plan(plan).effective_workers;
 
   {
+    SCOPED_TRACE("stationary-timer-zero-elapsed");
     ScopedStationaryExecutorTimer timer_calls;
     auto timer = HighResTimer::create();
     ASSERT_TRUE(timer.has_value());
@@ -1851,6 +1513,7 @@ TEST_F(LlmMemoryExecutorTest, ExecutorRejectsZeroElapsedTimeAndContainsKernelExc
   }
 
   {
+    SCOPED_TRACE("throwing-kernel");
     ScopedExecutorTimer timer_calls;
     auto timer = HighResTimer::create();
     ASSERT_TRUE(timer.has_value());
@@ -1861,21 +1524,9 @@ TEST_F(LlmMemoryExecutorTest, ExecutorRejectsZeroElapsedTimeAndContainsKernelExc
     EXPECT_FALSE(result.kernel_succeeded);
     EXPECT_TRUE(result.timer_stopped);
   }
-}
-
-TEST_F(LlmMemoryExecutorTest, ExecutorCancelsOrFinalizesWorkersWhenTimerHooksThrow) {
-  const LlmMemoryWorkPlan plan = build_executor_ready_plan({128, 1, 1, 1, 16, 1, 2, 1}, 2);
-  ASSERT_TRUE(plan.valid) << plan.reason_code;
-  LlmExecutionResources resources;
-  ASSERT_TRUE(prepare_llm_execution_resources(plan, resources).valid);
-  const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(plan, LlmScenario::Mixed, 1, true);
-  ASSERT_TRUE(scenario.valid) << scenario.reason_code;
-  const LlmExpectedChecksumResult expected = calculate_llm_expected_checksums(plan, scenario, resources);
-  ASSERT_TRUE(expected.valid) << expected.reason_code;
-  const size_t effective_workers =
-      cpu_execution_plan(plan).effective_workers;
 
   {
+    SCOPED_TRACE("throwing-timer-start");
     ScopedThrowingStartTimer timer_calls;
     auto timer = HighResTimer::create();
     ASSERT_TRUE(timer.has_value());
@@ -1898,6 +1549,7 @@ TEST_F(LlmMemoryExecutorTest, ExecutorCancelsOrFinalizesWorkersWhenTimerHooksThr
   }
 
   {
+    SCOPED_TRACE("throwing-timer-stop");
     ScopedThrowingStopTimer timer_calls;
     auto timer = HighResTimer::create();
     ASSERT_TRUE(timer.has_value());
@@ -1911,8 +1563,7 @@ TEST_F(LlmMemoryExecutorTest, ExecutorCancelsOrFinalizesWorkersWhenTimerHooksThr
     EXPECT_TRUE(result.kernel_succeeded);
     EXPECT_TRUE(result.timer_started);
     EXPECT_FALSE(result.timer_stopped);
-    EXPECT_EQ(context.calls.load(std::memory_order_relaxed),
-              effective_workers);
+    EXPECT_EQ(context.calls.load(std::memory_order_relaxed), effective_workers);
   }
 }
 
@@ -2030,52 +1681,91 @@ TEST_F(LlmMemoryExecutorTest, CpuAdapterOwnsCpuLifecycleAcceptanceAndPreservesTa
   EXPECT_FALSE(result.timing.valid);
 }
 
-TEST_F(LlmMemoryExecutorTest, ContiguousDecodeAppendCorruptionIntegration) {
-  for (size_t record_bytes : {1u, 7u, 8u, 9u, 33u}) {
-    const auto plan = build_executor_ready_plan({257, 2, 1, 1, record_bytes, 1, 5, 3}, 3);
+TEST_F(LlmMemoryExecutorTest, ContiguousDecodeAndPrefillCorruptionFailsPostValidationIntegration) {
+  {
+    SCOPED_TRACE("prefill-boundary-corruption");
+    const LlmMemoryWorkPlan plan = build_executor_ready_plan(prefill_geometry(), 2);
+    ASSERT_TRUE(plan.valid) << plan.reason_code;
+    LlmExecutionResources resources;
+    const LlmResourcePreparationResult prepared = prepare_llm_execution_resources(plan, resources);
+    ASSERT_TRUE(prepared.valid) << prepared.reason_code;
+    const LlmScenarioWorkPlan scenario = build_llm_scenario_work_plan(plan, LlmScenario::Mixed, 2, true);
+    ASSERT_TRUE(scenario.valid) << scenario.reason_code;
+    PrefillCorruptionContext context;
+    ScopedExecutorTimer timer_scope;
+    auto timer = HighResTimer::create();
+    ASSERT_TRUE(timer.has_value());
+
+    const LlmExecutorResult result =
+        execute_llm_scenario(plan, scenario, resources, *timer, {prefill_corrupting_kernel, &context});
+    EXPECT_TRUE(context.corrupted.load(std::memory_order_acquire));
+    EXPECT_FALSE(result.valid);
+    EXPECT_EQ(result.reason_code, LlmExecutorReason::PREFILL_POST_VALIDATION_FAILED);
+    EXPECT_TRUE(result.kernel_succeeded);
+    EXPECT_TRUE(result.checksum_evaluated);
+    EXPECT_TRUE(result.checksum_valid);
+    EXPECT_TRUE(result.post_validation_evaluated);
+    EXPECT_FALSE(result.post_validation_valid);
+  }
+
+  // Representative contiguous decode corruption boundaries covering start/middle/tail bytes,
+  // sub-word/word/cross-word/multi-vector records, K/V domains, scenarios, work counts, and layer/batch strides.
+  struct DecodeCorruptionCase {
+    size_t record_bytes;
+    LlmScenario scenario;
+    size_t work_units;
+    size_t layer;
+    size_t batch;
+    bool is_k;
+    size_t byte_offset;
+  };
+  constexpr std::array<DecodeCorruptionCase, 10> kDecodeCases = {{
+      {1u, LlmScenario::KvOnly, 1u, 0u, 0u, true, 0u},
+      {1u, LlmScenario::Mixed, 3u, 1u, 2u, false, 0u},
+      {7u, LlmScenario::KvOnly, 3u, 0u, 1u, true, 0u},
+      {7u, LlmScenario::Mixed, 1u, 1u, 0u, false, 6u},
+      {8u, LlmScenario::KvOnly, 1u, 0u, 2u, true, 7u},
+      {8u, LlmScenario::Mixed, 3u, 1u, 1u, false, 4u},
+      {9u, LlmScenario::KvOnly, 3u, 1u, 0u, true, 8u},
+      {9u, LlmScenario::Mixed, 1u, 0u, 1u, false, 0u},
+      {33u, LlmScenario::KvOnly, 1u, 0u, 2u, true, 16u},
+      {33u, LlmScenario::Mixed, 3u, 1u, 2u, false, 32u},
+  }};
+
+  for (const DecodeCorruptionCase& test_case : kDecodeCases) {
+    state = {};
+    SCOPED_TRACE(::testing::Message() << test_case.record_bytes << "/" << test_case.work_units << "/"
+                                      << test_case.layer << "/" << test_case.batch << "/" << test_case.is_k << "/"
+                                      << test_case.byte_offset);
+    const auto plan = build_executor_ready_plan({257, 2, 1, 1, test_case.record_bytes, 1, 5, 3}, 3);
     ASSERT_TRUE(plan.valid) << plan.reason_code;
     LlmExecutionResources resources;
     ASSERT_TRUE(prepare_llm_execution_resources(plan, resources).valid);
-    for (auto scenario : {LlmScenario::KvOnly, LlmScenario::Mixed}) {
-      for (size_t work : {1u, 3u}) {
-        const auto task = build_llm_scenario_work_plan(plan, scenario, work, true);
-        ASSERT_TRUE(task.valid);
-        for (size_t layer = 0; layer < 2; ++layer) {
-          for (size_t batch = 0; batch < 3; ++batch) {
-            for (bool is_k : {true, false}) {
-              for (size_t byte : {size_t(0), record_bytes - 1}) {
-                SCOPED_TRACE(::testing::Message() << record_bytes << "/" << work << "/" << layer
-                             << "/" << batch << "/" << is_k << "/" << byte);
-                auto* base = static_cast<uint8_t*>(is_k ? resources.buffers.k.get() : resources.buffers.v.get());
-                DecodeCorruptionContext context;
-                context.target = base + (layer * 3 + batch) * plan.geometry.k_or_v_sequence_visible_bytes +
-                                 4 * record_bytes + byte;
-                auto timer = HighResTimer::create();
-                ASSERT_TRUE(timer.has_value());
-                const auto result = execute_llm_scenario(plan, task, resources, *timer,
-                                                         {decode_corrupting_kernel, &context});
-                EXPECT_TRUE(context.changed.load());
-                EXPECT_TRUE(result.checksum_valid);
-                EXPECT_TRUE(result.timer_stopped);
-                EXPECT_EQ(result.completed_workers, result.requested_workers);
-                EXPECT_FALSE(result.valid);
-                EXPECT_TRUE(result.post_validation_evaluated);
-                EXPECT_FALSE(result.post_validation_valid);
-                EXPECT_TRUE(result.cold_checks[0].evaluated);
-                EXPECT_TRUE(result.cold_checks[0].valid);
-                EXPECT_TRUE(result.cold_checks[1].evaluated);
-                EXPECT_FALSE(result.cold_checks[1].valid);
-                EXPECT_FALSE(result.cold_checks[2].applicable);
-                EXPECT_TRUE(result.kv_write_validation_applicable);
-                EXPECT_TRUE(result.kv_write_validation_evaluated);
-                EXPECT_FALSE(result.kv_write_validation_valid);
-                EXPECT_EQ(result.reason_code, LlmExecutorReason::DECODE_POST_VALIDATION_FAILED);
-              }
-            }
-          }
-        }
-      }
-    }
+    const auto task = build_llm_scenario_work_plan(plan, test_case.scenario, test_case.work_units, true);
+    ASSERT_TRUE(task.valid);
+    auto* base = static_cast<uint8_t*>(test_case.is_k ? resources.buffers.k.get() : resources.buffers.v.get());
+    DecodeCorruptionContext context;
+    context.target = base + (test_case.layer * 3 + test_case.batch) * plan.geometry.k_or_v_sequence_visible_bytes +
+                     4 * test_case.record_bytes + test_case.byte_offset;
+    auto timer = HighResTimer::create();
+    ASSERT_TRUE(timer.has_value());
+    const auto result = execute_llm_scenario(plan, task, resources, *timer, {decode_corrupting_kernel, &context});
+    EXPECT_TRUE(context.changed.load());
+    EXPECT_TRUE(result.checksum_valid);
+    EXPECT_TRUE(result.timer_stopped);
+    EXPECT_EQ(result.completed_workers, result.requested_workers);
+    EXPECT_FALSE(result.valid);
+    EXPECT_TRUE(result.post_validation_evaluated);
+    EXPECT_FALSE(result.post_validation_valid);
+    EXPECT_TRUE(result.cold_checks[0].evaluated);
+    EXPECT_TRUE(result.cold_checks[0].valid);
+    EXPECT_TRUE(result.cold_checks[1].evaluated);
+    EXPECT_FALSE(result.cold_checks[1].valid);
+    EXPECT_FALSE(result.cold_checks[2].applicable);
+    EXPECT_TRUE(result.kv_write_validation_applicable);
+    EXPECT_TRUE(result.kv_write_validation_evaluated);
+    EXPECT_FALSE(result.kv_write_validation_valid);
+    EXPECT_EQ(result.reason_code, LlmExecutorReason::DECODE_POST_VALIDATION_FAILED);
   }
 }
 
