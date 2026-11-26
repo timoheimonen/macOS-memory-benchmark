@@ -22,15 +22,13 @@
 #include <cerrno>
 #include <chrono>
 #include <csignal>
-#include <cstdio>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <filesystem>
 #include <fstream>
-#include <fcntl.h>
-#include <iterator>
-#include <limits>
 #include <memory>
 #include <spawn.h>
 #include <sstream>
@@ -41,13 +39,12 @@
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 #include "core/config/constants.h"
 #include "core/config/version.h"
-#include "core/system/system_info.h"
 #include "llm_memory/llm_backend.h"
-#include "llm_memory/llm_memory.h"
 #include "output/console/messages/messages_api.h"
 #include "third_party/nlohmann/json.hpp"
 
@@ -60,29 +57,45 @@ class TemporaryCliDirectory {
   TemporaryCliDirectory() {
     static std::atomic<unsigned long> sequence{0};
     path_ = std::filesystem::path("/tmp") /
-            ("membenchmark_cli_run_" + std::to_string(::getpid()) + "_" +
-             std::to_string(sequence.fetch_add(1)));
+            ("membenchmark_cli_run_" + std::to_string(::getpid()) + "_" + std::to_string(sequence.fetch_add(1)));
     std::error_code error;
     std::filesystem::remove_all(path_, error);
     error.clear();
     if (!std::filesystem::create_directories(path_, error) || error) {
-      throw std::runtime_error("failed to create CLI test directory: " +
-                               error.message());
+      throw std::runtime_error("failed to create CLI test directory: " + error.message());
     }
   }
-
   ~TemporaryCliDirectory() {
     std::error_code ignored;
     std::filesystem::remove_all(path_, ignored);
   }
-
   TemporaryCliDirectory(const TemporaryCliDirectory&) = delete;
   TemporaryCliDirectory& operator=(const TemporaryCliDirectory&) = delete;
-
   const std::filesystem::path& path() const { return path_; }
 
  private:
   std::filesystem::path path_;
+};
+
+class TemporaryJsonFile {
+ public:
+  explicit TemporaryJsonFile(const std::string& test_name) {
+    static std::atomic<unsigned long> sequence{0};
+    path_ = "/tmp/membenchmark_cli_" + std::to_string(::getpid()) + "_" + std::to_string(sequence.fetch_add(1)) + "_" +
+            test_name + ".json";
+    std::remove(path_.c_str());
+    std::remove((path_ + ".tmp").c_str());
+  }
+  ~TemporaryJsonFile() {
+    std::remove(path_.c_str());
+    std::remove((path_ + ".tmp").c_str());
+  }
+  TemporaryJsonFile(const TemporaryJsonFile&) = delete;
+  TemporaryJsonFile& operator=(const TemporaryJsonFile&) = delete;
+  const std::string& path() const { return path_; }
+
+ private:
+  std::string path_;
 };
 
 struct CliResult {
@@ -93,8 +106,7 @@ struct CliResult {
   bool timed_out = false;
   std::string stdout_output;
   std::string stderr_output;
-  // Existing file-output tests use a channel-agnostic transcript. Capture is
-  // still performed independently; only the post-process test view is joined.
+  // Channel-agnostic transcript for file-output checks; capture remains split.
   std::string output;
   std::string infrastructure_error;
   std::unique_ptr<TemporaryCliDirectory> directory;
@@ -107,37 +119,19 @@ std::string read_file(const std::string& path) {
   return contents.str();
 }
 
-void decode_process_status(int status, CliResult& result) {
-  if (WIFEXITED(status)) {
-    result.exit_code = WEXITSTATUS(status);
-  } else if (WIFSIGNALED(status)) {
-    result.termination_signal = WTERMSIG(status);
-  }
-}
-
 bool terminate_and_reap_child(pid_t child, int& status, CliResult& result) {
-  if (kill(child, SIGKILL) == -1 && errno != ESRCH &&
-      result.wait_error == 0) {
-    result.wait_error = errno;
-  }
-
+  if (kill(child, SIGKILL) == -1 && errno != ESRCH && result.wait_error == 0) result.wait_error = errno;
   pid_t wait_result = -1;
   do {
     wait_result = waitpid(child, &status, 0);
   } while (wait_result == -1 && errno == EINTR);
-
-  if (wait_result == child) {
-    return true;
-  }
-  if (wait_result == -1 && errno != ECHILD && result.wait_error == 0) {
-    result.wait_error = errno;
-  }
+  if (wait_result == child) return true;
+  if (wait_result == -1 && errno != ECHILD && result.wait_error == 0) result.wait_error = errno;
   return false;
 }
 
-CliResult run_memory_benchmark(
-    const std::vector<std::string>& args,
-    std::chrono::milliseconds timeout = std::chrono::minutes(10)) {
+CliResult run_memory_benchmark(const std::vector<std::string>& args,
+                               std::chrono::milliseconds timeout = std::chrono::minutes(10)) {
   CliResult result;
   try {
     result.directory = std::make_unique<TemporaryCliDirectory>();
@@ -147,37 +141,28 @@ CliResult run_memory_benchmark(
   }
 
   std::error_code path_error;
-  const std::filesystem::path executable_path =
-      std::filesystem::absolute("memory_benchmark", path_error);
+  const std::filesystem::path executable_path = std::filesystem::absolute("memory_benchmark", path_error);
   if (path_error) {
-    result.infrastructure_error =
-        "failed to resolve executable path: " + path_error.message();
+    result.infrastructure_error = "failed to resolve executable path: " + path_error.message();
     return result;
   }
 
-  const std::filesystem::path stdout_path =
-      result.directory->path() / ".stdout-capture";
-  const std::filesystem::path stderr_path =
-      result.directory->path() / ".stderr-capture";
-
+  const std::filesystem::path stdout_path = result.directory->path() / ".stdout-capture";
+  const std::filesystem::path stderr_path = result.directory->path() / ".stderr-capture";
   posix_spawn_file_actions_t actions;
   int action_result = posix_spawn_file_actions_init(&actions);
   if (action_result != 0) {
     result.spawn_error = action_result;
     return result;
   }
-
-  action_result = posix_spawn_file_actions_addchdir(
-      &actions, result.directory->path().c_str());
+  action_result = posix_spawn_file_actions_addchdir(&actions, result.directory->path().c_str());
   if (action_result == 0) {
-    action_result = posix_spawn_file_actions_addopen(
-        &actions, STDOUT_FILENO, stdout_path.c_str(),
-        O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    action_result = posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, stdout_path.c_str(),
+                                                     O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
   }
   if (action_result == 0) {
-    action_result = posix_spawn_file_actions_addopen(
-        &actions, STDERR_FILENO, stderr_path.c_str(),
-        O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    action_result = posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, stderr_path.c_str(),
+                                                     O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
   }
   if (action_result != 0) {
     posix_spawn_file_actions_destroy(&actions);
@@ -191,15 +176,11 @@ CliResult run_memory_benchmark(
   argument_storage.insert(argument_storage.end(), args.begin(), args.end());
   std::vector<char*> argv;
   argv.reserve(argument_storage.size() + 1);
-  for (std::string& argument : argument_storage) {
-    argv.push_back(argument.data());
-  }
+  for (std::string& argument : argument_storage) argv.push_back(argument.data());
   argv.push_back(nullptr);
 
   pid_t child = -1;
-  const int spawn_result =
-      posix_spawn(&child, executable_path.c_str(), &actions, nullptr,
-                  argv.data(), environ);
+  const int spawn_result = posix_spawn(&child, executable_path.c_str(), &actions, nullptr, argv.data(), environ);
   posix_spawn_file_actions_destroy(&actions);
   if (spawn_result != 0) {
     result.spawn_error = spawn_result;
@@ -208,8 +189,7 @@ CliResult run_memory_benchmark(
 
   int status = 0;
   bool child_reaped = false;
-  const std::chrono::steady_clock::time_point deadline =
-      std::chrono::steady_clock::now() + timeout;
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (!child_reaped) {
     const pid_t wait_result = waitpid(child, &status, WNOHANG);
     if (wait_result == child) {
@@ -217,9 +197,7 @@ CliResult run_memory_benchmark(
       break;
     }
     if (wait_result == -1) {
-      if (errno == EINTR) {
-        continue;
-      }
+      if (errno == EINTR) continue;
       result.wait_error = errno;
       child_reaped = terminate_and_reap_child(child, status, result);
       break;
@@ -233,7 +211,11 @@ CliResult run_memory_benchmark(
   }
 
   if (child_reaped) {
-    decode_process_status(status, result);
+    if (WIFEXITED(status)) {
+      result.exit_code = WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+      result.termination_signal = WTERMSIG(status);
+    }
   }
   result.stdout_output = read_file(stdout_path.string());
   result.stderr_output = read_file(stderr_path.string());
@@ -241,36 +223,10 @@ CliResult run_memory_benchmark(
   return result;
 }
 
-class TemporaryJsonFile {
- public:
-  explicit TemporaryJsonFile(const std::string& test_name) {
-    static std::atomic<unsigned long> sequence{0};
-    path_ = "/tmp/membenchmark_cli_" + std::to_string(getpid()) + "_" +
-            std::to_string(sequence.fetch_add(1)) + "_" + test_name +
-            ".json";
-    std::remove(path_.c_str());
-    std::remove((path_ + ".tmp").c_str());
-  }
-
-  ~TemporaryJsonFile() {
-    std::remove(path_.c_str());
-    std::remove((path_ + ".tmp").c_str());
-  }
-
-  TemporaryJsonFile(const TemporaryJsonFile&) = delete;
-  TemporaryJsonFile& operator=(const TemporaryJsonFile&) = delete;
-
-  const std::string& path() const { return path_; }
-
- private:
-  std::string path_;
-};
-
 size_t count_occurrences(const std::string& text, const std::string& needle) {
   size_t count = 0;
   size_t position = 0;
-  while (!needle.empty() &&
-         (position = text.find(needle, position)) != std::string::npos) {
+  while (!needle.empty() && (position = text.find(needle, position)) != std::string::npos) {
     ++count;
     position += needle.size();
   }
@@ -278,30 +234,19 @@ size_t count_occurrences(const std::string& text, const std::string& needle) {
 }
 
 void expect_single_runtime_banner(const CliResult& result) {
-  EXPECT_EQ(count_occurrences(result.output,
-                              Messages::config_header(SOFTVERSION)),
-            1u)
-      << result.output;
-  EXPECT_EQ(count_occurrences(result.output, Messages::config_copyright()),
-            1u)
-      << result.output;
-  EXPECT_EQ(count_occurrences(result.output, Messages::config_license()), 1u)
-      << result.output;
+  EXPECT_EQ(count_occurrences(result.output, Messages::config_header(SOFTVERSION)), 1u) << result.output;
+  EXPECT_EQ(count_occurrences(result.output, Messages::config_copyright()), 1u) << result.output;
+  EXPECT_EQ(count_occurrences(result.output, Messages::config_license()), 1u) << result.output;
 }
 
 void expect_no_runtime_banner(const CliResult& result) {
-  EXPECT_EQ(result.output.find(Messages::config_header(SOFTVERSION)),
-            std::string::npos)
-      << result.output;
+  EXPECT_EQ(result.output.find(Messages::config_header(SOFTVERSION)), std::string::npos) << result.output;
 }
 
 void expect_process_completed(const CliResult& result) {
-  EXPECT_TRUE(result.infrastructure_error.empty())
-      << result.infrastructure_error;
-  EXPECT_EQ(result.spawn_error, 0)
-      << std::strerror(result.spawn_error);
-  EXPECT_EQ(result.wait_error, 0)
-      << std::strerror(result.wait_error);
+  EXPECT_TRUE(result.infrastructure_error.empty()) << result.infrastructure_error;
+  EXPECT_EQ(result.spawn_error, 0) << std::strerror(result.spawn_error);
+  EXPECT_EQ(result.wait_error, 0) << std::strerror(result.wait_error);
   EXPECT_FALSE(result.timed_out);
   EXPECT_EQ(result.termination_signal, 0);
 }
@@ -318,23 +263,60 @@ nlohmann::json parse_single_stdout_json(const CliResult& result) {
     ADD_FAILURE() << "stdout was empty; stderr:\n" << result.stderr_output;
     return nlohmann::json::object();
   }
-
   EXPECT_EQ(text.back(), '\n') << text;
   const size_t last_non_whitespace = text.find_last_not_of(" \t\r\n");
   if (last_non_whitespace == std::string::npos) {
     ADD_FAILURE() << "stdout contained only whitespace";
     return nlohmann::json::object();
   }
-  EXPECT_EQ(last_non_whitespace + 2, text.size())
-      << "stdout must have exactly one trailing newline";
+  EXPECT_EQ(last_non_whitespace + 2, text.size()) << "stdout must have exactly one trailing newline";
   EXPECT_EQ(text.find('\r'), std::string::npos);
   if (!nlohmann::json::accept(text)) {
-    ADD_FAILURE() << "stdout was not exactly one JSON document:\n" << text
-                  << "stderr:\n"
-                  << result.stderr_output;
+    ADD_FAILURE() << "stdout was not exactly one JSON document:\n" << text << "stderr:\n" << result.stderr_output;
     return nlohmann::json::object();
   }
   return nlohmann::json::parse(text);
+}
+
+nlohmann::json expect_stdout_json_transport(const CliResult& result, const std::string& stderr_marker = "") {
+  const nlohmann::json json = parse_single_stdout_json(result);
+  expect_single_runtime_banner(result);
+  EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)), std::string::npos);
+  EXPECT_NE(result.stderr_output.find(Messages::config_header(SOFTVERSION)), std::string::npos) << result.stderr_output;
+  if (!stderr_marker.empty()) {
+    EXPECT_EQ(result.stdout_output.find(stderr_marker), std::string::npos);
+    EXPECT_NE(result.stderr_output.find(stderr_marker), std::string::npos) << result.stderr_output;
+  }
+  EXPECT_EQ(count_occurrences(result.output, Messages::msg_results_saved_to("")), 0u) << result.output;
+  expect_no_dash_transport_artifacts(result);
+  return json;
+}
+
+nlohmann::json expect_atomic_file_json(const CliResult& result, const std::filesystem::path& file_path,
+                                       bool expect_exact_saved_path = true) {
+  expect_single_runtime_banner(result);
+  EXPECT_TRUE(std::filesystem::is_regular_file(file_path)) << result.output;
+  EXPECT_FALSE(std::filesystem::exists(file_path.string() + ".tmp"));
+  if (expect_exact_saved_path) {
+    EXPECT_EQ(count_occurrences(result.stdout_output, Messages::msg_results_saved_to(file_path.string())), 1u)
+        << result.output;
+    EXPECT_EQ(result.stderr_output.find(Messages::msg_results_saved_to(file_path.string())), std::string::npos)
+        << result.output;
+  }
+  return nlohmann::json::parse(read_file(file_path.string()));
+}
+
+void expect_complete_sweep_envelope(const nlohmann::json& envelope, const char* expected_base_mode,
+                                    size_t expected_runs) {
+  EXPECT_EQ(envelope["configuration"]["mode"], Constants::SWEEP_JSON_MODE_NAME);
+  EXPECT_EQ(envelope["configuration"]["base_mode"], expected_base_mode);
+  EXPECT_EQ(envelope["configuration"]["sweep_schema_version"], Constants::SWEEP_JSON_SCHEMA_VERSION);
+  EXPECT_EQ(envelope["status"], "complete");
+  EXPECT_EQ(envelope["planned_runs"], expected_runs);
+  EXPECT_EQ(envelope["attempted_runs"], expected_runs);
+  EXPECT_EQ(envelope["completed_runs"], expected_runs);
+  EXPECT_TRUE(envelope["conclusions_valid"].get<bool>());
+  ASSERT_EQ(envelope["runs"].size(), expected_runs);
 }
 
 const nlohmann::json& canonical_llm_plan(const nlohmann::json& document, const nlohmann::json& measurement) {
@@ -346,15 +328,15 @@ void expect_complete_llm_named_checks(const nlohmann::json& document, const nloh
   const bool prefill = document.at("phase") == "prefill";
   const bool paged = document.at("kv_layout") == "paged";
   const bool writes = measurement.at("scenario") != "weights_only";
-  const bool padding = paged &&
-      document.at("resolved_plan").at("resources").at("k_layout_padding_bytes") != "0";
+  const bool padding = paged && document.at("resolved_plan").at("resources").at("k_layout_padding_bytes") != "0";
   const std::array<const char*, 3> kinds = {
       "post-validation-structure",
-      prefill ? "kv-prefill-final-samples" : cpu && !writes ? "kv-append-unchanged" : "kv-append-final",
+      prefill ? "kv-prefill-final-samples" : (cpu && !writes ? "kv-append-unchanged" : "kv-append-final"),
       "kv-padding-canary"};
   const std::array<bool, 3> applicability = {
       cpu ? paged || prefill || writes : writes,
-      writes || (cpu && paged && !prefill), padding && (cpu || writes)};
+      writes || (cpu && paged && !prefill),
+      padding && (cpu || writes)};
   const auto& checks = measurement.at("execution").at("validation").at("checks");
   ASSERT_TRUE(checks.is_array());
   ASSERT_EQ(checks.size(), kinds.size());
@@ -391,15 +373,34 @@ void expect_complete_llm_checkpoint_lifecycle(const nlohmann::json& json) {
   EXPECT_TRUE(lifecycle["current_persistence_success"].is_null());
 }
 
-void expect_complete_or_unsupported_metal_result(
-    const CliResult& result, const nlohmann::json& json,
-    const char* expected_kv_layout = "contiguous",
-    const char* expected_methodology =
-        "llm-memory-v2-metal-decode-contiguous",
-    const char* expected_phase = "decode",
-    const char* expected_work_unit_kind = "decode_step") {
+void expect_complete_cpu_llm_document(const nlohmann::json& json, const char* expected_phase,
+                                      const char* expected_kv_layout, const char* expected_methodology,
+                                      const char* expected_work_unit_kind) {
   ASSERT_TRUE(json.is_object());
-  EXPECT_EQ(json["schema_version"], 2);
+  EXPECT_EQ(json["schema_version"], Constants::LLM_JSON_SCHEMA_VERSION);
+  EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
+  EXPECT_EQ(json["backend"], "cpu");
+  EXPECT_EQ(json["phase"], expected_phase);
+  EXPECT_EQ(json["kv_layout"], expected_kv_layout);
+  EXPECT_EQ(json["methodology_version"], expected_methodology);
+  EXPECT_EQ(json["status"], "complete");
+  EXPECT_EQ(json["reason_code"], "complete");
+  EXPECT_TRUE(json["results_complete"].get<bool>());
+  EXPECT_TRUE(json["run_accepted"].get<bool>());
+  EXPECT_TRUE(json["scenario_order_balance_complete"].get<bool>());
+  EXPECT_EQ(json["resolved_plan"]["work_unit_kind"], expected_work_unit_kind);
+  EXPECT_TRUE(json["backend_evidence"]["cpu"].is_object());
+  EXPECT_TRUE(json["backend_evidence"]["metal"].is_null());
+}
+
+void expect_complete_or_unsupported_metal_result(const CliResult& result, const nlohmann::json& json,
+                                                 const char* expected_kv_layout = "contiguous",
+                                                 const char* expected_methodology =
+                                                     "llm-memory-v2-metal-decode-contiguous",
+                                                 const char* expected_phase = "decode",
+                                                 const char* expected_work_unit_kind = "decode_step") {
+  ASSERT_TRUE(json.is_object());
+  EXPECT_EQ(json["schema_version"], Constants::LLM_JSON_SCHEMA_VERSION);
   EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
   EXPECT_EQ(json["backend"], "metal");
   EXPECT_EQ(json["phase"], expected_phase);
@@ -408,14 +409,11 @@ void expect_complete_or_unsupported_metal_result(
   ASSERT_TRUE(json["resolved_plan"].is_object());
   EXPECT_EQ(json["resolved_plan"]["phase"], expected_phase);
   EXPECT_EQ(json["resolved_plan"]["kv_layout"], expected_kv_layout);
-  EXPECT_EQ(json["resolved_plan"]["work_unit_kind"],
-            expected_work_unit_kind);
+  EXPECT_EQ(json["resolved_plan"]["work_unit_kind"], expected_work_unit_kind);
   EXPECT_TRUE(json["backend_evidence"]["cpu"].is_null());
   ASSERT_TRUE(json["backend_evidence"]["metal"].is_object());
-  EXPECT_FALSE(json["backend_evidence"]["metal"]["workers_applicable"]
-                   .get<bool>());
-  EXPECT_FALSE(json["backend_evidence"]["metal"]["worker_qos_applicable"]
-                   .get<bool>());
+  EXPECT_FALSE(json["backend_evidence"]["metal"]["workers_applicable"].get<bool>());
+  EXPECT_FALSE(json["backend_evidence"]["metal"]["worker_qos_applicable"].get<bool>());
 
   const std::string status = json["status"].get<std::string>();
   if (status == "unsupported") {
@@ -423,20 +421,14 @@ void expect_complete_or_unsupported_metal_result(
     EXPECT_FALSE(json["results_complete"].get<bool>());
     EXPECT_FALSE(json["run_accepted"].get<bool>());
     const std::string reason_code = json["reason_code"].get<std::string>();
-    EXPECT_TRUE(
-        reason_code == LlmBackendReason::METAL_DEVICE_UNAVAILABLE ||
-        reason_code == LlmBackendReason::UNIFIED_MEMORY_REQUIRED ||
-        reason_code == LlmBackendReason::APPLE7_FAMILY_REQUIRED ||
-        reason_code == LlmBackendReason::ARGUMENT_BUFFER_TIER2_REQUIRED ||
-        reason_code == LlmBackendReason::
-                           METAL_MAX_BUFFER_LENGTH_BELOW_SEGMENT_CAPACITY)
+    EXPECT_TRUE(reason_code == LlmBackendReason::METAL_DEVICE_UNAVAILABLE ||
+                reason_code == LlmBackendReason::UNIFIED_MEMORY_REQUIRED ||
+                reason_code == LlmBackendReason::APPLE7_FAMILY_REQUIRED ||
+                reason_code == LlmBackendReason::ARGUMENT_BUFFER_TIER2_REQUIRED ||
+                reason_code == LlmBackendReason::METAL_MAX_BUFFER_LENGTH_BELOW_SEGMENT_CAPACITY)
         << reason_code;
-    EXPECT_EQ(json["backend_evidence"]["metal"]["lifecycle"]
-                  ["initialization"]["status"],
-              "unsupported");
-    EXPECT_EQ(json["backend_evidence"]["metal"]["lifecycle"]
-                  ["initialization"]["reason_code"],
-              json["reason_code"]);
+    EXPECT_EQ(json["backend_evidence"]["metal"]["lifecycle"]["initialization"]["status"], "unsupported");
+    EXPECT_EQ(json["backend_evidence"]["metal"]["lifecycle"]["initialization"]["reason_code"], json["reason_code"]);
     EXPECT_EQ(json["checkpoint_lifecycle"]["prior_file_writer_attempts"], 0u);
     EXPECT_EQ(json["checkpoint_lifecycle"]["prior_successful_file_writes"], 0u);
     EXPECT_TRUE(json["checkpoint_lifecycle"]["current_persistence_success"].is_null());
@@ -448,11 +440,8 @@ void expect_complete_or_unsupported_metal_result(
   EXPECT_TRUE(json["results_complete"].get<bool>());
   EXPECT_TRUE(json["run_accepted"].get<bool>());
   EXPECT_EQ(json["reason_code"], "complete");
-  EXPECT_EQ(json["backend_evidence"]["metal"]["lifecycle"]
-                ["initialization"]["status"],
-            "ready");
-  EXPECT_TRUE(json["backend_evidence"]["metal"]["timed_results_available"]
-                  .get<bool>());
+  EXPECT_EQ(json["backend_evidence"]["metal"]["lifecycle"]["initialization"]["status"], "ready");
+  EXPECT_TRUE(json["backend_evidence"]["metal"]["timed_results_available"].get<bool>());
   ASSERT_EQ(json["measurements"].size(), 9u);
   for (const nlohmann::json& measurement : json["measurements"]) {
     EXPECT_EQ(measurement["status"], "measured");
@@ -460,11 +449,10 @@ void expect_complete_or_unsupported_metal_result(
     EXPECT_TRUE(measurement["effective_workers"].is_null());
     ASSERT_TRUE(measurement["execution"]["metal"].is_object());
     const nlohmann::json& task = measurement["execution"]["metal"];
-    EXPECT_EQ(task["commands"]["reset_command_buffers"], 1u);
-    EXPECT_EQ(task["commands"]["timed_command_buffers"], 1u);
-    EXPECT_EQ(task["commands"]["post_validation_command_buffers"], 1u);
-    EXPECT_EQ(task["commands"]["timed_compute_encoders"], 1u);
-    EXPECT_EQ(task["commands"]["timed_workload_dispatches"], 1u);
+    for (const char* cmd : {"reset_command_buffers", "timed_command_buffers", "post_validation_command_buffers",
+                            "timed_compute_encoders", "timed_workload_dispatches"}) {
+      EXPECT_EQ(task["commands"][cmd], 1u) << cmd;
+    }
     EXPECT_TRUE(task["timing"]["gpu_start_seconds"].is_number());
     EXPECT_TRUE(task["timing"]["gpu_end_seconds"].is_number());
     EXPECT_TRUE(measurement["elapsed_seconds"].is_number());
@@ -473,263 +461,84 @@ void expect_complete_or_unsupported_metal_result(
     const auto& canonical = canonical_llm_plan(json, measurement);
     EXPECT_EQ(canonical["scenario"], measurement["scenario"]);
     EXPECT_EQ(canonical["expected_checksum"]["status"], "available");
-    EXPECT_EQ(canonical["expected_checksum"]["expected_run_checksum"],
-              measurement["checksum"]["actual_run_checksum"]);
+    EXPECT_EQ(canonical["expected_checksum"]["expected_run_checksum"], measurement["checksum"]["actual_run_checksum"]);
     expect_complete_llm_named_checks(json, measurement);
   }
   expect_complete_llm_checkpoint_lifecycle(json);
 }
 
-void expect_bounded_metal_prefill_result(
-    const CliResult& result, const nlohmann::json& json,
-    const char* expected_kv_layout = "contiguous",
-    const char* expected_methodology =
-        "llm-memory-v2-metal-prefill-contiguous",
-    const char* expected_write_pattern =
-        "llm-metal-prefill-contiguous-full-prompt-affine32-v1",
-    const char* expected_checksum_pattern =
-        "llm-metal-dual-mod32-v1") {
+void expect_bounded_metal_prefill_result(const CliResult& result, const nlohmann::json& json, bool paged) {
   expect_complete_or_unsupported_metal_result(
-      result, json, expected_kv_layout, expected_methodology, "prefill",
+      result, json, paged ? "paged" : "contiguous",
+      paged ? "llm-memory-v2-metal-prefill-paged" : "llm-memory-v2-metal-prefill-contiguous", "prefill",
       "prefill_operation");
+  const nlohmann::json& plan = json["resolved_plan"];
+  EXPECT_EQ(plan["methodology"]["context_policy"], "full-prompt-population-with-tiled-causal-prefix-scans");
+  EXPECT_EQ(plan["component_identities"]["write_pattern_version"],
+            paged ? "llm-metal-prefill-paged-full-prompt-affine32-v1"
+                  : "llm-metal-prefill-contiguous-full-prompt-affine32-v1");
+  EXPECT_EQ(plan["component_identities"]["checksum_pattern_version"],
+            paged ? "llm-metal-paged-prefill-dual-mod32-lookup-address-mix-v1" : "llm-metal-dual-mod32-v1");
 
-  const nlohmann::json& resolved_plan = json["resolved_plan"];
-  const nlohmann::json& methodology = resolved_plan["methodology"];
-  EXPECT_EQ(json["methodology_version"], expected_methodology);
-  EXPECT_EQ(methodology["work_unit_kind"], "prefill_operation");
-  EXPECT_EQ(methodology["weight_passes_per_work_unit"], 1u);
-  EXPECT_EQ(methodology["kv_replay_factor"], 1u);
-  EXPECT_EQ(methodology["context_policy"],
-            "full-prompt-population-with-tiled-causal-prefix-scans");
-  EXPECT_EQ(resolved_plan["component_identities"]["write_pattern_version"], expected_write_pattern);
-  EXPECT_EQ(resolved_plan["component_identities"]["checksum_pattern_version"],
-            expected_checksum_pattern);
-
-  const nlohmann::json& geometry = resolved_plan["geometry"];
+  const nlohmann::json& geometry = plan["geometry"];
   EXPECT_TRUE(geometry["decode"].is_null());
   ASSERT_TRUE(geometry["prefill"].is_object());
   EXPECT_EQ(geometry["prefill"]["prompt_tokens"], 5u);
   EXPECT_EQ(geometry["prefill"]["attention_query_tile_tokens"], 2u);
   EXPECT_EQ(geometry["prefill"]["tile_count"], "3");
-  EXPECT_EQ(
-      geometry["prefill"]["attention_prefix_token_visits_per_sequence"],
-      "11");
-  EXPECT_EQ(geometry["weight_read_bytes_per_work_unit"], "1048576");
-  EXPECT_EQ(geometry["kv_read_bytes_per_work_unit"], "176");
-  EXPECT_EQ(geometry["kv_write_bytes_per_work_unit"], "80");
-  EXPECT_EQ(geometry["kv_only_effective_model_payload_bytes_per_work_unit"],
-            "256");
-  EXPECT_EQ(geometry["mixed_effective_model_payload_bytes_per_work_unit"],
-            "1048832");
+  EXPECT_EQ(geometry["prefill"]["attention_prefix_token_visits_per_sequence"], "11");
+  EXPECT_EQ(geometry["kv_only_effective_model_payload_bytes_per_work_unit"], "256");
+  EXPECT_EQ(geometry["mixed_effective_model_payload_bytes_per_work_unit"], "1048832");
 
-  if (std::string_view(expected_kv_layout) == "paged") {
+  if (paged) {
     EXPECT_EQ(json["configuration"]["kv_block_tokens"], 4u);
-    EXPECT_EQ(json["configuration"]["resolved_sources"]["kv_layout"],
-              "explicit");
-    EXPECT_EQ(
-        json["configuration"]["resolved_sources"]["kv_block_tokens"],
-        "explicit");
-    const nlohmann::json& layout = resolved_plan["layout"];
-    EXPECT_EQ(layout["kv_layout"], "paged");
-    EXPECT_EQ(resolved_plan["resources"]["block_table_bytes"], "8");
+    EXPECT_EQ(plan["layout"]["kv_layout"], "paged");
+    EXPECT_EQ(plan["resources"]["block_table_bytes"], "8");
     if (json["status"] == "complete") {
-      EXPECT_EQ(layout["kv_block_tokens"], 4u);
-      EXPECT_EQ(layout["blocks_per_sequence"], "2");
-      EXPECT_EQ(layout["last_block_tokens"], "1");
-      EXPECT_EQ(layout["last_block_valid_bytes"], "8");
-      EXPECT_EQ(layout["block_table_entries"], "2");
-      EXPECT_EQ(layout["block_table_bytes"], "8");
+      EXPECT_EQ(plan["layout"]["blocks_per_sequence"], "2");
+      EXPECT_EQ(plan["layout"]["last_block_tokens"], "1");
+      EXPECT_EQ(plan["layout"]["last_block_valid_bytes"], "8");
     }
   }
-
   if (json["status"] == "complete") {
-    ASSERT_EQ(json["measurements"].size(), 9u);
     for (const nlohmann::json& measurement : json["measurements"]) {
       const std::string scenario = measurement["scenario"];
       const bool weights_only = scenario == "weights_only";
       const bool kv_only = scenario == "kv_only";
-      EXPECT_EQ(canonical_llm_plan(json, measurement)["work_unit_kind"], "prefill_operation");
-      EXPECT_EQ(canonical_llm_plan(json, measurement)["kv_write_kind"],
-                weights_only ? "none" : "full_prompt_population");
-      EXPECT_EQ(canonical_llm_plan(json, measurement)["weight_read_bytes_per_work_unit"],
-                kv_only ? "0" : "1048576");
-      EXPECT_EQ(canonical_llm_plan(json, measurement)["kv_read_bytes_per_work_unit"],
-                weights_only ? "0" : "176");
-      EXPECT_EQ(canonical_llm_plan(json, measurement)["kv_write_bytes_per_work_unit"],
-                weights_only ? "0" : "80");
-      EXPECT_EQ(canonical_llm_plan(json, measurement)["effective_model_payload_bytes_per_work_unit"],
-                weights_only ? "1048576"
-                             : kv_only ? "256" : "1048832");
-      const nlohmann::json& task = measurement["execution"]["metal"];
-      EXPECT_EQ(resolved_plan["component_identities"]["checksum_pattern_version"],
-                expected_checksum_pattern);
-      const bool exact_grid_cost =
-          weights_only ||
-          std::string_view(expected_kv_layout) == "paged";
-      if (exact_grid_cost) {
-        EXPECT_EQ(task["grid"]["cost_unit"],
-                  "actual-threadgroup-cost");
-        EXPECT_FALSE(
-            task["grid"]["threadgroup_accounted_bytes"].empty());
-      } else {
-        EXPECT_TRUE(task["grid"]["cost_unit"].is_null());
-        EXPECT_TRUE(
-            task["grid"]["minimum_threadgroup_accounted_bytes"].is_null());
-        EXPECT_TRUE(
-            task["grid"]["maximum_threadgroup_accounted_bytes"].is_null());
-        EXPECT_TRUE(
-            task["grid"]["threadgroup_accounted_imbalance_bytes"].is_null());
-        EXPECT_TRUE(
-            task["grid"]["threadgroup_accounted_bytes"].empty());
-      }
-      if (std::string_view(expected_kv_layout) == "paged") {
-        EXPECT_EQ(canonical_llm_plan(json, measurement)["layout_metadata_lookup_count_per_work_unit"],
-                  weights_only ? "0" : "10");
-        EXPECT_EQ(canonical_llm_plan(json, measurement)["layout_metadata_read_bytes_per_work_unit"],
-                  weights_only ? "0" : "40");
-        EXPECT_EQ(canonical_llm_plan(json, measurement)["accounted_bytes_per_work_unit"],
-                  weights_only ? "1048576"
-                               : kv_only ? "296" : "1048872");
-        EXPECT_EQ(task["grid"]["serial_range_visits_per_lane"],
-                  weights_only ? "1" : "0");
+      const auto& canonical = canonical_llm_plan(json, measurement);
+      EXPECT_EQ(canonical["kv_write_kind"], weights_only ? "none" : "full_prompt_population");
+      EXPECT_EQ(canonical["effective_model_payload_bytes_per_work_unit"],
+                weights_only ? "1048576" : (kv_only ? "256" : "1048832"));
+      const nlohmann::json& grid = measurement["execution"]["metal"]["grid"];
+      EXPECT_EQ(grid["cost_unit"].is_null(), !(weights_only || paged));
+      if (paged) {
+        EXPECT_EQ(canonical["accounted_bytes_per_work_unit"],
+                  weights_only ? "1048576" : (kv_only ? "296" : "1048872"));
+        EXPECT_EQ(grid["serial_range_visits_per_lane"], weights_only ? "1" : "0");
       }
     }
   }
-  EXPECT_EQ(result.output.find(" tokens/s"), std::string::npos)
-      << result.output;
+  EXPECT_EQ(result.output.find(" tokens/s"), std::string::npos) << result.output;
 }
 
-std::vector<std::string> bounded_llm_arguments(
-    const std::string& output_target, size_t loop_count = 3) {
-  return {"--llm-memory",
-          "--weight-size-mb",
-          "1",
-          "--layers",
-          "1",
-          "--query-heads",
-          "1",
-          "--kv-heads",
-          "1",
-          "--head-dim",
-          "8",
-          "--kv-element-bytes",
-          "1",
-          "--context-tokens",
-          "2",
-          "--batch-size",
-          "1",
-          "--threads",
-          "1",
-          "--iterations",
-          "1",
-          "--count",
-          std::to_string(loop_count),
-          "--seed",
-          "42",
-          "--output",
-          output_target};
+std::vector<std::string> bounded_llm_arguments(const std::string& output_target, bool metal = false,
+                                               bool prefill = false, bool paged = false, size_t loop_count = 3) {
+  std::vector<std::string> args = {"--llm-memory"};
+  if (metal) args.insert(args.end(), {"--llm-memory-backend", "metal"});
+  args.insert(args.end(), {"--weight-size-mb", "1", "--layers", "1", "--query-heads", "1", "--kv-heads", "1",
+                           "--head-dim", "8", "--kv-element-bytes", "1"});
+  if (prefill) {
+    args.insert(args.end(), {"--phase", "prefill", "--prompt-tokens", "5", "--attention-query-tile-tokens", "2"});
+  } else {
+    args.insert(args.end(), {"--context-tokens", "2"});
+  }
+  args.insert(args.end(), {"--batch-size", "1"});
+  if (!metal) args.insert(args.end(), {"--threads", "1"});
+  if (paged) args.insert(args.end(), {"--kv-layout", "paged", "--kv-block-tokens", prefill ? "4" : "2"});
+  args.insert(args.end(), {"--iterations", "1", "--count", std::to_string(loop_count), "--seed", "42", "--output",
+                           output_target});
+  return args;
 }
-
-std::vector<std::string> bounded_llm_metal_arguments(
-    const std::string& output_target, size_t loop_count = 3) {
-  return {"--llm-memory",
-          "--llm-memory-backend",
-          "metal",
-          "--weight-size-mb",
-          "1",
-          "--layers",
-          "1",
-          "--query-heads",
-          "1",
-          "--kv-heads",
-          "1",
-          "--head-dim",
-          "8",
-          "--kv-element-bytes",
-          "1",
-          "--context-tokens",
-          "2",
-          "--batch-size",
-          "1",
-          "--iterations",
-          "1",
-          "--count",
-          std::to_string(loop_count),
-          "--seed",
-          "42",
-          "--output",
-          output_target};
-}
-
-std::vector<std::string> bounded_llm_prefill_arguments(const std::string& output_target, size_t loop_count = 3) {
-  return {"--llm-memory",
-          "--weight-size-mb",
-          "1",
-          "--layers",
-          "1",
-          "--query-heads",
-          "1",
-          "--kv-heads",
-          "1",
-          "--head-dim",
-          "8",
-          "--kv-element-bytes",
-          "1",
-          "--phase",
-          "prefill",
-          "--prompt-tokens",
-          "5",
-          "--attention-query-tile-tokens",
-          "2",
-          "--batch-size",
-          "1",
-          "--threads",
-          "1",
-          "--iterations",
-          "1",
-          "--count",
-          std::to_string(loop_count),
-          "--seed",
-          "42",
-          "--output",
-          output_target};
-}
-
-std::vector<std::string> bounded_llm_metal_prefill_arguments(
-    const std::string& output_target, size_t loop_count = 3) {
-  return {"--llm-memory",
-          "--llm-memory-backend",
-          "metal",
-          "--weight-size-mb",
-          "1",
-          "--layers",
-          "1",
-          "--query-heads",
-          "1",
-          "--kv-heads",
-          "1",
-          "--head-dim",
-          "8",
-          "--kv-element-bytes",
-          "1",
-          "--phase",
-          "prefill",
-          "--prompt-tokens",
-          "5",
-          "--attention-query-tile-tokens",
-          "2",
-          "--batch-size",
-          "1",
-          "--iterations",
-          "1",
-          "--count",
-          std::to_string(loop_count),
-          "--seed",
-          "42",
-          "--output",
-          output_target};
-}
-
 
 }  // namespace
 
@@ -778,593 +587,6 @@ TEST(ExecutableCliIntegrationTest, HelpRemainsHumanAcrossModesAndOutputOrderingI
   }
 }
 
-TEST(ExecutableCliIntegrationTest, LlmMetalStdoutIsCompleteOrOneTerminalUnsupportedDocumentIntegration) {
-  for (bool prefill : {false, true}) {
-    for (bool paged : {false, true}) {
-      SCOPED_TRACE(prefill);
-      SCOPED_TRACE(paged);
-      std::vector<std::string> arguments =
-          prefill ? bounded_llm_metal_prefill_arguments("-") : bounded_llm_metal_arguments("-");
-      if (paged) {
-        arguments.insert(arguments.end() - 2, {"--kv-layout", "paged", "--kv-block-tokens", prefill ? "4" : "2"});
-      }
-      const CliResult result = run_memory_benchmark(arguments);
-      expect_process_completed(result);
-      const nlohmann::json json = parse_single_stdout_json(result);
-      if (prefill) {
-        expect_bounded_metal_prefill_result(
-            result, json, paged ? "paged" : "contiguous",
-            paged ? "llm-memory-v2-metal-prefill-paged" : "llm-memory-v2-metal-prefill-contiguous",
-            paged ? "llm-metal-prefill-paged-full-prompt-affine32-v1"
-                  : "llm-metal-prefill-contiguous-full-prompt-affine32-v1",
-            paged ? "llm-metal-paged-prefill-dual-mod32-lookup-address-mix-v1" : "llm-metal-dual-mod32-v1");
-      } else {
-        expect_complete_or_unsupported_metal_result(
-            result, json, paged ? "paged" : "contiguous",
-            paged ? "llm-memory-v2-metal-decode-paged" : "llm-memory-v2-metal-decode-contiguous");
-        EXPECT_EQ(json["phase"], "decode");
-        EXPECT_EQ(json["kv_layout"], paged ? "paged" : "contiguous");
-        if (paged) EXPECT_EQ(json["configuration"]["kv_block_tokens"], 2U);
-      }
-      expect_single_runtime_banner(result);
-      expect_no_dash_transport_artifacts(result);
-    }
-  }
-}
-
-TEST(ExecutableCliIntegrationTest,
-     LlmMetalFileIsAtomicCompleteOrTerminalUnsupportedDocumentIntegration) {
-  const TemporaryJsonFile output("llm_metal_schema_v1");
-  const CliResult result =
-      run_memory_benchmark(bounded_llm_metal_arguments(output.path()));
-
-  expect_process_completed(result);
-  ASSERT_EQ(access(output.path().c_str(), F_OK), 0) << result.output;
-  EXPECT_EQ(access((output.path() + ".tmp").c_str(), F_OK), -1);
-  const nlohmann::json json =
-      nlohmann::json::parse(read_file(output.path()));
-  expect_complete_or_unsupported_metal_result(result, json);
-  EXPECT_EQ(json["configuration"]["output_file"], output.path());
-  expect_single_runtime_banner(result);
-  EXPECT_EQ(count_occurrences(
-                result.stdout_output,
-                Messages::msg_results_saved_to(output.path())),
-            1u)
-      << result.output;
-}
-
-TEST(ExecutableCliIntegrationTest, LlmPrefillPagedWritesCompleteSchemaV2Integration) {
-  std::vector<std::string> arguments = bounded_llm_prefill_arguments("-");
-  arguments.insert(arguments.end() - 2, {"--kv-layout", "paged", "--kv-block-tokens", "4"});
-
-  const CliResult result = run_memory_benchmark(arguments);
-
-  expect_process_completed(result);
-  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
-  const nlohmann::json json = parse_single_stdout_json(result);
-  ASSERT_TRUE(json.is_object()) << result.stdout_output;
-  EXPECT_EQ(json["schema_version"], 2);
-  EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
-  EXPECT_EQ(json["backend"], "cpu");
-  EXPECT_EQ(json["phase"], "prefill");
-  EXPECT_EQ(json["kv_layout"], "paged");
-  EXPECT_EQ(json["methodology_version"], Constants::LLM_CPU_PREFILL_PAGED_METHODOLOGY_VERSION);
-  EXPECT_EQ(json["status"], "complete");
-  EXPECT_TRUE(json["results_complete"].get<bool>());
-  EXPECT_TRUE(json["run_accepted"].get<bool>());
-  EXPECT_EQ(json["configuration"]["kv_block_tokens"], 4u);
-  EXPECT_EQ(json["configuration"]["resolved_sources"]["phase"], "explicit");
-  EXPECT_EQ(json["configuration"]["resolved_sources"]["kv_layout"], "explicit");
-  EXPECT_EQ(json["configuration"]["resolved_sources"]["kv_block_tokens"], "explicit");
-  EXPECT_EQ(json["resolved_plan"]["work_unit_kind"], "prefill_operation");
-  EXPECT_TRUE(json["resolved_plan"]["geometry"]["prefill"].is_object());
-  EXPECT_EQ(json["resolved_plan"]["layout"]["kv_layout"], "paged");
-  EXPECT_EQ(json["resolved_plan"]["layout"]["kv_block_tokens"], 4u);
-  EXPECT_TRUE(json["backend_evidence"]["cpu"]["prefill"].is_object());
-  EXPECT_TRUE(json["backend_evidence"]["cpu"]["paged"].is_object());
-  ASSERT_EQ(json["measurements"].size(), 9u);
-  for (const auto& measurement : json["measurements"]) {
-    EXPECT_EQ(measurement["status"], "measured");
-    expect_complete_llm_named_checks(json, measurement);
-  }
-  expect_complete_llm_checkpoint_lifecycle(json);
-  expect_single_runtime_banner(result);
-  expect_no_dash_transport_artifacts(result);
-}
-
-TEST(ExecutableCliIntegrationTest, LlmJsonIntegerAndPeakPreflightsRejectBeforeAllocationIntegration) {
-  struct PreflightCase {
-    const char* option;
-    uint64_t value;
-    const char* reason;
-    bool runtime_banner;
-  };
-  const PreflightCase cases[] = {
-      {"--query-heads", Constants::LLM_JSON_MAX_SAFE_INTEGER + 1, "json-integer-out-of-range", false},
-      {"--count", Constants::LLM_JSON_MAX_SAFE_INTEGER / 3, "json-output-peak-bytes-overflow", true},
-  };
-  for (const PreflightCase& test_case : cases) {
-    SCOPED_TRACE(test_case.option);
-    std::vector<std::string> arguments = bounded_llm_arguments("-", 1);
-    const auto option = std::find(arguments.begin(), arguments.end(), test_case.option);
-    ASSERT_NE(option, arguments.end());
-    ASSERT_NE(std::next(option), arguments.end());
-    *std::next(option) = std::to_string(test_case.value);
-    const CliResult result = run_memory_benchmark(arguments);
-    expect_process_completed(result);
-    EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-    if (test_case.runtime_banner)
-      expect_single_runtime_banner(result);
-    else
-      expect_no_runtime_banner(result);
-    EXPECT_TRUE(result.stdout_output.empty()) << result.stdout_output;
-    EXPECT_NE(result.stderr_output.find(test_case.reason), std::string::npos) << result.stderr_output;
-    expect_no_dash_transport_artifacts(result);
-  }
-}
-
-TEST(ExecutableCliIntegrationTest,
-     LlmModeConflictIsOrderIndependentIntegration) {
-  for (const std::vector<std::string>& arguments : {
-           std::vector<std::string>{"--llm-memory", "--gpu-bandwidth"},
-           std::vector<std::string>{"--gpu-bandwidth", "--llm-memory"}}) {
-    const CliResult result = run_memory_benchmark(arguments);
-    expect_process_completed(result);
-    EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-    expect_no_runtime_banner(result);
-    EXPECT_NE(result.output.find("mutually exclusive"), std::string::npos);
-    EXPECT_EQ(result.output.find(Messages::report_llm_memory_header(
-                  "cpu", "decode", "decode_step", "contiguous")),
-              std::string::npos);
-  }
-}
-
-TEST(ExecutableCliIntegrationTest, LlmStdoutIsCompleteAndSeededMetadataIsReproducibleIntegration) {
-  nlohmann::json first;
-  for (int repetition = 0; repetition < 2; ++repetition) {
-    SCOPED_TRACE(repetition);
-    const CliResult result = run_memory_benchmark(bounded_llm_arguments("-"));
-
-    expect_process_completed(result);
-    ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
-    const nlohmann::json json = parse_single_stdout_json(result);
-    ASSERT_TRUE(json.is_object()) << result.stdout_output;
-    EXPECT_EQ(json["software"]["version"], SOFTVERSION);
-    EXPECT_TRUE(json["software"]["timestamp"].is_string());
-    EXPECT_EQ(json["schema_version"], 2);
-    EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
-    EXPECT_EQ(json["backend"], "cpu");
-    EXPECT_EQ(json["phase"], "decode");
-    EXPECT_EQ(json["kv_layout"], "contiguous");
-    EXPECT_EQ(json["methodology_version"], Constants::LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION);
-    EXPECT_EQ(json["status"], "complete");
-    EXPECT_TRUE(json["results_complete"].get<bool>());
-    EXPECT_TRUE(json["run_accepted"].get<bool>());
-    EXPECT_TRUE(json["scenario_order_balance_complete"].get<bool>());
-    EXPECT_EQ(json["configuration"]["output_file"], "-");
-    EXPECT_EQ(json["configuration"]["base_seed_uint64_decimal"], "42");
-    EXPECT_EQ(json["configuration"]["iterations"], 1u);
-    EXPECT_EQ(json["configuration"]["loop_count"], 3u);
-    EXPECT_EQ(json["configuration"]["resolved_sources"]["backend"], "default");
-    EXPECT_EQ(json["configuration"]["resolved_sources"]["phase"], "default");
-    EXPECT_EQ(json["configuration"]["resolved_sources"]["kv_layout"], "default");
-    EXPECT_EQ(json["resolved_plan"]["backend"], "cpu");
-    EXPECT_EQ(json["resolved_plan"]["phase"], "decode");
-    EXPECT_EQ(json["resolved_plan"]["kv_layout"], "contiguous");
-    EXPECT_EQ(json["resolved_plan"]["work_unit_kind"], "decode_step");
-    EXPECT_TRUE(json["backend_evidence"]["cpu"].is_object());
-    EXPECT_TRUE(json["backend_evidence"]["metal"].is_null());
-    EXPECT_EQ(json["counters"]["planned_measurements"], 9u);
-    EXPECT_EQ(json["counters"]["measured_measurements"], 9u);
-    ASSERT_EQ(json["measurements"].size(), 9u);
-    for (const nlohmann::json& measurement : json["measurements"]) {
-      EXPECT_EQ(measurement["status"], "measured");
-      EXPECT_EQ(canonical_llm_plan(json, measurement)["work_unit_kind"], "decode_step");
-      EXPECT_EQ(canonical_llm_plan(json, measurement)["work_units"], 1u);
-      EXPECT_EQ(measurement["completed_work_units"], 1u);
-      expect_complete_llm_named_checks(json, measurement);
-      EXPECT_TRUE(measurement["checksum"]["checksum_valid"].get<bool>());
-      EXPECT_TRUE(measurement["synthetic_work_unit_latency_seconds"].is_number());
-      EXPECT_TRUE(measurement["synthetic_memory_work_units_per_second"].is_number());
-      EXPECT_TRUE(measurement["effective_model_payload_gb_s"].is_number());
-    }
-    expect_complete_llm_checkpoint_lifecycle(json);
-
-    expect_single_runtime_banner(result);
-    EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)), std::string::npos);
-    EXPECT_NE(
-        result.stderr_output.find(Messages::report_llm_memory_header("cpu", "decode", "decode_step", "contiguous")),
-        std::string::npos)
-        << result.stderr_output;
-    EXPECT_EQ(count_occurrences(result.output, Messages::msg_results_saved_to("")), 0u);
-    expect_no_dash_transport_artifacts(result);
-    if (repetition == 0) {
-      first = json;
-      continue;
-    }
-    for (const char* field : {"configuration", "seeds"}) {
-      SCOPED_TRACE(field);
-      EXPECT_EQ(first[field], json[field]);
-    }
-    for (const char* field : {"methodology", "geometry", "model_work_plan", "scenario_plans"}) {
-      SCOPED_TRACE(field);
-      EXPECT_EQ(first["resolved_plan"][field], json["resolved_plan"][field]);
-    }
-    ASSERT_EQ(first["measurements"].size(), json["measurements"].size());
-    for (size_t index = 0; index < first["measurements"].size(); ++index) {
-      SCOPED_TRACE(index);
-      EXPECT_EQ(first["measurements"][index]["plan_ref"], json["measurements"][index]["plan_ref"]);
-      EXPECT_EQ(first["measurements"][index]["checksum"], json["measurements"][index]["checksum"]);
-    }
-  }
-}
-
-TEST(ExecutableCliIntegrationTest, LlmPrefillWritesExactCompleteContiguousSchemaV2Integration) {
-  const CliResult result = run_memory_benchmark(bounded_llm_prefill_arguments("-"));
-
-  expect_process_completed(result);
-  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
-  const nlohmann::json json = parse_single_stdout_json(result);
-  ASSERT_TRUE(json.is_object()) << result.stdout_output;
-  EXPECT_EQ(json["schema_version"], 2);
-  EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
-  EXPECT_EQ(json["backend"], "cpu");
-  EXPECT_EQ(json["phase"], "prefill");
-  EXPECT_EQ(json["kv_layout"], "contiguous");
-  EXPECT_EQ(json["methodology_version"], "llm-memory-v2-cpu-prefill-contiguous");
-  EXPECT_EQ(json["status"], "complete");
-  EXPECT_EQ(json["reason_code"], "complete");
-  EXPECT_TRUE(json["results_complete"].get<bool>());
-  EXPECT_TRUE(json["run_accepted"].get<bool>());
-  EXPECT_TRUE(json["scenario_order_balance_complete"].get<bool>());
-
-  const nlohmann::json& configuration = json["configuration"];
-  EXPECT_EQ(configuration["phase"], "prefill");
-  EXPECT_TRUE(configuration["visible_context_tokens"].is_null());
-  EXPECT_EQ(configuration["prompt_tokens"], 5u);
-  EXPECT_EQ(configuration["attention_query_tile_tokens"], 2u);
-  EXPECT_EQ(configuration["base_seed_uint64_decimal"], "42");
-  EXPECT_EQ(configuration["iterations"], 1u);
-  EXPECT_EQ(configuration["loop_count"], 3u);
-  EXPECT_EQ(configuration["resolved_sources"]["phase"], "explicit");
-  EXPECT_TRUE(configuration["resolved_sources"]["visible_context_tokens"].is_null());
-  EXPECT_EQ(configuration["resolved_sources"]["prompt_tokens"], "explicit");
-  EXPECT_EQ(configuration["resolved_sources"]["attention_query_tile_tokens"], "explicit");
-
-  const nlohmann::json& resolved_plan = json["resolved_plan"];
-  EXPECT_EQ(resolved_plan["phase"], "prefill");
-  EXPECT_EQ(resolved_plan["work_unit_kind"], "prefill_operation");
-  const nlohmann::json& prefill_evidence = json["backend_evidence"]["cpu"]["prefill"];
-  EXPECT_EQ(prefill_evidence["cost_unit"], "worker-cost");
-  EXPECT_EQ(prefill_evidence["sequence_descriptors_per_scenario_per_worker"], 1u);
-  EXPECT_FALSE(prefill_evidence["identity"].get<std::string>().empty());
-  ASSERT_EQ(prefill_evidence["scenarios"].size(), 3u);
-  const std::array<const char*, 3> evidence_scenarios = {"weights_only", "kv_only", "mixed"};
-  const std::array<const char*, 3> evidence_costs = {"1048576", "256", "1048832"};
-  for (size_t index = 0; index < evidence_scenarios.size(); ++index) {
-    const nlohmann::json& evidence = prefill_evidence["scenarios"][index];
-    EXPECT_EQ(evidence["scenario"], evidence_scenarios[index]);
-    EXPECT_EQ(evidence["cost_unit"], "worker-cost");
-    EXPECT_EQ(evidence["scope_count"], "1");
-    ASSERT_EQ(evidence["scope_identities"].size(), 1u);
-    EXPECT_FALSE(evidence["scope_identities"][0].get<std::string>().empty());
-    ASSERT_EQ(evidence["worker_accounted_bytes_per_work_unit"].size(), 1u);
-    EXPECT_EQ(evidence["worker_accounted_bytes_per_work_unit"][0], evidence_costs[index]);
-    EXPECT_EQ(evidence["minimum_worker_accounted_bytes_per_work_unit"], evidence_costs[index]);
-    EXPECT_EQ(evidence["maximum_worker_accounted_bytes_per_work_unit"], evidence_costs[index]);
-    EXPECT_EQ(evidence["worker_accounted_imbalance_bytes_per_work_unit"], "0");
-    EXPECT_FALSE(evidence["identity"].get<std::string>().empty());
-  }
-  EXPECT_TRUE(json["backend_evidence"]["cpu"]["paged"].is_null());
-
-  const nlohmann::json& scenarios = resolved_plan["scenario_plans"];
-  ASSERT_EQ(scenarios.size(), 3u);
-  EXPECT_EQ(scenarios[0]["scenario"], "weights_only");
-  EXPECT_EQ(scenarios[0]["work_unit_kind"], "prefill_operation");
-  EXPECT_EQ(scenarios[0]["kv_write_kind"], "none");
-  EXPECT_EQ(scenarios[0]["weight_read_bytes_per_work_unit"], "1048576");
-  EXPECT_EQ(scenarios[0]["kv_read_bytes_per_work_unit"], "0");
-  EXPECT_EQ(scenarios[0]["kv_write_bytes_per_work_unit"], "0");
-  EXPECT_EQ(scenarios[0]["effective_model_payload_bytes_per_work_unit"], "1048576");
-  EXPECT_EQ(scenarios[1]["scenario"], "kv_only");
-  EXPECT_EQ(scenarios[1]["kv_write_kind"], "full_prompt_population");
-  EXPECT_EQ(scenarios[1]["weight_read_bytes_per_work_unit"], "0");
-  EXPECT_EQ(scenarios[1]["kv_read_bytes_per_work_unit"], "176");
-  EXPECT_EQ(scenarios[1]["kv_write_bytes_per_work_unit"], "80");
-  EXPECT_EQ(scenarios[1]["effective_model_payload_bytes_per_work_unit"], "256");
-  EXPECT_EQ(scenarios[2]["scenario"], "mixed");
-  EXPECT_EQ(scenarios[2]["kv_write_kind"], "full_prompt_population");
-  EXPECT_EQ(scenarios[2]["weight_read_bytes_per_work_unit"], "1048576");
-  EXPECT_EQ(scenarios[2]["kv_read_bytes_per_work_unit"], "176");
-  EXPECT_EQ(scenarios[2]["kv_write_bytes_per_work_unit"], "80");
-  EXPECT_EQ(scenarios[2]["effective_model_payload_bytes_per_work_unit"], "1048832");
-
-  EXPECT_EQ(json["counters"]["planned_work_units"], "9");
-  EXPECT_EQ(json["counters"]["completed_work_units"], "9");
-  EXPECT_EQ(json["counters"]["planned_effective_model_payload_bytes"], "6292992");
-  EXPECT_EQ(json["counters"]["completed_effective_model_payload_bytes"], "6292992");
-  EXPECT_EQ(json["counters"]["planned_task_accounted_bytes"], "6292992");
-  EXPECT_EQ(json["counters"]["completed_task_accounted_bytes"], "6292992");
-  EXPECT_EQ(json["counters"]["planned_layout_metadata_lookup_count"], "0");
-  EXPECT_EQ(json["counters"]["planned_layout_metadata_read_bytes"], "0");
-
-  ASSERT_EQ(json["measurements"].size(), 9u);
-  for (const nlohmann::json& measurement : json["measurements"]) {
-    EXPECT_EQ(measurement["status"], "measured");
-    EXPECT_EQ(measurement["reason_code"], "measured");
-    EXPECT_EQ(canonical_llm_plan(json, measurement)["work_unit_kind"], "prefill_operation");
-    EXPECT_EQ(canonical_llm_plan(json, measurement)["work_units"], 1u);
-    EXPECT_EQ(measurement["completed_work_units"], 1u);
-    EXPECT_TRUE(measurement["working_set"]["fixed_visible_context_tokens"].is_null());
-    EXPECT_TRUE(measurement["working_set"]["current_token_slot_included"].is_null());
-    EXPECT_EQ(measurement["execution"]["status"], "valid");
-    expect_complete_llm_named_checks(json, measurement);
-    const nlohmann::json& checksum = measurement["checksum"];
-    EXPECT_EQ(checksum["status"], "valid");
-    EXPECT_TRUE(checksum["checksum_valid"].get<bool>());
-    EXPECT_EQ(resolved_plan["component_identities"]["write_pattern_version"], "llm-prefill-kv-affine64-v1");
-    EXPECT_EQ(resolved_plan["component_identities"]["checksum_pattern_version"], "llm-prefill-affine64-parity-sum-v1");
-    EXPECT_EQ(canonical_llm_plan(json, measurement)["expected_checksum"]["expected_worker_checksums"], checksum["actual_worker_checksums"]);
-    EXPECT_EQ(canonical_llm_plan(json, measurement)["expected_checksum"]["expected_run_checksum"], checksum["actual_run_checksum"]);
-    ASSERT_EQ(canonical_llm_plan(json, measurement)["expected_checksum"]["expected_worker_checksums"].size(), 1u);
-    const nlohmann::json& worker = canonical_llm_plan(json, measurement)["expected_checksum"]["expected_worker_checksums"][0];
-    const std::string scenario = measurement["scenario"];
-    EXPECT_EQ(worker["weight"]["exact_bytes_read"], scenario == "kv_only" ? "0" : "1048576");
-    EXPECT_EQ(worker["k"]["exact_bytes_read"], scenario == "weights_only" ? "0" : "88");
-    EXPECT_EQ(worker["v"]["exact_bytes_read"], scenario == "weights_only" ? "0" : "88");
-  }
-  expect_complete_llm_checkpoint_lifecycle(json);
-
-  EXPECT_TRUE(json["interpretation"]["fixed_context_includes_current_token_slot"].is_null());
-  expect_single_runtime_banner(result);
-  EXPECT_NE(result.stderr_output.find(
-                Messages::report_llm_memory_header("cpu", "prefill", "prefill_operation", "contiguous")),
-            std::string::npos)
-      << result.stderr_output;
-  EXPECT_NE(result.stderr_output.find("176"), std::string::npos);
-  EXPECT_NE(result.stderr_output.find("80"), std::string::npos);
-  EXPECT_EQ(result.stderr_output.find("Crossover:"), std::string::npos);
-  EXPECT_EQ(result.stderr_output.find("ms/TTFT"), std::string::npos);
-  EXPECT_EQ(result.stderr_output.find(" tokens/s"), std::string::npos);
-  expect_no_dash_transport_artifacts(result);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     LlmWritesCheckpointedCompleteSchemaV2FileIntegration) {
-  const TemporaryJsonFile output("llm_schema_v2");
-  const CliResult result =
-      run_memory_benchmark(bounded_llm_arguments(output.path()));
-
-  expect_process_completed(result);
-  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
-  expect_single_runtime_banner(result);
-  ASSERT_EQ(access(output.path().c_str(), F_OK), 0);
-  EXPECT_EQ(access((output.path() + ".tmp").c_str(), F_OK), -1);
-  const nlohmann::json json =
-      nlohmann::json::parse(read_file(output.path()));
-  EXPECT_EQ(json["schema_version"], 2);
-  EXPECT_EQ(json["mode"], Constants::LLM_JSON_MODE_NAME);
-  EXPECT_EQ(json["status"], "complete");
-  EXPECT_TRUE(json["results_complete"].get<bool>());
-  EXPECT_TRUE(json["run_accepted"].get<bool>());
-  EXPECT_EQ(json["configuration"]["output_file"], output.path());
-  EXPECT_FALSE(json["resolved_plan"]["plan_identity"].get<std::string>().empty());
-  for (const auto& plan : json["resolved_plan"]["scenario_plans"]) EXPECT_EQ(plan["model_ref"], "resolved_plan");
-  expect_complete_llm_checkpoint_lifecycle(json);
-  EXPECT_EQ(count_occurrences(
-                result.stdout_output,
-                Messages::msg_results_saved_to(output.path())),
-            1u)
-      << result.output;
-}
-
-TEST(ExecutableCliIntegrationTest,
-     LlmCheckpointFailureIsTerminalWithoutRetryOrArtifactsIntegration) {
-  TemporaryCliDirectory output_parent;
-  const std::filesystem::path output_target =
-      output_parent.path() / "existing-output-directory";
-  std::error_code create_error;
-  ASSERT_TRUE(std::filesystem::create_directory(output_target, create_error))
-      << create_error.message();
-
-  const CliResult result =
-      run_memory_benchmark(bounded_llm_arguments(output_target.string()));
-
-  expect_process_completed(result);
-  EXPECT_EQ(result.exit_code, EXIT_FAILURE);
-  EXPECT_TRUE(std::filesystem::is_directory(output_target));
-  EXPECT_FALSE(std::filesystem::exists(output_target.string() + ".tmp"));
-  EXPECT_EQ(count_occurrences(result.stderr_output,
-                              "Failed to rename temporary file:"),
-            1u)
-      << result.stderr_output;
-  EXPECT_EQ(count_occurrences(
-                result.stderr_output,
-                Messages::error_llm_memory_run_failed(
-                    "checkpoint-write-failed")),
-            1u)
-      << result.stderr_output;
-  EXPECT_EQ(count_occurrences(
-                result.stdout_output,
-                Messages::msg_results_saved_to(output_target.string())),
-            0u)
-      << result.output;
-}
-
-TEST(ExecutableCliIntegrationTest,
-     LlmPagedTasksResetAppendSlotsBetweenScenariosIntegration) {
-  std::vector<std::string> arguments = bounded_llm_arguments("-", 3);
-  arguments.insert(arguments.end() - 2,
-                   {"--kv-layout", "paged", "--kv-block-tokens", "2"});
-
-  const CliResult result = run_memory_benchmark(arguments);
-
-  expect_process_completed(result);
-  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
-  const nlohmann::json document = parse_single_stdout_json(result);
-  ASSERT_TRUE(document.is_object());
-  EXPECT_EQ(document["status"], "complete");
-  EXPECT_TRUE(document["results_complete"].get<bool>());
-  ASSERT_EQ(document["measurements"].size(), 9u);
-  for (const nlohmann::json& measurement : document["measurements"]) {
-    expect_complete_llm_named_checks(document, measurement);
-  }
-}
-
-TEST(ExecutableCliIntegrationTest,
-     GpuStdoutEmitsOneSchemaV1ResultOnSupportedOrUnsupportedMetalIntegration) {
-  const CliResult result = run_memory_benchmark(
-      {"--gpu-bandwidth", "--buffer-size", "64", "--iterations", "1",
-       "--count", "3", "--seed", "42", "--output", "-"});
-
-  expect_process_completed(result);
-  const nlohmann::json json = parse_single_stdout_json(result);
-  ASSERT_TRUE(json.is_object()) << result.stdout_output;
-  ASSERT_TRUE(json.contains("status"));
-  ASSERT_TRUE(json["status"].is_string());
-  EXPECT_EQ(json["software_version"], SOFTVERSION);
-  EXPECT_EQ(json["schema_version"], Constants::GPU_JSON_SCHEMA_VERSION);
-  EXPECT_EQ(json["mode"], "gpu_bandwidth");
-  ASSERT_TRUE(json.contains("configuration"));
-  EXPECT_EQ(json["configuration"]["output_file"], "-");
-  EXPECT_EQ(json["configuration"]["base_seed_uint64_decimal"], "42");
-  EXPECT_EQ(json["configuration"]["loop_count"], 3u);
-  EXPECT_EQ(json["configuration"]["iterations"], 1u);
-  ASSERT_TRUE(json.contains("counters"));
-  EXPECT_EQ(json["counters"]["planned_loops"], 3u);
-  EXPECT_EQ(json["counters"]["planned_measurements"], 9u);
-  ASSERT_TRUE(json.contains("measurements"));
-  EXPECT_EQ(json["measurements"].size(), 9u);
-
-  expect_single_runtime_banner(result);
-  EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)),
-            std::string::npos);
-  EXPECT_EQ(result.stdout_output.find(Messages::msg_running_gpu_bandwidth()),
-            std::string::npos);
-  EXPECT_EQ(count_occurrences(result.stderr_output,
-                              Messages::config_header(SOFTVERSION)),
-            1u)
-      << result.stderr_output;
-  EXPECT_EQ(count_occurrences(result.stderr_output,
-                              Messages::msg_running_gpu_bandwidth()),
-            1u)
-      << result.stderr_output;
-  EXPECT_EQ(count_occurrences(result.output,
-                              Messages::msg_results_saved_to("")),
-            0u)
-      << result.output;
-  expect_no_dash_transport_artifacts(result);
-
-  const std::string status = json["status"].get<std::string>();
-  if (status == "complete") {
-    EXPECT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
-    EXPECT_TRUE(json["results_complete"].get<bool>());
-    EXPECT_TRUE(json["conclusions_valid"].get<bool>());
-    EXPECT_EQ(json["counters"]["completed_loops"], 3u);
-    EXPECT_EQ(json["counters"]["validated_measurements"], 9u);
-  } else if (status == "unsupported") {
-    EXPECT_EQ(result.exit_code, EXIT_FAILURE) << result.stderr_output;
-    EXPECT_FALSE(json["results_complete"].get<bool>());
-    EXPECT_FALSE(json["conclusions_valid"].get<bool>());
-    ASSERT_FALSE(json["reason_code"].get<std::string>().empty());
-    EXPECT_EQ(json["backend"]["initialization_status"], "unsupported");
-    EXPECT_EQ(json["backend"]["reason_code"], json["reason_code"]);
-  } else {
-    FAIL() << "GPU stdout integration returned unexpected status: "
-           << status << '\n'
-           << result.stderr_output;
-  }
-}
-
-TEST(ExecutableCliIntegrationTest, GpuWritesValidatedSchemaV1Integration) {
-  const TemporaryJsonFile output("gpu_schema_v1");
-  const CliResult result = run_memory_benchmark(
-      {"--gpu-bandwidth", "--buffer-size", "64", "--iterations", "1",
-       "--count", "3", "--seed", "42", "--output", output.path()});
-
-  expect_single_runtime_banner(result);
-  ASSERT_EQ(access(output.path().c_str(), F_OK), 0);
-  const nlohmann::json json =
-      nlohmann::json::parse(read_file(output.path()));
-  EXPECT_EQ(json["configuration"]["output_file"], output.path());
-  EXPECT_EQ(count_occurrences(
-                result.stdout_output,
-                Messages::msg_results_saved_to(output.path())),
-            1u)
-      << result.output;
-  EXPECT_EQ(result.stderr_output.find(
-                Messages::msg_results_saved_to(output.path())),
-            std::string::npos)
-      << result.output;
-  EXPECT_EQ(access((output.path() + ".tmp").c_str(), F_OK), -1);
-  if (json["status"] == "unsupported") {
-    GTEST_SKIP() << json["reason_code"].get<std::string>();
-  }
-  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
-  EXPECT_EQ(json["software_version"], SOFTVERSION);
-  EXPECT_EQ(json["schema_version"], 1);
-  EXPECT_EQ(json["mode"], "gpu_bandwidth");
-  EXPECT_EQ(json["status"], "complete");
-  EXPECT_TRUE(json["results_complete"].get<bool>());
-  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
-  EXPECT_EQ(json["counters"]["planned_loops"], 3u);
-  EXPECT_EQ(json["counters"]["completed_loops"], 3u);
-  EXPECT_EQ(json["counters"]["planned_measurements"], 9u);
-  EXPECT_EQ(json["counters"]["validated_measurements"], 9u);
-  EXPECT_EQ(json["configuration"]["base_seed_uint64_decimal"], "42");
-  ASSERT_EQ(json["measurements"].size(), 9u);
-  for (const nlohmann::json& measurement : json["measurements"]) {
-    EXPECT_EQ(measurement["status"], "measured");
-    EXPECT_GT(measurement["value_gb_s"].get<double>(), 0.0);
-    EXPECT_EQ(measurement["timed"]["command_buffer_count"], 1u);
-    EXPECT_EQ(measurement["timed"]["compute_encoder_count"], 1u);
-    EXPECT_EQ(measurement["validation"]["validation_status"], "passed");
-  }
-  EXPECT_EQ(json["work_plans"][2]["exact_payload_bytes"], "134217728");
-  EXPECT_EQ(json["backend"]["allocation"]["buffer_a"]["storage_mode"],
-            "private");
-  EXPECT_EQ(json["backend"]["allocation"]["buffer_a"]
-                ["hazard_tracking_mode"],
-            "tracked");
-  EXPECT_EQ(json["backend"]["compilation"]["kernel_source_sha256"]
-                .get<std::string>()
-                .size(),
-            64u);
-}
-
-TEST(ExecutableCliIntegrationTest, GpuAutomaticCalibrationFreezesPlansIntegration) {
-  const TemporaryJsonFile output("gpu_automatic_calibration");
-  const CliResult result = run_memory_benchmark(
-      {"--gpu-bandwidth", "--buffer-size", "64", "--count", "1",
-       "--seed", "42", "--output", output.path()});
-
-  ASSERT_EQ(access(output.path().c_str(), F_OK), 0);
-  const nlohmann::json json =
-      nlohmann::json::parse(read_file(output.path()));
-  if (json["status"] == "unsupported") {
-    GTEST_SKIP() << json["reason_code"].get<std::string>();
-  }
-  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
-  for (const char* operation : {"read", "write", "copy"}) {
-    const nlohmann::json& attempts =
-        json["excluded_calibration_attempts"][operation];
-    ASSERT_GE(attempts.size(), 2u);
-    EXPECT_EQ(attempts[0]["purpose"], "pilot");
-    EXPECT_EQ(attempts[1]["purpose"], "duration-trial");
-    EXPECT_TRUE(attempts.back()["valid"].get<bool>());
-  }
-  for (const nlohmann::json& measurement : json["measurements"]) {
-    EXPECT_EQ(measurement["status"], "measured");
-    const std::string quality =
-        measurement["duration_quality"].get<std::string>();
-    EXPECT_TRUE(quality == "within-target-window" ||
-                quality == "dispatch-cap-below-target" ||
-                quality == "payload-cap-below-target" ||
-                quality == "single-pass-exceeds-window")
-        << quality;
-  }
-}
-
 TEST(ExecutableCliIntegrationTest, InvalidCommandsFailBeforeOutputAcrossModesIntegration) {
   const TemporaryJsonFile output("tlb_invalid_stride_sweep");
   const long page_size = ::sysconf(_SC_PAGESIZE);
@@ -1375,6 +597,9 @@ TEST(ExecutableCliIntegrationTest, InvalidCommandsFailBeforeOutputAcrossModesInt
     bool diagnostic_is_complete = false;
   };
   const InvalidCase cases[] = {
+      {{"--llm-memory", "--gpu-bandwidth"},
+       Messages::error_mutually_exclusive_modes("--llm-memory", "--gpu-bandwidth"),
+       true},
       {{"--benchmark", "--only-bandwidth", "--latency-samples", "1", "--output", "-"},
        Messages::error_only_bandwidth_with_latency_samples()},
       {{"--llm-memory", "--weight-size-mb", "1", "--output", "-"},
@@ -1408,712 +633,497 @@ TEST(ExecutableCliIntegrationTest, InvalidCommandsFailBeforeOutputAcrossModesInt
   }
 }
 
-TEST(ExecutableCliIntegrationTest, CoreToCoreWritesCalibratedAuditJsonIntegration) {
-  const TemporaryJsonFile output("core2core_v2");
-
-  const CliResult result = run_memory_benchmark({
-      "--analyze-core2core", "--count", "2", "--latency-samples", "1",
-      "--output", output.path()});
-
-  EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
-  expect_single_runtime_banner(result);
-  const nlohmann::json json = nlohmann::json::parse(read_file(output.path()));
-  EXPECT_EQ(json["version"], SOFTVERSION);
-  EXPECT_EQ(json["configuration"]["schema_version"], 2);
-  EXPECT_EQ(json["core_to_core_latency"]["status"], "complete");
-  EXPECT_TRUE(json["core_to_core_latency"]["measurements_complete"]);
-  ASSERT_EQ(json["core_to_core_latency"]["scenarios"].size(), 3u);
-  EXPECT_EQ(json["core_to_core_latency"]["scenarios"][0]["loop_records"].size(), 2u);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     CoreToCoreWritesSingleJsonDocumentToStdoutIntegration) {
-  const CliResult result = run_memory_benchmark({
-      "--analyze-core2core", "--count", "1", "--latency-samples", "1",
-      "--output", "-"});
-
-  expect_process_completed(result);
-  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
-  const nlohmann::json json = parse_single_stdout_json(result);
-  EXPECT_EQ(json["configuration"]["mode"],
-            Constants::CORE_TO_CORE_JSON_MODE_NAME);
-  EXPECT_EQ(json["configuration"]["schema_version"], 2);
-  EXPECT_EQ(json["core_to_core_latency"]["status"], "complete");
-  EXPECT_TRUE(json["core_to_core_latency"]["measurements_complete"]);
-
-  EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)),
-            std::string::npos);
-  EXPECT_EQ(result.stdout_output.find(
-                Messages::msg_running_core_to_core_analysis()),
-            std::string::npos);
-  EXPECT_NE(result.stderr_output.find(Messages::config_header(SOFTVERSION)),
-            std::string::npos)
-      << result.stderr_output;
-  EXPECT_NE(result.stderr_output.find(
-                Messages::msg_running_core_to_core_analysis()),
-            std::string::npos)
-      << result.stderr_output;
-  EXPECT_EQ(count_occurrences(result.output,
-                              Messages::msg_results_saved_to("")),
-            0u);
-  expect_no_dash_transport_artifacts(result);
-}
-
-TEST(ExecutableCliIntegrationTest, CoreToCoreSweepWritesCompletionMetadataIntegration) {
-  const TemporaryJsonFile output("core2core_sweep_v2");
-
-  const CliResult result = run_memory_benchmark({
-      "--analyze-core2core", "--count", "1", "--sweep",
-      "latency-samples=1,2,3", "--sweep-max-runs", "3", "--output",
-      output.path()});
-
-  EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
-  expect_single_runtime_banner(result);
-  const nlohmann::json json = nlohmann::json::parse(read_file(output.path()));
-  EXPECT_EQ(json["version"], SOFTVERSION);
-  EXPECT_EQ(json["configuration"]["sweep_schema_version"], 1);
-  EXPECT_EQ(json["status"], "complete");
-  EXPECT_EQ(json["planned_runs"], 3u);
-  EXPECT_EQ(json["completed_runs"], 3u);
-  EXPECT_TRUE(json["conclusions_valid"]);
-  ASSERT_EQ(json["runs"].size(), 3u);
-  EXPECT_EQ(json["runs"][0]["result"]["configuration"]["schema_version"], 2);
-  EXPECT_EQ(count_occurrences(
-                result.output,
-                Messages::msg_results_saved_to(output.path())),
-            1u)
-      << result.output;
-  EXPECT_EQ(access((output.path() + ".tmp").c_str(), F_OK), -1);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     CoreToCoreSweepWritesSingleTerminalJsonToStdoutIntegration) {
-  const CliResult result = run_memory_benchmark({
-      "--analyze-core2core", "--count", "1", "--sweep",
-      "latency-samples=1,2", "--sweep-max-runs", "2", "--output",
-      "-"});
-
-  expect_process_completed(result);
-  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
-  const nlohmann::json json = parse_single_stdout_json(result);
-  EXPECT_EQ(json["configuration"]["mode"],
-            Constants::SWEEP_JSON_MODE_NAME);
-  EXPECT_EQ(json["configuration"]["base_mode"],
-            Constants::CORE_TO_CORE_JSON_MODE_NAME);
-  EXPECT_EQ(json["configuration"]["sweep_schema_version"], 1);
-  EXPECT_EQ(json["status"], "complete");
-  EXPECT_EQ(json["planned_runs"], 2u);
-  EXPECT_EQ(json["attempted_runs"], 2u);
-  EXPECT_EQ(json["completed_runs"], 2u);
-  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
-  ASSERT_EQ(json["runs"].size(), 2u);
-  for (const nlohmann::json& run : json["runs"]) {
-    EXPECT_EQ(run["status"], "complete");
-    EXPECT_EQ(run["result"]["configuration"]["schema_version"], 2);
-    EXPECT_EQ(run["result"]["core_to_core_latency"]["status"],
-              "complete");
-    EXPECT_TRUE(run["result"]["core_to_core_latency"]
-                       ["measurements_complete"]
-                           .get<bool>());
-  }
-
-  EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)),
-            std::string::npos);
-  EXPECT_EQ(result.stdout_output.find(Messages::msg_running_sweep(2)),
-            std::string::npos);
-  EXPECT_NE(result.stderr_output.find(Messages::config_header(SOFTVERSION)),
-            std::string::npos)
-      << result.stderr_output;
-  EXPECT_NE(result.stderr_output.find(Messages::msg_running_sweep(2)),
-            std::string::npos)
-      << result.stderr_output;
-  EXPECT_NE(result.stderr_output.find(
-                Messages::msg_running_core_to_core_analysis()),
-            std::string::npos)
-      << result.stderr_output;
-  EXPECT_EQ(count_occurrences(result.output,
-                              Messages::msg_results_saved_to("")),
-            0u);
-  expect_no_dash_transport_artifacts(result);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     AnalyzeTlbWritesSingleJsonDocumentToStdoutIntegration) {
-  const CliResult result = run_memory_benchmark(
-      {"--analyze-tlb", "--tlb-density", "low", "--seed", "42",
-       "--output", "-"},
-      std::chrono::minutes(15));
-
-  expect_process_completed(result);
-  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
-  const nlohmann::json json = parse_single_stdout_json(result);
-  EXPECT_EQ(json["configuration"]["mode"],
-            Constants::TLB_ANALYSIS_JSON_MODE_NAME);
-  EXPECT_EQ(json["configuration"]["schema_version"], 4);
-  EXPECT_EQ(json["tlb_analysis"]["status"], "complete");
-  EXPECT_TRUE(json["tlb_analysis"]["conclusions_valid"]);
-  EXPECT_FALSE(json["tlb_analysis"].contains("status_reason"));
-
-  EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)),
-            std::string::npos);
-  EXPECT_EQ(result.stdout_output.find(Messages::msg_running_tlb_analysis()),
-            std::string::npos);
-  EXPECT_NE(result.stderr_output.find(Messages::config_header(SOFTVERSION)),
-            std::string::npos)
-      << result.stderr_output;
-  EXPECT_NE(result.stderr_output.find(Messages::msg_running_tlb_analysis()),
-            std::string::npos)
-      << result.stderr_output;
-  EXPECT_EQ(count_occurrences(result.output,
-                              Messages::msg_results_saved_to("")),
-            0u);
-  expect_no_dash_transport_artifacts(result);
-}
-
-TEST(ExecutableCliIntegrationTest, StandardBenchmarkWritesJsonIntegration) {
-  const TemporaryJsonFile output("standard output with spaces");
-
-  const CliResult result = run_memory_benchmark({
-      "--benchmark", "--only-bandwidth", "--buffer-size", "1",
-      "--iterations", "1", "--count", "3", "--threads", "1", "--output",
-      output.path()});
-
-  EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
-  expect_single_runtime_banner(result);
-  EXPECT_NE(result.output.find("Running benchmarks"), std::string::npos);
-  EXPECT_NE(result.output.find("Results saved to:"), std::string::npos);
-  EXPECT_EQ(result.output.find('\r'), std::string::npos);
-
-  const nlohmann::json json = nlohmann::json::parse(read_file(output.path()));
-  EXPECT_EQ(json["configuration"]["mode"], "benchmark");
-  EXPECT_EQ(json["configuration"]["benchmark_schema_version"],
-            Constants::BENCHMARK_JSON_SCHEMA_VERSION);
-  EXPECT_EQ(json["configuration"]["output_file"], output.path());
-  EXPECT_EQ(json["status"], "complete");
-  EXPECT_TRUE(json["results_complete"].get<bool>());
-  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
-  EXPECT_EQ(json["planned_loops"], 3u);
-  EXPECT_EQ(json["completed_loops"], 3u);
-  EXPECT_EQ(json["loops"].size(), 3u);
-  EXPECT_TRUE(json.contains("main_memory"));
-  EXPECT_TRUE(json["main_memory"].contains("bandwidth"));
-}
-
-TEST(ExecutableCliIntegrationTest,
-     StandardBenchmarkWritesSingleJsonDocumentToStdoutIntegration) {
-  const CliResult result = run_memory_benchmark({
-      "--benchmark", "--only-bandwidth", "--buffer-size", "1",
-      "--iterations", "1", "--count", "1", "--threads", "1",
-      "--output", "-"});
-
-  expect_process_completed(result);
-  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
-  const nlohmann::json json = parse_single_stdout_json(result);
-  EXPECT_EQ(json["configuration"]["mode"], "benchmark");
-  EXPECT_EQ(json["configuration"]["benchmark_schema_version"],
-            Constants::BENCHMARK_JSON_SCHEMA_VERSION);
-  EXPECT_EQ(json["configuration"]["output_file"], "-");
-  EXPECT_EQ(json["status"], "complete");
-  EXPECT_TRUE(json["results_complete"].get<bool>());
-  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
-  EXPECT_EQ(json["planned_loops"], 1u);
-  EXPECT_EQ(json["completed_loops"], 1u);
-
-  EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)),
-            std::string::npos);
-  EXPECT_EQ(result.stdout_output.find(Messages::msg_running_benchmarks()),
-            std::string::npos);
-  EXPECT_NE(result.stderr_output.find(Messages::config_header(SOFTVERSION)),
-            std::string::npos)
-      << result.stderr_output;
-  EXPECT_NE(result.stderr_output.find(Messages::msg_running_benchmarks()),
-            std::string::npos)
-      << result.stderr_output;
-  EXPECT_EQ(count_occurrences(result.output,
-                              Messages::msg_results_saved_to("")),
-            0u);
-  expect_no_dash_transport_artifacts(result);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     FlagShapedOutputValuesRemainStandardFileTargetsIntegration) {
-  const auto verify_target = [](const std::string& target) {
+TEST(ExecutableCliIntegrationTest, StandardBenchmarkFileStdoutAndFlagShapedTargetIntegration) {
+  const TemporaryJsonFile file_output("standard output with spaces");
+  struct TargetCase {
+    const char* name;
+    std::string target;
+    size_t count;
+    bool is_stdout;
+    bool is_flag_shaped;
+  };
+  const TargetCase cases[] = {
+      {"file_with_spaces", file_output.path(), 3u, false, false},
+      {"stdout", "-", 1u, true, false},
+      {"flag_shaped_target", "-T", 1u, false, true},
+  };
+  for (const TargetCase& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
     const CliResult result = run_memory_benchmark(
-        {"--benchmark", "--only-bandwidth", "--buffer-size", "1",
-         "--iterations", "1", "--count", "1", "--threads", "1",
-         "--output", target},
+        {"--benchmark", "--only-bandwidth", "--buffer-size", "1", "--iterations", "1", "--count",
+         std::to_string(test_case.count), "--threads", "1", "--output", test_case.target},
         std::chrono::minutes(2));
-
     expect_process_completed(result);
     ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
-    ASSERT_NE(result.directory, nullptr);
-    const std::filesystem::path output_path =
-        result.directory->path() / target;
-    ASSERT_TRUE(std::filesystem::is_regular_file(output_path));
-    EXPECT_FALSE(std::filesystem::exists(
-        result.directory->path() / (target + ".tmp")));
 
-    const nlohmann::json json =
-        nlohmann::json::parse(read_file(output_path.string()));
-    EXPECT_EQ(json["configuration"]["mode"],
-              Constants::BENCHMARK_JSON_MODE_NAME);
-    EXPECT_EQ(json["configuration"]["benchmark_schema_version"],
-              Constants::BENCHMARK_JSON_SCHEMA_VERSION);
-    EXPECT_EQ(json["configuration"]["output_file"], target);
+    nlohmann::json json;
+    if (test_case.is_stdout) {
+      json = expect_stdout_json_transport(result, Messages::msg_running_benchmarks());
+    } else if (test_case.is_flag_shaped) {
+      ASSERT_NE(result.directory, nullptr);
+      json = expect_atomic_file_json(result, result.directory->path() / test_case.target, false);
+      EXPECT_EQ(result.output.find(Messages::error_analyze_tlb_must_be_used_alone()), std::string::npos);
+      EXPECT_EQ(result.output.find("mutually exclusive"), std::string::npos);
+      EXPECT_NE(result.stdout_output.find(Messages::msg_running_benchmarks()), std::string::npos);
+      EXPECT_FALSE(nlohmann::json::accept(result.stdout_output));
+      EXPECT_EQ(count_occurrences(result.output, Messages::msg_results_saved_to("")), 1u) << result.output;
+    } else {
+      EXPECT_NE(result.stdout_output.find(Messages::msg_running_benchmarks()), std::string::npos);
+      EXPECT_EQ(result.output.find('\r'), std::string::npos);
+      json = expect_atomic_file_json(result, file_output.path());
+    }
+
+    EXPECT_EQ(json["configuration"]["mode"], Constants::BENCHMARK_JSON_MODE_NAME);
+    EXPECT_EQ(json["configuration"]["benchmark_schema_version"], Constants::BENCHMARK_JSON_SCHEMA_VERSION);
+    EXPECT_EQ(json["configuration"]["output_file"], test_case.target);
     EXPECT_EQ(json["status"], "complete");
     EXPECT_TRUE(json["results_complete"].get<bool>());
     EXPECT_TRUE(json["conclusions_valid"].get<bool>());
-    EXPECT_EQ(result.output.find(Messages::error_analyze_tlb_must_be_used_alone()),
-              std::string::npos)
-        << result.output;
-    EXPECT_EQ(result.output.find(Messages::error_missing_value("--cache-size")),
-              std::string::npos)
-        << result.output;
-    EXPECT_EQ(result.output.find(Messages::error_cache_size_invalid(
-                  Constants::MIN_CACHE_SIZE_KB, Constants::MAX_CACHE_SIZE_KB,
-                  Constants::MAX_CACHE_SIZE_KB / 1024)),
-              std::string::npos)
-        << result.output;
-    EXPECT_EQ(result.output.find("mutually exclusive"), std::string::npos)
-        << result.output;
-    EXPECT_NE(result.stdout_output.find(Messages::msg_running_benchmarks()), std::string::npos);
-    EXPECT_FALSE(nlohmann::json::accept(result.stdout_output));
-    EXPECT_EQ(count_occurrences(result.output,
-                                Messages::msg_results_saved_to("")),
-              1u)
-        << result.output;
-  };
-
-  for (const char* target : {"./-", "-T", "--cache-size"}) {
-    SCOPED_TRACE(target);
-    verify_target(target);
-  }
-}
-
-TEST(ExecutableCliIntegrationTest, StandardSweepWritesCompletionMetadataIntegration) {
-  const TemporaryJsonFile output("standard_sweep_status");
-
-  const CliResult result = run_memory_benchmark({
-      "--benchmark", "--only-bandwidth", "--iterations", "1", "--count",
-      "1", "--threads", "1", "--sweep", "buffer-size=1,2,3",
-      "--sweep-max-runs", "3", "--output", output.path()});
-
-  EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
-  expect_single_runtime_banner(result);
-  const nlohmann::json json = nlohmann::json::parse(read_file(output.path()));
-  EXPECT_EQ(json["configuration"]["sweep_schema_version"], 1);
-  EXPECT_EQ(json["status"], "complete");
-  EXPECT_EQ(json["planned_runs"], 3u);
-  EXPECT_EQ(json["completed_runs"], 3u);
-  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
-  ASSERT_EQ(json["runs"].size(), 3u);
-  for (const nlohmann::json& run : json["runs"]) {
-    EXPECT_EQ(run["status"], "complete");
-    EXPECT_EQ(run["result"]["configuration"]["mode"],
-              Constants::BENCHMARK_JSON_MODE_NAME);
-    EXPECT_EQ(run["result"]["configuration"]
-                 ["benchmark_schema_version"],
-              Constants::BENCHMARK_JSON_SCHEMA_VERSION);
-    EXPECT_EQ(run["result"]["configuration"]["output_file"], "");
-    EXPECT_EQ(run["result"]["status"], "complete");
-    EXPECT_TRUE(run["result"]["results_complete"].get<bool>());
-    EXPECT_TRUE(run["result"]["conclusions_valid"].get<bool>());
-  }
-  EXPECT_EQ(count_occurrences(
-                result.output,
-                Messages::msg_results_saved_to(output.path())),
-            1u)
-      << result.output;
-  EXPECT_EQ(access((output.path() + ".tmp").c_str(), F_OK), -1);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     StandardSweepWritesSingleTerminalJsonToStdoutIntegration) {
-  const CliResult result = run_memory_benchmark({
-      "--benchmark", "--only-bandwidth", "--iterations", "1", "--count",
-      "1", "--threads", "1", "--sweep", "buffer-size=1,2",
-      "--sweep-max-runs", "2", "--output", "-"});
-
-  expect_process_completed(result);
-  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
-  const nlohmann::json json = parse_single_stdout_json(result);
-  EXPECT_EQ(json["configuration"]["mode"],
-            Constants::SWEEP_JSON_MODE_NAME);
-  EXPECT_EQ(json["configuration"]["base_mode"],
-            Constants::BENCHMARK_JSON_MODE_NAME);
-  EXPECT_EQ(json["configuration"]["sweep_schema_version"], 1);
-  EXPECT_EQ(json["status"], "complete");
-  EXPECT_EQ(json["planned_runs"], 2u);
-  EXPECT_EQ(json["attempted_runs"], 2u);
-  EXPECT_EQ(json["completed_runs"], 2u);
-  EXPECT_TRUE(json["conclusions_valid"].get<bool>());
-  ASSERT_EQ(json["runs"].size(), 2u);
-  for (const nlohmann::json& run : json["runs"]) {
-    EXPECT_EQ(run["status"], "complete");
-    EXPECT_EQ(run["result"]["configuration"]["mode"],
-              Constants::BENCHMARK_JSON_MODE_NAME);
-    EXPECT_EQ(run["result"]["configuration"]
-                 ["benchmark_schema_version"],
-              Constants::BENCHMARK_JSON_SCHEMA_VERSION);
-    EXPECT_EQ(run["result"]["configuration"]["output_file"], "");
-    EXPECT_EQ(run["result"]["status"], "complete");
-    EXPECT_TRUE(run["result"]["results_complete"].get<bool>());
-    EXPECT_TRUE(run["result"]["conclusions_valid"].get<bool>());
-  }
-
-  EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)),
-            std::string::npos);
-  EXPECT_EQ(result.stdout_output.find(Messages::msg_running_sweep(2)),
-            std::string::npos);
-  EXPECT_NE(result.stderr_output.find(Messages::config_header(SOFTVERSION)),
-            std::string::npos)
-      << result.stderr_output;
-  EXPECT_NE(result.stderr_output.find(Messages::msg_running_sweep(2)),
-            std::string::npos)
-      << result.stderr_output;
-  EXPECT_NE(result.stderr_output.find(Messages::msg_sweep_run_progress(1, 2)),
-            std::string::npos)
-      << result.stderr_output;
-  EXPECT_EQ(count_occurrences(result.output,
-                              Messages::msg_results_saved_to("")),
-            0u);
-  expect_no_dash_transport_artifacts(result);
-}
-
-TEST(ExecutableCliIntegrationTest, PatternSweepPrintsOneBannerAcrossNestedLoopsIntegration) {
-  const TemporaryJsonFile output("pattern_sweep_banner");
-
-  const CliResult result = run_memory_benchmark({
-      "--patterns", "--iterations", "1", "--count", "2", "--threads",
-      "1", "--seed", "42", "--sweep", "buffer-size=1,2,3",
-      "--sweep-max-runs", "3", "--output", output.path()});
-
-  EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
-  expect_single_runtime_banner(result);
-  const nlohmann::json json = nlohmann::json::parse(read_file(output.path()));
-  EXPECT_EQ(json["configuration"]["sweep_schema_version"], 1);
-  EXPECT_EQ(json["status"], "complete");
-  EXPECT_EQ(json["planned_runs"], 3u);
-  EXPECT_EQ(json["completed_runs"], 3u);
-  ASSERT_EQ(json["runs"].size(), 3u);
-  for (const nlohmann::json& run : json["runs"]) {
-    EXPECT_EQ(run["status"], "complete");
-    EXPECT_EQ(run["result"]["planned_loops"], 2u);
-    EXPECT_EQ(run["result"]["completed_loops"], 2u);
-  }
-  EXPECT_EQ(count_occurrences(
-                result.output,
-                Messages::msg_results_saved_to(output.path())),
-            1u)
-      << result.output;
-  EXPECT_EQ(access((output.path() + ".tmp").c_str(), F_OK), -1);
-}
-
-TEST(ExecutableCliIntegrationTest, PatternModeRunsPatternOrchestrationIntegration) {
-  const CliResult result = run_memory_benchmark(
-      {"--patterns", "--buffer-size", "1", "--iterations", "1", "--count", "1"});
-
-  EXPECT_EQ(result.exit_code, EXIT_SUCCESS);
-  expect_single_runtime_banner(result);
-  EXPECT_NE(result.output.find("Running Pattern Benchmarks"), std::string::npos);
-  EXPECT_NE(result.output.find("Sequential Forward:"), std::string::npos);
-  EXPECT_EQ(result.output.find('\r'), std::string::npos);
-  EXPECT_NE(result.output.find("2 MiB stride"), std::string::npos);
-}
-
-TEST(ExecutableCliIntegrationTest,
-     PatternBenchmarkWritesSingleJsonDocumentToStdoutIntegration) {
-  const CliResult result = run_memory_benchmark({
-      "--patterns", "--buffer-size", "1", "--iterations", "1", "--count",
-      "1", "--threads", "1", "--seed", "42", "--output", "-"});
-
-  expect_process_completed(result);
-  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
-  const nlohmann::json json = parse_single_stdout_json(result);
-  EXPECT_EQ(json["configuration"]["mode"], "patterns");
-  EXPECT_EQ(json["configuration"]["pattern_schema_version"], 3);
-  EXPECT_EQ(json["status"], "complete");
-  EXPECT_TRUE(json["results_complete"].get<bool>());
-  EXPECT_EQ(json["planned_loops"], 1u);
-  EXPECT_EQ(json["completed_loops"], 1u);
-
-  EXPECT_EQ(result.stdout_output.find(Messages::config_header(SOFTVERSION)),
-            std::string::npos);
-  EXPECT_EQ(
-      result.stdout_output.find(Messages::msg_running_pattern_benchmarks()),
-      std::string::npos);
-  EXPECT_NE(result.stderr_output.find(Messages::config_header(SOFTVERSION)),
-            std::string::npos)
-      << result.stderr_output;
-  EXPECT_NE(
-      result.stderr_output.find(Messages::msg_running_pattern_benchmarks()),
-      std::string::npos)
-      << result.stderr_output;
-  EXPECT_EQ(count_occurrences(result.output,
-                              Messages::msg_results_saved_to("")),
-            0u);
-  expect_no_dash_transport_artifacts(result);
-}
-
-TEST(ExecutableCliIntegrationTest, PatternSeedReproducesWorkloadMetadataIntegration) {
-  const TemporaryJsonFile first_output("patterns_seed_first");
-  const TemporaryJsonFile second_output("patterns_seed_second");
-
-  const std::vector<std::string> common_args = {
-      "--patterns", "--buffer-size", "1", "--iterations", "1", "--count",
-      "3", "--threads", "2", "--seed", "42", "--output"};
-  std::vector<std::string> first_args = common_args;
-  first_args.push_back(first_output.path());
-  std::vector<std::string> second_args = common_args;
-  second_args.push_back(second_output.path());
-  const CliResult first_run = run_memory_benchmark(first_args);
-  const CliResult second_run = run_memory_benchmark(second_args);
-  ASSERT_EQ(first_run.exit_code, EXIT_SUCCESS);
-  ASSERT_EQ(second_run.exit_code, EXIT_SUCCESS);
-  expect_single_runtime_banner(first_run);
-  expect_single_runtime_banner(second_run);
-
-  const nlohmann::json first = nlohmann::json::parse(read_file(first_output.path()));
-  const nlohmann::json second = nlohmann::json::parse(read_file(second_output.path()));
-  EXPECT_EQ(first["configuration"]["pattern_seed"], "42");
-  EXPECT_EQ(first["configuration"]["pattern_seed"],
-            second["configuration"]["pattern_seed"]);
-
-  for (const char* operation : {"read_gb_s", "write_gb_s", "copy_gb_s"}) {
-    const nlohmann::json& first_samples =
-        first["patterns"]["random"]["bandwidth"][operation]["measurements"];
-    const nlohmann::json& second_samples =
-        second["patterns"]["random"]["bandwidth"][operation]["measurements"];
-    ASSERT_EQ(first_samples.size(), 3u);
-    ASSERT_EQ(second_samples.size(), first_samples.size());
-    for (size_t sample = 0; sample < first_samples.size(); ++sample) {
-      EXPECT_EQ(first_samples[sample]["seed"], "42");
-      EXPECT_EQ(first_samples[sample]["seed"], second_samples[sample]["seed"]);
-      EXPECT_EQ(first_samples[sample]["accesses_per_pass"],
-                second_samples[sample]["accesses_per_pass"]);
-      EXPECT_EQ(first_samples[sample]["distinct_address_count"],
-                second_samples[sample]["distinct_address_count"]);
-      EXPECT_EQ(first_samples[sample]["logical_working_set_bytes"],
-                second_samples[sample]["logical_working_set_bytes"]);
-      EXPECT_EQ(first_samples[sample]["pattern_order_index"],
-                second_samples[sample]["pattern_order_index"]);
+    EXPECT_EQ(json["planned_loops"], test_case.count);
+    EXPECT_EQ(json["completed_loops"], test_case.count);
+    if (!test_case.is_stdout && !test_case.is_flag_shaped) {
+      EXPECT_EQ(json["loops"].size(), test_case.count);
+      EXPECT_TRUE(json.contains("main_memory") && json["main_memory"].contains("bandwidth"));
     }
   }
 }
 
-TEST(ExecutableCliIntegrationTest, PatternAutomaticCalibrationWritesMetadataIntegration) {
-  const TemporaryJsonFile output_file("patterns_calibration");
+TEST(ExecutableCliIntegrationTest, StandardAndPatternSweepFileAndStdoutIntegration) {
+  const TemporaryJsonFile standard_file("standard_sweep_status");
+  const TemporaryJsonFile pattern_file("pattern_sweep_banner");
+  struct SweepCase {
+    const char* name;
+    std::vector<std::string> args;
+    std::string output_target;
+    const char* base_mode;
+    size_t runs;
+    size_t loops;
+    bool is_stdout;
+  };
+  const SweepCase cases[] = {
+      {"standard_file",
+       {"--benchmark", "--only-bandwidth", "--iterations", "1", "--count", "1", "--threads", "1", "--sweep",
+        "buffer-size=1,2,3", "--sweep-max-runs", "3", "--output", standard_file.path()},
+       standard_file.path(), Constants::BENCHMARK_JSON_MODE_NAME, 3u, 1u, false},
+      {"standard_stdout",
+       {"--benchmark", "--only-bandwidth", "--iterations", "1", "--count", "1", "--threads", "1", "--sweep",
+        "buffer-size=1,2", "--sweep-max-runs", "2", "--output", "-"},
+       "-", Constants::BENCHMARK_JSON_MODE_NAME, 2u, 1u, true},
+      {"pattern_file_nested_loops",
+       {"--patterns", "--iterations", "1", "--count", "2", "--threads", "1", "--seed", "42", "--sweep",
+        "buffer-size=1,2,3", "--sweep-max-runs", "3", "--output", pattern_file.path()},
+       pattern_file.path(), Constants::PATTERNS_JSON_MODE_NAME, 3u, 2u, false},
+  };
+  for (const SweepCase& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
+    const CliResult result = run_memory_benchmark(test_case.args);
+    expect_process_completed(result);
+    ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
 
-  const CliResult result = run_memory_benchmark({
-      "--patterns", "--buffer-size", "1", "--count", "1", "--threads",
-      "1", "--seed", "42", "--output", output_file.path()});
-  ASSERT_EQ(result.exit_code, EXIT_SUCCESS);
-  EXPECT_NE(result.output.find("automatic duration calibration"),
-            std::string::npos);
-
-  const nlohmann::json output = nlohmann::json::parse(read_file(output_file.path()));
-  EXPECT_EQ(output["configuration"]["pattern_pass_policy"],
-            "automatic-duration-calibration");
-  EXPECT_EQ(output["configuration"]["calibration_max_corrections"], 2u);
-  for (const auto& pattern : output["patterns"].items()) {
-    for (const auto& operation : pattern.value()["bandwidth"].items()) {
-      const nlohmann::json& aggregate = operation.value();
-      ASSERT_EQ(aggregate["measurements"].size(), 1u);
-      const nlohmann::json& measurement = aggregate["measurements"][0];
-      if (measurement["status"] == "measured") {
-        EXPECT_TRUE(measurement["automatic_calibration"].get<bool>());
-        EXPECT_GT(measurement["pilot_elapsed_seconds"].get<double>(), 0.0);
-        EXPECT_GT(measurement["elapsed_seconds"].get<double>(), 0.0);
-        EXPECT_GT(measurement["passes"].get<size_t>(), 0u);
+    const nlohmann::json json =
+        test_case.is_stdout ? expect_stdout_json_transport(result, Messages::msg_running_sweep(test_case.runs))
+                            : expect_atomic_file_json(result, test_case.output_target);
+    if (test_case.is_stdout) {
+      EXPECT_NE(result.stderr_output.find(Messages::msg_sweep_run_progress(1, test_case.runs)), std::string::npos)
+          << result.stderr_output;
+    }
+    expect_complete_sweep_envelope(json, test_case.base_mode, test_case.runs);
+    const bool is_standard = std::string_view(test_case.base_mode) == Constants::BENCHMARK_JSON_MODE_NAME;
+    for (const nlohmann::json& run : json["runs"]) {
+      EXPECT_EQ(run["status"], "complete");
+      const nlohmann::json& nested = run["result"];
+      EXPECT_EQ(nested["configuration"]["mode"], test_case.base_mode);
+      EXPECT_EQ(nested["status"], "complete");
+      EXPECT_TRUE(nested["results_complete"].get<bool>());
+      EXPECT_EQ(nested["planned_loops"], test_case.loops);
+      EXPECT_EQ(nested["completed_loops"], test_case.loops);
+      if (is_standard) {
+        EXPECT_EQ(nested["configuration"]["benchmark_schema_version"], Constants::BENCHMARK_JSON_SCHEMA_VERSION);
+        EXPECT_EQ(nested["configuration"]["output_file"], "");
+        EXPECT_TRUE(nested["conclusions_valid"].get<bool>());
+      } else {
+        EXPECT_EQ(nested["configuration"]["pattern_schema_version"], Constants::PATTERN_JSON_SCHEMA_VERSION);
       }
     }
   }
 }
 
-TEST(ExecutableCliIntegrationTest,
-     LlmMemoryPagedSweepWritesEnvelopeAndNestedSchema2FileIntegration) {
-  const TemporaryJsonFile output("llm_memory_paged_sweep");
-
-  const CliResult result = run_memory_benchmark({
-      "--llm-memory", "--weight-size-mb", "1", "--layers", "2",
-      "--query-heads", "4", "--kv-heads", "2", "--head-dim", "16",
-      "--kv-layout", "paged", "--sweep", "context-tokens=16,32", "--sweep",
-      "kv-block-tokens=8,16", "--sweep-max-runs", "4", "--threads", "1",
-      "--iterations", "1", "--count", "1", "--seed", "42", "--output",
-      output.path()});
-
+TEST(ExecutableCliIntegrationTest, PatternBenchmarkWritesSingleJsonDocumentToStdoutIntegration) {
+  const CliResult result = run_memory_benchmark(
+      {"--patterns", "--buffer-size", "1", "--iterations", "1", "--count", "1", "--threads", "1", "--seed", "42",
+       "--output", "-"});
   expect_process_completed(result);
   ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
-  expect_single_runtime_banner(result);
-  EXPECT_NE(result.output.find(Messages::msg_running_sweep(4)),
-            std::string::npos);
-
-  const nlohmann::json envelope = nlohmann::json::parse(read_file(output.path()));
-  EXPECT_EQ(envelope["configuration"]["mode"], Constants::SWEEP_JSON_MODE_NAME);
-  EXPECT_EQ(envelope["configuration"]["base_mode"], Constants::LLM_JSON_MODE_NAME);
-  EXPECT_EQ(envelope["configuration"]["sweep_schema_version"], 1);
-  EXPECT_EQ(envelope["configuration"]["run_count"], 4u);
-  EXPECT_EQ(envelope["planned_runs"], 4u);
-  EXPECT_EQ(envelope["completed_runs"], 4u);
-  EXPECT_EQ(envelope["status"], "complete");
-  EXPECT_TRUE(envelope["conclusions_valid"].get<bool>());
-  ASSERT_EQ(envelope["runs"].size(), 4u);
-
-  const std::array<std::pair<size_t, size_t>, 4> expected_pairs = {{
-      {16u, 8u},
-      {16u, 16u},
-      {32u, 8u},
-      {32u, 16u},
-  }};
-  for (size_t i = 0; i < expected_pairs.size(); ++i) {
-    const nlohmann::json& run = envelope["runs"][i];
-    EXPECT_EQ(run["index"], i);
-    EXPECT_EQ(run["status"], "complete");
-    EXPECT_EQ(run["parameters"]["context-tokens"], expected_pairs[i].first);
-    EXPECT_EQ(run["parameters"]["kv-block-tokens"], expected_pairs[i].second);
-    const nlohmann::json& nested = run["result"];
-    EXPECT_EQ(nested["schema_version"], 2);
-    EXPECT_EQ(nested["mode"], Constants::LLM_JSON_MODE_NAME);
-    EXPECT_EQ(nested["status"], "complete");
-    EXPECT_TRUE(nested["results_complete"].get<bool>());
-    EXPECT_TRUE(nested["run_accepted"].get<bool>());
-    EXPECT_EQ(nested["configuration"]["visible_context_tokens"],
-              expected_pairs[i].first);
-    EXPECT_EQ(nested["configuration"]["kv_block_tokens"],
-              expected_pairs[i].second);
-    EXPECT_EQ(nested["configuration"]["base_seed_uint64_decimal"], "42");
-    const nlohmann::json& json_peak =
-        nested["backend_evidence"]["cpu"]["resources"]["json_output_peak_estimate"];
-    EXPECT_TRUE(json_peak["enabled"].get<bool>());
-    EXPECT_GT(std::stoull(json_peak["total_bytes"].get<std::string>()), 0u);
-  }
-  EXPECT_EQ(access((output.path() + ".tmp").c_str(), F_OK), -1);
+  const nlohmann::json json = expect_stdout_json_transport(result, Messages::msg_running_pattern_benchmarks());
+  EXPECT_EQ(json["configuration"]["mode"], Constants::PATTERNS_JSON_MODE_NAME);
+  EXPECT_EQ(json["configuration"]["pattern_schema_version"], Constants::PATTERN_JSON_SCHEMA_VERSION);
+  EXPECT_EQ(json["status"], "complete");
+  EXPECT_TRUE(json["results_complete"].get<bool>());
+  EXPECT_EQ(json["planned_loops"], 1u);
+  EXPECT_EQ(json["completed_loops"], 1u);
 }
 
-TEST(ExecutableCliIntegrationTest,
-     LlmMemoryPrefillSweepWritesSingleTerminalJsonToStdoutIntegration) {
-  const CliResult result = run_memory_benchmark({
-      "--llm-memory", "--phase", "prefill", "--weight-size-mb", "1",
-      "--layers", "2", "--query-heads", "4", "--kv-heads", "2", "--head-dim",
-      "16", "--sweep", "prompt-tokens=16,32", "--sweep",
-      "attention-query-tile-tokens=8,16", "--threads", "1", "--iterations",
-      "1", "--count", "1", "--seed", "42", "--output", "-"});
-
+TEST(ExecutableCliIntegrationTest, AnalyzeTlbWritesSingleJsonDocumentToStdoutIntegration) {
+  const CliResult result = run_memory_benchmark(
+      {"--analyze-tlb", "--tlb-density", "low", "--seed", "42", "--output", "-"}, std::chrono::minutes(15));
   expect_process_completed(result);
   ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
-  const nlohmann::json envelope = parse_single_stdout_json(result);
-  EXPECT_EQ(envelope["configuration"]["mode"], Constants::SWEEP_JSON_MODE_NAME);
-  EXPECT_EQ(envelope["configuration"]["base_mode"], Constants::LLM_JSON_MODE_NAME);
-  EXPECT_EQ(envelope["configuration"]["sweep_schema_version"], 1);
-  EXPECT_EQ(envelope["planned_runs"], 4u);
-  EXPECT_EQ(envelope["completed_runs"], 4u);
-  EXPECT_EQ(envelope["status"], "complete");
-  EXPECT_TRUE(envelope["conclusions_valid"].get<bool>());
-  ASSERT_EQ(envelope["runs"].size(), 4u);
-  EXPECT_EQ(envelope["runs"][0]["parameters"]["prompt-tokens"], 16u);
-  EXPECT_EQ(envelope["runs"][0]["parameters"]["attention-query-tile-tokens"], 8u);
-  EXPECT_EQ(envelope["runs"][3]["parameters"]["prompt-tokens"], 32u);
-  EXPECT_EQ(envelope["runs"][3]["parameters"]["attention-query-tile-tokens"], 16u);
-  EXPECT_EQ(envelope["runs"][3]["result"]["configuration"]["prompt_tokens"], 32u);
-  EXPECT_EQ(
-      envelope["runs"][3]["result"]["configuration"]["attention_query_tile_tokens"],
-      16u);
-  EXPECT_EQ(result.stdout_output.find(Messages::msg_running_sweep(4)),
-            std::string::npos);
-  EXPECT_NE(result.stderr_output.find(Messages::msg_running_sweep(4)),
-            std::string::npos);
-  expect_no_dash_transport_artifacts(result);
+  const nlohmann::json json = expect_stdout_json_transport(result, Messages::msg_running_tlb_analysis());
+  EXPECT_EQ(json["configuration"]["mode"], Constants::TLB_ANALYSIS_JSON_MODE_NAME);
+  EXPECT_EQ(json["configuration"]["schema_version"], 4);
+  EXPECT_EQ(json["tlb_analysis"]["status"], "complete");
+  EXPECT_TRUE(json["tlb_analysis"]["conclusions_valid"].get<bool>());
+  EXPECT_FALSE(json["tlb_analysis"].contains("status_reason"));
 }
 
-TEST(ExecutableCliIntegrationTest,
-     LlmMemorySweepPreservesPreInitFailureReasonInEnvelopeIntegration) {
-  const unsigned long available_mb = get_available_memory_mb();
-  const unsigned long excess_weight_mb = available_mb + 1024ul;
-  if (available_mb == 0ul || excess_weight_mb >= 65000ul) {
-    GTEST_SKIP() << "Host available memory (" << available_mb
-                 << " MiB) cannot exceed budget below exact-work guardrail";
+TEST(ExecutableCliIntegrationTest, CoreToCoreDirectFileAndStdoutIntegration) {
+  const TemporaryJsonFile file_output("core2core_v2");
+  for (bool is_stdout : {false, true}) {
+    SCOPED_TRACE(is_stdout ? "stdout" : "file");
+    const size_t count = is_stdout ? 1u : 2u;
+    const CliResult result = run_memory_benchmark(
+        {"--analyze-core2core", "--count", std::to_string(count), "--latency-samples", "1", "--output",
+         is_stdout ? "-" : file_output.path()});
+    expect_process_completed(result);
+    ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
+
+    const nlohmann::json json =
+        is_stdout ? expect_stdout_json_transport(result, Messages::msg_running_core_to_core_analysis())
+                  : expect_atomic_file_json(result, file_output.path());
+    EXPECT_EQ(json["version"], SOFTVERSION);
+    EXPECT_EQ(json["configuration"]["mode"], Constants::CORE_TO_CORE_JSON_MODE_NAME);
+    EXPECT_EQ(json["configuration"]["schema_version"], Constants::CORE_TO_CORE_JSON_SCHEMA_VERSION);
+    EXPECT_EQ(json["core_to_core_latency"]["status"], "complete");
+    EXPECT_TRUE(json["core_to_core_latency"]["measurements_complete"].get<bool>());
+    ASSERT_EQ(json["core_to_core_latency"]["scenarios"].size(), 3u);
+    EXPECT_EQ(json["core_to_core_latency"]["scenarios"][0]["loop_records"].size(), count);
   }
-
-  const CliResult result = run_memory_benchmark({
-      "--llm-memory", "--weight-size-mb", std::to_string(excess_weight_mb),
-      "--layers", "2", "--query-heads", "4", "--kv-heads", "2", "--head-dim",
-      "16", "--sweep", "context-tokens=16,32", "--threads", "1",
-      "--iterations", "1", "--count", "1", "--seed", "42", "--output", "-"});
-
-  expect_process_completed(result);
-  ASSERT_EQ(result.exit_code, EXIT_FAILURE) << result.stderr_output;
-  const nlohmann::json envelope = parse_single_stdout_json(result);
-  EXPECT_EQ(envelope["configuration"]["mode"], Constants::SWEEP_JSON_MODE_NAME);
-  EXPECT_EQ(envelope["configuration"]["base_mode"], Constants::LLM_JSON_MODE_NAME);
-  EXPECT_EQ(envelope["planned_runs"], 2u);
-  EXPECT_EQ(envelope["attempted_runs"], 1u);
-  EXPECT_EQ(envelope["completed_runs"], 0u);
-  EXPECT_EQ(envelope["status"], "failed");
-  EXPECT_EQ(envelope["status_reason"], "memory-budget-exceeded");
-  EXPECT_FALSE(envelope["conclusions_valid"].get<bool>());
-  ASSERT_EQ(envelope["runs"].size(), 1u);
-  EXPECT_EQ(envelope["runs"][0]["status"], "failed");
-  EXPECT_EQ(envelope["runs"][0]["status_reason"], "memory-budget-exceeded");
-  EXPECT_TRUE(envelope["runs"][0]["result"].is_null());
-  expect_no_dash_transport_artifacts(result);
 }
 
-TEST(ExecutableCliIntegrationTest,
-     LlmMemoryPagedPrefillSweepSucceedsForNonUnitBlockRemainderIntegration) {
-  {
-    const CliResult cpu_result = run_memory_benchmark({
-        "--llm-memory", "--phase", "prefill", "--kv-layout", "paged",
-        "--weight-size-mb", "1", "--layers", "2", "--query-heads", "4",
-        "--kv-heads", "2", "--head-dim", "16", "--attention-query-tile-tokens",
-        "8", "--sweep", "prompt-tokens=16,32", "--sweep",
-        "kv-block-tokens=8,16", "--threads", "1", "--iterations", "1",
-        "--count", "1", "--seed", "42", "--output", "-"});
-    expect_process_completed(cpu_result);
-    ASSERT_EQ(cpu_result.exit_code, EXIT_SUCCESS) << cpu_result.stderr_output;
-    const nlohmann::json envelope = parse_single_stdout_json(cpu_result);
-    EXPECT_EQ(envelope["status"], "complete");
-    EXPECT_EQ(envelope["completed_runs"], 4u);
-    EXPECT_TRUE(envelope["conclusions_valid"].get<bool>());
-    ASSERT_EQ(envelope["runs"].size(), 4u);
-    for (const nlohmann::json& run : envelope["runs"]) {
-      EXPECT_EQ(run["status"], "complete");
-      EXPECT_TRUE(run["result"]["run_accepted"].get<bool>());
-      EXPECT_TRUE(run["result"]["resolved_plan"]["layout"]
-                     ["decode_append_offset_in_last_block"]
-                         .is_null());
+TEST(ExecutableCliIntegrationTest, CoreToCoreSweepFileAndStdoutIntegration) {
+  const TemporaryJsonFile file_output("core2core_sweep_v2");
+  for (bool is_stdout : {false, true}) {
+    SCOPED_TRACE(is_stdout ? "stdout" : "file");
+    const size_t runs = is_stdout ? 2u : 3u;
+    const CliResult result = run_memory_benchmark(
+        {"--analyze-core2core", "--count", "1", "--sweep", is_stdout ? "latency-samples=1,2" : "latency-samples=1,2,3",
+         "--sweep-max-runs", std::to_string(runs), "--output", is_stdout ? "-" : file_output.path()});
+    expect_process_completed(result);
+    ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
+
+    const nlohmann::json json = is_stdout ? expect_stdout_json_transport(result, Messages::msg_running_sweep(runs))
+                                          : expect_atomic_file_json(result, file_output.path());
+    if (is_stdout) {
+      EXPECT_NE(result.stderr_output.find(Messages::msg_running_core_to_core_analysis()), std::string::npos)
+          << result.stderr_output;
     }
-    expect_no_dash_transport_artifacts(cpu_result);
+    EXPECT_EQ(json["version"], SOFTVERSION);
+    expect_complete_sweep_envelope(json, Constants::CORE_TO_CORE_JSON_MODE_NAME, runs);
+    for (const nlohmann::json& run : json["runs"]) {
+      EXPECT_EQ(run["status"], "complete");
+      EXPECT_EQ(run["result"]["configuration"]["schema_version"], Constants::CORE_TO_CORE_JSON_SCHEMA_VERSION);
+      EXPECT_EQ(run["result"]["core_to_core_latency"]["status"], "complete");
+      EXPECT_TRUE(run["result"]["core_to_core_latency"]["measurements_complete"].get<bool>());
+    }
+  }
+}
+
+TEST(ExecutableCliIntegrationTest, GpuBandwidthFileAndStdoutSchemaV1Integration) {
+  const TemporaryJsonFile file_output("gpu_schema_v1");
+  for (bool is_stdout : {true, false}) {
+    SCOPED_TRACE(is_stdout ? "stdout" : "file");
+    const std::string target = is_stdout ? "-" : file_output.path();
+    const CliResult result = run_memory_benchmark(
+        {"--gpu-bandwidth", "--buffer-size", "64", "--iterations", "1", "--count", "3", "--seed", "42", "--output",
+         target});
+    expect_process_completed(result);
+
+    const nlohmann::json json = is_stdout ? expect_stdout_json_transport(result, Messages::msg_running_gpu_bandwidth())
+                                          : expect_atomic_file_json(result, file_output.path());
+    ASSERT_TRUE(json.is_object());
+    EXPECT_EQ(json["software_version"], SOFTVERSION);
+    EXPECT_EQ(json["schema_version"], Constants::GPU_JSON_SCHEMA_VERSION);
+    EXPECT_EQ(json["mode"], Constants::GPU_JSON_MODE_NAME);
+    EXPECT_EQ(json["configuration"]["output_file"], target);
+    EXPECT_EQ(json["configuration"]["base_seed_uint64_decimal"], "42");
+    EXPECT_EQ(json["configuration"]["loop_count"], 3u);
+    EXPECT_EQ(json["configuration"]["iterations"], 1u);
+    EXPECT_EQ(json["counters"]["planned_loops"], 3u);
+    EXPECT_EQ(json["counters"]["planned_measurements"], 9u);
+    ASSERT_EQ(json["measurements"].size(), 9u);
+
+    const std::string status = json["status"].get<std::string>();
+    if (status == "complete") {
+      EXPECT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
+      EXPECT_TRUE(json["results_complete"].get<bool>());
+      EXPECT_TRUE(json["conclusions_valid"].get<bool>());
+      EXPECT_EQ(json["counters"]["completed_loops"], 3u);
+      EXPECT_EQ(json["counters"]["validated_measurements"], 9u);
+      for (const nlohmann::json& measurement : json["measurements"]) {
+        EXPECT_EQ(measurement["status"], "measured");
+        EXPECT_GT(measurement["value_gb_s"].get<double>(), 0.0);
+        EXPECT_EQ(measurement["timed"]["command_buffer_count"], 1u);
+        EXPECT_EQ(measurement["timed"]["compute_encoder_count"], 1u);
+        EXPECT_EQ(measurement["validation"]["validation_status"], "passed");
+      }
+      EXPECT_EQ(json["work_plans"][2]["exact_payload_bytes"], "134217728");
+      EXPECT_EQ(json["backend"]["allocation"]["buffer_a"]["storage_mode"], "private");
+      EXPECT_EQ(json["backend"]["allocation"]["buffer_a"]["hazard_tracking_mode"], "tracked");
+      EXPECT_EQ(json["backend"]["compilation"]["kernel_source_sha256"].get<std::string>().size(), 64u);
+    } else if (status == "unsupported") {
+      EXPECT_EQ(result.exit_code, EXIT_FAILURE) << result.output;
+      EXPECT_FALSE(json["results_complete"].get<bool>());
+      EXPECT_FALSE(json["conclusions_valid"].get<bool>());
+      ASSERT_FALSE(json["reason_code"].get<std::string>().empty());
+      EXPECT_EQ(json["backend"]["initialization_status"], "unsupported");
+      EXPECT_EQ(json["backend"]["reason_code"], json["reason_code"]);
+    } else {
+      FAIL() << "GPU integration returned unexpected status: " << status << '\n' << result.stderr_output;
+    }
+  }
+}
+
+TEST(ExecutableCliIntegrationTest, LlmMetalDirectFileAndStdoutIntegration) {
+  for (bool prefill : {false, true}) {
+    for (bool paged : {false, true}) {
+      SCOPED_TRACE(std::string(prefill ? "prefill_" : "decode_") + (paged ? "paged" : "contiguous"));
+      const CliResult result = run_memory_benchmark(bounded_llm_arguments("-", /*metal=*/true, prefill, paged));
+      expect_process_completed(result);
+      const nlohmann::json json = expect_stdout_json_transport(result);
+      if (prefill) {
+        expect_bounded_metal_prefill_result(result, json, paged);
+      } else {
+        expect_complete_or_unsupported_metal_result(
+            result, json, paged ? "paged" : "contiguous",
+            paged ? "llm-memory-v2-metal-decode-paged" : "llm-memory-v2-metal-decode-contiguous");
+        if (paged) EXPECT_EQ(json["configuration"]["kv_block_tokens"], 2u);
+      }
+    }
+  }
+
+  const TemporaryJsonFile file_output("llm_metal_schema_v2");
+  const CliResult result = run_memory_benchmark(bounded_llm_arguments(file_output.path(), /*metal=*/true));
+  expect_process_completed(result);
+  const nlohmann::json json = expect_atomic_file_json(result, file_output.path());
+  expect_complete_or_unsupported_metal_result(result, json);
+  EXPECT_EQ(json["configuration"]["output_file"], file_output.path());
+}
+
+TEST(ExecutableCliIntegrationTest, LlmCpuDecodeFileAndStdoutSchemaV2Integration) {
+  nlohmann::json first_stdout;
+  for (int repetition = 0; repetition < 2; ++repetition) {
+    SCOPED_TRACE(repetition);
+    const CliResult result = run_memory_benchmark(bounded_llm_arguments("-"));
+    expect_process_completed(result);
+    ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+    const nlohmann::json json = expect_stdout_json_transport(
+        result, Messages::report_llm_memory_header("cpu", "decode", "decode_step", "contiguous"));
+    expect_complete_cpu_llm_document(json, "decode", "contiguous",
+                                     Constants::LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION, "decode_step");
+    EXPECT_EQ(json["software"]["version"], SOFTVERSION);
+    EXPECT_TRUE(json["software"]["timestamp"].is_string());
+    EXPECT_EQ(json["configuration"]["output_file"], "-");
+    EXPECT_EQ(json["configuration"]["base_seed_uint64_decimal"], "42");
+    EXPECT_EQ(json["configuration"]["iterations"], 1u);
+    EXPECT_EQ(json["configuration"]["loop_count"], 3u);
+    EXPECT_EQ(json["configuration"]["resolved_sources"]["backend"], "default");
+    EXPECT_EQ(json["configuration"]["resolved_sources"]["phase"], "default");
+    EXPECT_EQ(json["configuration"]["resolved_sources"]["kv_layout"], "default");
+    EXPECT_EQ(json["counters"]["planned_measurements"], 9u);
+    EXPECT_EQ(json["counters"]["measured_measurements"], 9u);
+    ASSERT_EQ(json["measurements"].size(), 9u);
+    for (const nlohmann::json& measurement : json["measurements"]) {
+      EXPECT_EQ(measurement["status"], "measured");
+      EXPECT_EQ(canonical_llm_plan(json, measurement)["work_unit_kind"], "decode_step");
+      EXPECT_EQ(canonical_llm_plan(json, measurement)["work_units"], 1u);
+      EXPECT_EQ(measurement["completed_work_units"], 1u);
+      expect_complete_llm_named_checks(json, measurement);
+      EXPECT_TRUE(measurement["checksum"]["checksum_valid"].get<bool>());
+      EXPECT_TRUE(measurement["synthetic_work_unit_latency_seconds"].is_number());
+      EXPECT_TRUE(measurement["synthetic_memory_work_units_per_second"].is_number());
+      EXPECT_TRUE(measurement["effective_model_payload_gb_s"].is_number());
+    }
+    expect_complete_llm_checkpoint_lifecycle(json);
+
+    if (repetition == 0) {
+      first_stdout = json;
+      continue;
+    }
+    EXPECT_EQ(first_stdout["configuration"], json["configuration"]);
+    EXPECT_EQ(first_stdout["seeds"], json["seeds"]);
+    for (const char* field : {"methodology", "geometry", "model_work_plan", "scenario_plans"}) {
+      EXPECT_EQ(first_stdout["resolved_plan"][field], json["resolved_plan"][field]) << field;
+    }
+    ASSERT_EQ(first_stdout["measurements"].size(), json["measurements"].size());
+    for (size_t index = 0; index < first_stdout["measurements"].size(); ++index) {
+      EXPECT_EQ(first_stdout["measurements"][index]["plan_ref"], json["measurements"][index]["plan_ref"]);
+      EXPECT_EQ(first_stdout["measurements"][index]["checksum"], json["measurements"][index]["checksum"]);
+    }
+  }
+
+  const TemporaryJsonFile file_output("llm_schema_v2");
+  const CliResult result = run_memory_benchmark(bounded_llm_arguments(file_output.path()));
+  expect_process_completed(result);
+  ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
+  const nlohmann::json json = expect_atomic_file_json(result, file_output.path());
+  expect_complete_cpu_llm_document(json, "decode", "contiguous",
+                                   Constants::LLM_CPU_DECODE_CONTIGUOUS_METHODOLOGY_VERSION, "decode_step");
+  EXPECT_EQ(json["configuration"]["output_file"], file_output.path());
+  EXPECT_FALSE(json["resolved_plan"]["plan_identity"].get<std::string>().empty());
+  for (const auto& plan : json["resolved_plan"]["scenario_plans"]) EXPECT_EQ(plan["model_ref"], "resolved_plan");
+  expect_complete_llm_checkpoint_lifecycle(json);
+}
+
+TEST(ExecutableCliIntegrationTest, LlmCpuPrefillContiguousAndPagedSchemaV2Integration) {
+  for (bool paged : {false, true}) {
+    SCOPED_TRACE(paged ? "paged" : "contiguous");
+    const CliResult result =
+        run_memory_benchmark(bounded_llm_arguments("-", /*metal=*/false, /*prefill=*/true, paged));
+    expect_process_completed(result);
+    ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+    const nlohmann::json json = expect_stdout_json_transport(
+        result, Messages::report_llm_memory_header("cpu", "prefill", "prefill_operation",
+                                                   paged ? "paged" : "contiguous"));
+    expect_complete_cpu_llm_document(
+        json, "prefill", paged ? "paged" : "contiguous",
+        paged ? Constants::LLM_CPU_PREFILL_PAGED_METHODOLOGY_VERSION
+              : Constants::LLM_CPU_PREFILL_CONTIGUOUS_METHODOLOGY_VERSION,
+        "prefill_operation");
+
+    const nlohmann::json& config = json["configuration"];
+    EXPECT_TRUE(config["visible_context_tokens"].is_null());
+    EXPECT_EQ(config["prompt_tokens"], 5u);
+    EXPECT_EQ(config["attention_query_tile_tokens"], 2u);
+    EXPECT_EQ(config["resolved_sources"]["phase"], "explicit");
+    if (paged) {
+      EXPECT_EQ(config["kv_block_tokens"], 4u);
+      EXPECT_EQ(config["resolved_sources"]["kv_layout"], "explicit");
+      EXPECT_EQ(config["resolved_sources"]["kv_block_tokens"], "explicit");
+    }
+
+    const nlohmann::json& plan = json["resolved_plan"];
+    EXPECT_TRUE(plan["geometry"]["prefill"].is_object());
+    EXPECT_EQ(plan["layout"]["kv_layout"], paged ? "paged" : "contiguous");
+    if (paged) EXPECT_EQ(plan["layout"]["kv_block_tokens"], 4u);
+    EXPECT_TRUE(json["backend_evidence"]["cpu"]["prefill"].is_object());
+    EXPECT_EQ(json["backend_evidence"]["cpu"]["paged"].is_object(), paged);
+    ASSERT_EQ(plan["scenario_plans"].size(), 3u);
+    EXPECT_EQ(plan["scenario_plans"][0]["effective_model_payload_bytes_per_work_unit"], "1048576");
+    EXPECT_EQ(plan["scenario_plans"][1]["effective_model_payload_bytes_per_work_unit"], "256");
+    EXPECT_EQ(plan["scenario_plans"][2]["effective_model_payload_bytes_per_work_unit"], "1048832");
+    EXPECT_EQ(json["counters"]["completed_work_units"], "9");
+    EXPECT_EQ(json["counters"]["completed_effective_model_payload_bytes"], "6292992");
+
+    ASSERT_EQ(json["measurements"].size(), 9u);
+    for (const nlohmann::json& measurement : json["measurements"]) {
+      EXPECT_EQ(measurement["status"], "measured");
+      EXPECT_EQ(measurement["execution"]["status"], "valid");
+      EXPECT_TRUE(measurement["checksum"]["checksum_valid"].get<bool>());
+      EXPECT_EQ(canonical_llm_plan(json, measurement)["expected_checksum"]["expected_run_checksum"],
+                measurement["checksum"]["actual_run_checksum"]);
+      expect_complete_llm_named_checks(json, measurement);
+    }
+    expect_complete_llm_checkpoint_lifecycle(json);
+    EXPECT_NE(result.stderr_output.find("176"), std::string::npos);
+    EXPECT_NE(result.stderr_output.find("80"), std::string::npos);
+    EXPECT_EQ(result.stderr_output.find("Crossover:"), std::string::npos);
+    EXPECT_EQ(result.stderr_output.find(" tokens/s"), std::string::npos);
+  }
+}
+
+TEST(ExecutableCliIntegrationTest, LlmMemorySweepsFileStdoutAndPagedPrefillRemainderIntegration) {
+  {
+    SCOPED_TRACE("paged_decode_sweep_file");
+    const TemporaryJsonFile output("llm_memory_paged_sweep");
+    const CliResult result = run_memory_benchmark(
+        {"--llm-memory", "--weight-size-mb", "1", "--layers", "2", "--query-heads", "4", "--kv-heads", "2",
+         "--head-dim", "16", "--kv-layout", "paged", "--sweep", "context-tokens=16,32", "--sweep",
+         "kv-block-tokens=8,16", "--sweep-max-runs", "4", "--threads", "1", "--iterations", "1", "--count", "1",
+         "--seed", "42", "--output", output.path()});
+    expect_process_completed(result);
+    ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+    EXPECT_NE(result.output.find(Messages::msg_running_sweep(4)), std::string::npos);
+    const nlohmann::json envelope = expect_atomic_file_json(result, output.path());
+    expect_complete_sweep_envelope(envelope, Constants::LLM_JSON_MODE_NAME, 4u);
+    EXPECT_EQ(envelope["configuration"]["run_count"], 4u);
+    const std::array<std::pair<size_t, size_t>, 4> expected_pairs = {{{16u, 8u}, {16u, 16u}, {32u, 8u}, {32u, 16u}}};
+    for (size_t i = 0; i < expected_pairs.size(); ++i) {
+      const nlohmann::json& run = envelope["runs"][i];
+      EXPECT_EQ(run["index"], i);
+      EXPECT_EQ(run["status"], "complete");
+      EXPECT_EQ(run["parameters"]["context-tokens"], expected_pairs[i].first);
+      EXPECT_EQ(run["parameters"]["kv-block-tokens"], expected_pairs[i].second);
+      const nlohmann::json& nested = run["result"];
+      EXPECT_EQ(nested["schema_version"], Constants::LLM_JSON_SCHEMA_VERSION);
+      EXPECT_EQ(nested["mode"], Constants::LLM_JSON_MODE_NAME);
+      EXPECT_EQ(nested["status"], "complete");
+      EXPECT_TRUE(nested["results_complete"].get<bool>());
+      EXPECT_TRUE(nested["run_accepted"].get<bool>());
+      EXPECT_EQ(nested["configuration"]["visible_context_tokens"], expected_pairs[i].first);
+      EXPECT_EQ(nested["configuration"]["kv_block_tokens"], expected_pairs[i].second);
+      EXPECT_EQ(nested["configuration"]["base_seed_uint64_decimal"], "42");
+      const nlohmann::json& json_peak = nested["backend_evidence"]["cpu"]["resources"]["json_output_peak_estimate"];
+      EXPECT_TRUE(json_peak["enabled"].get<bool>());
+      EXPECT_GT(std::stoull(json_peak["total_bytes"].get<std::string>()), 0u);
+    }
   }
 
   {
-    const CliResult metal_result = run_memory_benchmark({
-        "--llm-memory", "--llm-memory-backend", "metal", "--phase", "prefill",
-        "--kv-layout", "paged", "--weight-size-mb", "1", "--layers", "2",
-        "--query-heads", "4", "--kv-heads", "2", "--head-dim", "16",
-        "--attention-query-tile-tokens", "8", "--kv-block-tokens", "16",
-        "--sweep", "prompt-tokens=16,32", "--iterations", "1", "--count", "1",
-        "--seed", "42", "--output", "-"});
-    expect_process_completed(metal_result);
-    const nlohmann::json envelope = parse_single_stdout_json(metal_result);
-    if (metal_result.exit_code != EXIT_SUCCESS &&
-        envelope.contains("runs") && !envelope["runs"].empty() &&
-        envelope["runs"][0]["result"].is_object() &&
+    SCOPED_TRACE("prefill_sweep_stdout");
+    const CliResult result = run_memory_benchmark(
+        {"--llm-memory", "--phase", "prefill", "--weight-size-mb", "1", "--layers", "2", "--query-heads", "4",
+         "--kv-heads", "2", "--head-dim", "16", "--sweep", "prompt-tokens=16,32", "--sweep",
+         "attention-query-tile-tokens=8,16", "--threads", "1", "--iterations", "1", "--count", "1", "--seed", "42",
+         "--output", "-"});
+    expect_process_completed(result);
+    ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+    const nlohmann::json envelope = expect_stdout_json_transport(result, Messages::msg_running_sweep(4));
+    expect_complete_sweep_envelope(envelope, Constants::LLM_JSON_MODE_NAME, 4u);
+    EXPECT_EQ(envelope["runs"][0]["parameters"]["prompt-tokens"], 16u);
+    EXPECT_EQ(envelope["runs"][0]["parameters"]["attention-query-tile-tokens"], 8u);
+    EXPECT_EQ(envelope["runs"][3]["parameters"]["prompt-tokens"], 32u);
+    EXPECT_EQ(envelope["runs"][3]["parameters"]["attention-query-tile-tokens"], 16u);
+    EXPECT_EQ(envelope["runs"][3]["result"]["configuration"]["prompt_tokens"], 32u);
+    EXPECT_EQ(envelope["runs"][3]["result"]["configuration"]["attention_query_tile_tokens"], 16u);
+  }
+
+  struct RemainderSweepCase {
+    const char* name;
+    std::vector<std::string> args;
+    size_t expected_runs;
+    bool is_metal;
+  };
+  const RemainderSweepCase remainder_cases[] = {
+      {"cpu_paged_prefill_remainder_sweep",
+       {"--llm-memory", "--phase", "prefill", "--kv-layout", "paged", "--weight-size-mb", "1", "--layers", "2",
+        "--query-heads", "4", "--kv-heads", "2", "--head-dim", "16", "--attention-query-tile-tokens", "8", "--sweep",
+        "prompt-tokens=16,32", "--sweep", "kv-block-tokens=8,16", "--threads", "1", "--iterations", "1", "--count", "1",
+        "--seed", "42", "--output", "-"},
+       4u, false},
+      {"metal_paged_prefill_remainder_sweep",
+       {"--llm-memory", "--llm-memory-backend", "metal", "--phase", "prefill", "--kv-layout", "paged",
+        "--weight-size-mb", "1", "--layers", "2", "--query-heads", "4", "--kv-heads", "2", "--head-dim", "16",
+        "--attention-query-tile-tokens", "8", "--kv-block-tokens", "16", "--sweep", "prompt-tokens=16,32",
+        "--iterations", "1", "--count", "1", "--seed", "42", "--output", "-"},
+       2u, true},
+  };
+  for (const RemainderSweepCase& test_case : remainder_cases) {
+    SCOPED_TRACE(test_case.name);
+    const CliResult result = run_memory_benchmark(test_case.args);
+    expect_process_completed(result);
+    const nlohmann::json envelope = parse_single_stdout_json(result);
+    expect_no_dash_transport_artifacts(result);
+    if (test_case.is_metal && result.exit_code != EXIT_SUCCESS && envelope.contains("runs") &&
+        !envelope["runs"].empty() && envelope["runs"][0]["result"].is_object() &&
         envelope["runs"][0]["result"]["status"] == "unsupported") {
-      GTEST_SKIP() << "Metal backend unsupported on this host: "
-                   << envelope["runs"][0]["result"]["reason_code"];
+      GTEST_SKIP() << "Metal backend unsupported on this host: " << envelope["runs"][0]["result"]["reason_code"];
     }
-    ASSERT_EQ(metal_result.exit_code, EXIT_SUCCESS) << metal_result.stderr_output;
-    EXPECT_EQ(envelope["status"], "complete");
-    EXPECT_EQ(envelope["completed_runs"], 2u);
-    EXPECT_TRUE(envelope["conclusions_valid"].get<bool>());
-    ASSERT_EQ(envelope["runs"].size(), 2u);
+    ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
+    expect_complete_sweep_envelope(envelope, Constants::LLM_JSON_MODE_NAME, test_case.expected_runs);
     for (const nlohmann::json& run : envelope["runs"]) {
       EXPECT_EQ(run["status"], "complete");
       EXPECT_TRUE(run["result"]["run_accepted"].get<bool>());
-      EXPECT_TRUE(run["result"]["resolved_plan"]["layout"]
-                     ["decode_append_offset_in_last_block"]
-                         .is_null());
+      EXPECT_TRUE(run["result"]["resolved_plan"]["layout"]["decode_append_offset_in_last_block"].is_null());
     }
-    expect_no_dash_transport_artifacts(metal_result);
   }
 }
