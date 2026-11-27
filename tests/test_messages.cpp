@@ -74,8 +74,6 @@ TEST(MessagesErrorTest, ValidationErrorsHaveExactOutput) {
        "A primary mode option is required (--cpu-bandwidth, --cpu-latency, "
        "--patterns, --analyze-tlb, --analyze-core2core, --gpu-bandwidth, or "
        "--llm-memory)"},
-      {"patterns incompatible", Messages::error_patterns_incompatible_option("--cache-size"),
-       "--patterns cannot be used with --cache-size (pattern benchmarks do not run cache or latency tests)"},
       {"analyze tlb alone", Messages::error_analyze_tlb_must_be_used_alone(),
        "--analyze-tlb allows only optional -o/--output <target>, -s/--latency-stride-bytes <bytes>, "
        "-m/--latency-chain-mode <mode>, -D/--tlb-density <low|medium|high>, --seed <uint64>, "
@@ -559,8 +557,8 @@ TEST(MessagesFormattingTest, UsageOptions) {
            "--compare-locality",
            "Locality-using modes require",
            "explicit global-random ignores",
-           "cache bandwidth uses one",
-           "keeps an explicit",
+           "in --patterns, requested",
+           "clamped per pattern",
            "--cpu-latency and Metal --llm-memory reject --threads",
            "--cache-size",
            "--output <target>",
@@ -572,11 +570,12 @@ TEST(MessagesFormattingTest, UsageOptions) {
            "invalid for sweeps",
            "Every other non-empty value is a file",
            "including ./- and names such as -G",
-           "CPU bandwidth, CPU latency, GPU, and LLM-memory files retain",
+           "CPU bandwidth, CPU latency, patterns, GPU, and LLM-memory files retain",
            "snapshot every K=max(1,ceil(count/8))",
            "Sweep files checkpoint attempts",
            "Cannot be combined with the matching direct flag. Requires --output <target>.",
-           "(--cache-size, --latency-*).",
+           "patterns-v1-arm64-phase-calibrated-seeded-balanced",
+           "Use --patterns --help for exact rules and 11-option whitelist.",
            "-h",
            std::to_string(Constants::DEFAULT_BUFFER_SIZE_MB),
            std::to_string(Constants::DEFAULT_LOOP_COUNT),
@@ -653,8 +652,6 @@ TEST(MessagesFormattingTest, ScalarConfigMessagesHaveExactOutput) {
       {"non-cacheable disabled", Messages::config_non_cacheable(false), "Non-Cacheable Memory Hints: Disabled"},
       {"global locality", Messages::config_latency_tlb_locality(0), "Latency TLB Locality: Global random"},
       {"locality window", Messages::config_latency_tlb_locality(16 * 1024), "Latency TLB Locality: 16.00 KB"},
-      {"ConfigPatternAutomaticIterations", Messages::config_pattern_iterations_auto(0.150, 0.100, 0.250),
-       "Pattern Passes: automatic duration calibration (target 150 ms; intended window 100-250 ms)"},
   });
 }
 
@@ -676,17 +673,8 @@ TEST(MessagesFormattingTest, WarningBenchmarkHighCv) {
   EXPECT_NE(msg.find("7.5%"), std::string::npos);
 }
 
-TEST(MessagesFormattingTest, PatternMessagesHaveExactOutput) {
+TEST(MessagesFormattingTest, StatisticsCoefficientOfVariationHasExactOutput) {
   expect_exact_messages({
-      {"unavailable", Messages::pattern_measurement_unavailable("skipped", "buffer too small"),
-       "N/A [skipped: buffer too small]"},
-      {"statistics header", Messages::statistics_pattern_bandwidth_header("Random"),
-       "\nRandom Pattern Bandwidth (GB/s):"},
       {"coefficient of variation", Messages::statistics_coefficient_of_variation(12.34, 1), "  CV:      12.3%"},
-      {"noise warning", Messages::warning_pattern_measurement_noisy("Random read", 12.3, 10.0),
-       "Noisy pattern measurement: Random read CV 12.3% exceeds 10.0%"},
-      {"loop exception", Messages::pattern_reason_loop_exception("boom"), "pattern loop threw an exception: boom"},
-      {"coordinator exception", Messages::pattern_reason_coordinator_exception("boom"),
-       "pattern coordinator threw an exception: boom"},
   });
 }

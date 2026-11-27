@@ -62,17 +62,6 @@ std::string msg_done_total_time(double total_time_sec) {
   return oss.str();
 }
 
-const std::string& msg_running_pattern_benchmarks() {
-  static const std::string msg = "\nRunning Pattern Benchmarks...\n";
-  return msg;
-}
-
-std::string msg_pattern_benchmark_loop_completed(int current_loop, int total_loops) {
-  std::ostringstream oss;
-  oss << "Pattern benchmarks - Loop " << current_loop << "/" << total_loops << " completed";
-  return oss.str();
-}
-
 std::string msg_results_saved_to(const std::string& file_path) {
   return "Results saved to: " + file_path;
 }
@@ -189,9 +178,9 @@ std::string usage_options(const std::string& prog_name) {
       << "                        Peak concurrent main-memory allocation is up to 2 * <size_mb>\n"
       << "                        (read/copy source + destination). In --cpu-latency mode peak is 1 * <size_mb>.\n"
       << "                        In --cpu-bandwidth and --cpu-latency, --buffer-size 0 omits main memory.\n"
-      << "  -r, --count <count>   Number of full loops (default: " << Constants::DEFAULT_LOOP_COUNT << " for --patterns).\n"
-      << "                        Standalone CPU bandwidth, CPU latency, GPU, and LLM-memory default to 3\n"
-      << "                        balanced loops.\n"
+      << "  -r, --count <count>   Number of full loops (default: 3 for --patterns).\n"
+      << "                        Standalone CPU bandwidth, CPU latency, patterns, GPU, and LLM-memory\n"
+      << "                        default to 3 balanced loops.\n"
       << "                        When count > 1, median P50 is the headline; statistics also include\n"
       << "                        P90/P95/P99, stddev, CV, MAD, min, and max.\n"
       << "  -T, --analyze-tlb     Run standalone TLB analysis with paired bootstrap CI and independent\n"
@@ -246,8 +235,9 @@ std::string usage_options(const std::string& prog_name) {
       << "                        (requires --buffer-size > 0; the delta is not an isolated page-walk cost).\n"
       << "  -t, --threads <count> Number of bandwidth workers. When omitted, main memory and\n"
       << "                        patterns use the detected CPU core count; cache bandwidth uses one.\n"
-      << "                        In --cpu-bandwidth and --patterns, an explicit value applies to every\n"
-      << "                        bandwidth target and requests above available cores are capped;\n"
+      << "                        In --cpu-bandwidth, an explicit value applies to every bandwidth target\n"
+      << "                        and requests above available cores are capped; in --patterns, requested\n"
+      << "                        workers are preserved and clamped per pattern;\n"
       << "                        --cpu-latency and Metal --llm-memory reject --threads.\n"
       << "                        CPU LLM-memory uses detected workers when omitted and keeps an explicit\n"
       << "                        request uncapped for later effective reduction.\n"
@@ -257,12 +247,11 @@ std::string usage_options(const std::string& prog_name) {
       << "                        Minimum is 16 KB (system page size). When set, skips automatic\n"
       << "                        L1/L2 cache size detection and only measures the custom cache size.\n"
       << "                        In --cpu-bandwidth and --cpu-latency, --cache-size 0 omits cache targets.\n"
-      << "  -P, --patterns        Run pattern benchmarks (sequential forward/reverse, strided,\n"
-      << "                        and random access patterns).\n"
+      << "  -P, --patterns        Run calibrated, seeded, balanced standalone CPU access pattern benchmark.\n"
+      << "                        JSON uses patterns schema 1 methodology\n"
+      << "                        patterns-v1-arm64-phase-calibrated-seeded-balanced.\n"
       << "                        Samples auto-calibrate toward 150 ms unless --iterations is explicit.\n"
-      << "                        Cannot be combined with other primary modes or cache/latency modifiers\n"
-      << "                        (--cache-size, --latency-*).\n"
-      << "                        Use with --buffer-size <size_mb> to set the buffer size for the pattern benchmarks.\n"
+      << "                        Use --patterns --help for exact rules and 11-option whitelist.\n"
       << "  -u, --non-cacheable   Apply cache-discouraging hints to src/dst buffers.\n"
       << "                        Uses madvise() hints to discourage caching, but does NOT provide\n"
       << "                        true non-cacheable memory (user-space cannot modify page tables).\n"
@@ -272,7 +261,7 @@ std::string usage_options(const std::string& prog_name) {
          "supported sweep and routes human output to stderr;\n"
       << "                        an empty value disables JSON for direct commands and is invalid for sweeps.\n"
       << "                        Every other non-empty value is a file, including ./- and names such as -G.\n"
-      << "                        CPU bandwidth, CPU latency, GPU, and LLM-memory files retain mode-specific\n"
+      << "                        CPU bandwidth, CPU latency, patterns, GPU, and LLM-memory files retain mode-specific\n"
       << "                        atomic checkpoints; direct checkpointed modes snapshot every K=max(1,ceil(count/8))\n"
       << "                        loops and at command terminal (abrupt loss bound: 3K completed attempts).\n"
       << "                        Sweep files checkpoint attempts after each run without intra-run snapshots.\n"

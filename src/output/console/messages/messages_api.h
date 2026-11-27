@@ -61,7 +61,6 @@ std::string error_option_does_not_take_value(const std::string& option);
 std::string error_option_not_allowed_in_mode(const std::string& option,
                                              const std::string& allowed_options);
 const std::string& error_missing_primary_mode();
-std::string error_patterns_incompatible_option(const std::string& option);
 const std::string& reason_signed_integer_invalid();
 const std::string& reason_signed_integer_out_of_range();
 const std::string& reason_unsigned_integer_invalid();
@@ -214,8 +213,6 @@ std::string info_custom_cache_rounded_up(unsigned long original_kb, unsigned lon
 
 // --- Main Program Messages ---
 std::string msg_done_total_time(double total_time_sec);
-const std::string& msg_running_pattern_benchmarks();
-std::string msg_pattern_benchmark_loop_completed(int current_loop, int total_loops);
 std::string msg_results_saved_to(const std::string& file_path);
 const std::string& msg_running_tlb_analysis();
 const std::string& msg_running_core_to_core_analysis();
@@ -473,9 +470,6 @@ std::string config_license();
 std::string config_buffer_size(double buffer_size_mib, unsigned long buffer_size_mb);
 std::string config_total_allocation(double total_mib);
 std::string config_iterations(int iterations);
-std::string config_pattern_iterations_auto(double target_seconds,
-                                           double min_seconds,
-                                           double max_seconds);
 std::string config_loop_count(int loop_count);
 std::string config_non_cacheable(bool use_non_cacheable);
 std::string config_latency_stride(size_t stride_bytes);
@@ -506,7 +500,6 @@ std::string statistics_p99(double value, int precision = 3);
 std::string statistics_stddev(double value, int precision = 3);
 std::string statistics_min(double value, int precision = 3);
 std::string statistics_max(double value, int precision = 3);
-std::string statistics_pattern_bandwidth_header(const std::string& pattern_name);
 std::string statistics_coefficient_of_variation(double value, int precision = 1);
 std::string statistics_median_absolute_deviation(double value, int precision = 3);
 std::string statistics_cache_read();
@@ -514,51 +507,6 @@ std::string statistics_cache_write();
 std::string statistics_cache_copy();
 std::string statistics_median_p50_from_samples(double value, size_t sample_count, int precision = 2);
 std::string statistics_footer();
-
-// --- Pattern Benchmark Messages ---
-const std::string& pattern_sequential_forward();
-const std::string& pattern_sequential_reverse();
-std::string pattern_strided(const std::string& stride_name);
-const std::string& pattern_random_uniform();
-const std::string& pattern_cache_line_64b();
-const std::string& pattern_page_4096b();
-const std::string& pattern_page_16384b();
-const std::string& pattern_superpage_2mb();
-const std::string& pattern_separator();
-const std::string& pattern_read_label();
-const std::string& pattern_write_label();
-const std::string& pattern_copy_label();
-const std::string& pattern_bandwidth_unit();
-std::string pattern_measurement_unavailable(const std::string& status,
-                                            const std::string& reason);
-std::string warning_pattern_measurement_noisy(const std::string& metric,
-                                              double cv_pct,
-                                              double threshold_pct);
-const std::string& pattern_reason_measurement_not_completed();
-const std::string& pattern_reason_timer_creation_failed();
-const std::string& pattern_reason_calibration_or_accounting_failed();
-const std::string& pattern_reason_no_valid_random_workload();
-const std::string& pattern_reason_stride_transition_unavailable();
-const std::string& pattern_reason_copy_accounting_overflow();
-const std::string& pattern_reason_invalid_strided_timing();
-const std::string& pattern_reason_work_plan_byte_overflow();
-const std::string& pattern_reason_invalid_work_plan_parameters();
-const std::string& pattern_reason_stride_access_sum_overflow();
-const std::string& pattern_reason_buffer_lacks_two_strided_accesses();
-const std::string& pattern_reason_no_valid_strided_worker_partition();
-const std::string& pattern_reason_work_plan_pass_limit();
-const std::string& pattern_reason_work_plan_total_overflow();
-const std::string& pattern_reason_buffers_allocation_failed();
-const std::string& pattern_reason_buffers_initialization_failed();
-const std::string& pattern_reason_loop_execution_failed();
-const std::string& pattern_reason_loop_interrupted();
-const std::string& pattern_reason_loop_incomplete();
-const std::string& pattern_reason_invalid_measurement();
-const std::string& pattern_reason_loops_remain();
-std::string pattern_reason_loop_exception(const std::string& error);
-const std::string& pattern_reason_unknown_loop_exception();
-std::string pattern_reason_coordinator_exception(const std::string& error);
-const std::string& pattern_reason_unknown_coordinator_exception();
 
 } // namespace Messages
 

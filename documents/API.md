@@ -29,8 +29,8 @@ transport. GPU schema 1 remains a direct-only mode and does not support sweeps.
 | Direct `--llm-memory` | Yes | Yes |
 | `--llm-memory --sweep ...` | Yes | Yes |
 
-GPU schema 1 is a direct-only mode and does not support sweeps. CPU bandwidth, CPU latency, and LLM sweeps all use the
-shared schema-1 sweep envelope (`base_mode`: `"cpu_bandwidth"`, `"cpu_latency"`, or `"llm_memory"`) and embed each run's
+GPU schema 1 is a direct-only mode and does not support sweeps. CPU bandwidth, CPU latency, patterns, and LLM sweeps all use the
+shared schema-1 sweep envelope (`base_mode`: `"cpu_bandwidth"`, `"cpu_latency"`, `"patterns"`, or `"llm_memory"`) and embed each run's
 complete nested payload under `runs[].result`.
 
 ## Invocation and stream contract
@@ -175,9 +175,9 @@ does not install a process-wide `SIGPIPE` policy.
 
 Real file targets retain their mode-specific persistence behavior:
 
-- direct `--cpu-bandwidth`, `--cpu-latency`, and `--llm-memory` commands atomically snapshot bounded completed-loop
+- direct `--cpu-bandwidth`, `--cpu-latency`, `--patterns`, and `--llm-memory` commands atomically snapshot bounded completed-loop
   progress and command terminal as specified below;
-- pattern, TLB, and core-to-core commands write one terminal payload through the shared atomic file writer;
+- TLB and core-to-core commands write one terminal payload through the shared atomic file writer;
 - parameter sweeps atomically checkpoint their combined envelope after each attempted run and also checkpoint a terminal
   zero-attempt envelope when the run plan is empty or interruption is observed before a run;
 - GPU mode retains its mode-specific terminal-measurement and failure checkpoints;
@@ -186,11 +186,11 @@ Real file targets retain their mode-specific persistence behavior:
 
 Stdout is final-only. Intermediate sweep and GPU checkpoint requests are successful lazy no-ops: their payload builders
 are not invoked, while all logical state changes, stop observations, counters, cleanup, and final result construction
-still occur. Direct CPU bandwidth, CPU latency, and LLM modes skip intermediate snapshot preparation on stdout while
+still occur. Direct CPU bandwidth, CPU latency, patterns, and LLM modes skip intermediate snapshot preparation on stdout while
 preserving task-boundary stop observations. The command serializes one terminal snapshot after orchestration finishes.
 Stdout is not JSON Lines and never contains a sequence of checkpoint documents.
 
-For direct CPU bandwidth, CPU latency, and LLM file targets, let `N=planned_loops` and `K=max(1,ceil(N/8))`, calculated
+For direct CPU bandwidth, CPU latency, patterns, and LLM file targets, let `N=planned_loops` and `K=max(1,ceil(N/8))`, calculated
 without addition overflow. File targets write progress after every Kth fully completed loop, at most eight times, and
 one command-terminal snapshot on success, graceful interruption or representable failure. The current cadence gives at
 most 4/7/9 normal snapshots for N=3/12/48. One late command exception after successful terminal persistence may write one
@@ -227,7 +227,7 @@ contract version 1 first appears in software version `0.62.0`.
 |---|---|---|
 | CPU bandwidth | `mode == "cpu_bandwidth" && schema_version == 1` | `methodology_version == "cpu-bandwidth-v1-arm64-calibrated-seeded-balanced"`, `component_identities` match, `status == "complete"`, `results_complete == true`, `run_accepted == true`, `configuration.output_file` is a string, and every planned measurement is `measured` |
 | CPU latency | `mode == "cpu_latency" && schema_version == 1` | `methodology_version == "cpu-latency-v1-arm64-calibrated-seeded-balanced"`, `component_identities` match, `status == "complete"`, `results_complete == true`, `run_accepted == true`, `configuration.output_file` is a string, and every planned measurement is `measured` |
-| Patterns | `configuration.pattern_schema_version == 3` | `status == "complete" && results_complete == true` |
+| Patterns | `mode == "patterns" && schema_version == 1` | `methodology_version == "patterns-v1-arm64-phase-calibrated-seeded-balanced"`, `component_identities` match, `status == "complete"`, `results_complete == true`, `run_accepted == true`, `configuration.output_file` is a string, and every scheduled measurement is `measured` |
 | TLB | `configuration.schema_version == 4` | `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true` |
 | Core-to-core | `configuration.schema_version == 2` | `core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true` |
 | GPU | `schema_version == 1` | `status == "complete" && results_complete == true && conclusions_valid == true` |
@@ -246,8 +246,11 @@ CPU bandwidth classification recognizes only `mode == "cpu_bandwidth"` with `sch
 `status == "complete"`, `results_complete == true`, `run_accepted == true`, `configuration.output_file == ""`, and every
 planned measurement `status == "measured"`. Nested CPU latency classification recognizes only `mode == "cpu_latency"`
 with `schema_version == 1` under the same completion and `run_accepted == true` rules (including all paired
-`locality_comparison.rounds[]` when `compare_locality` is true). Legacy standard schema-3 and schema-2 payloads are
-removed and unsupported. Nested LLM-memory classification recognizes only schema 2 with `mode == "llm_memory"`,
+`locality_comparison.rounds[]` when `compare_locality` is true). Nested patterns classification (`SweepNestedMode::Patterns`)
+recognizes only `mode == "patterns"` with `schema_version == 1`, requiring `status == "complete"`,
+`results_complete == true`, `run_accepted == true`, `configuration.output_file == ""`, a non-empty `measurements[]` array,
+and every scheduled measurement `status == "measured"`. Legacy standard schema-3/2 and legacy pattern schema-3 payloads
+are removed and unsupported. Nested LLM-memory classification recognizes only schema 2 with `mode == "llm_memory"`,
 requiring `status == "complete"`, `results_complete == true`, `run_accepted == true`, and every planned entry in
 `measurements[]` having `status == "measured"` before incrementing `completed_runs`; nested `status == "unsupported"` maps
 to a failed sweep attempt while retaining the nested payload, pre-initialization failures record `result: null` with the
@@ -262,12 +265,16 @@ adding a `tlb_analysis.status_reason` field.
 
 Command completeness does not make every optional metric available. A selected CPU bandwidth or CPU latency target metric
 must have its measured/accepted state, a non-null aggregate `value`, and (for `--compare-locality`) non-null
-`aggregates.locality_comparison`. A pattern measurement may be intentionally `skipped` while
-the command remains complete; consumers of a particular pattern metric must require `status == "measured"` and a
-non-null value. TLB consumers must also honor the selected detection/evidence fields. Core-to-core affinity-scenario
-conclusions additionally require `affinity_hint_comparison_interpretable == true`. Position-balanced comparisons
-additionally require `operation_order_balance_complete == true` (in `cpu_bandwidth` and `gpu_bandwidth`) and
-`target_order_balance_complete == true` (in `cpu_bandwidth` and `cpu_latency`).
+`aggregates.locality_comparison`. In `patterns`, `strided_2mb` is intentionally published with `status == "skipped"`
+(`reason_code == "buffer-too-small-for-stride-transition"`) in `resolved_plan.patterns.strided_2mb` and
+`aggregates.patterns.strided_2mb.<op>` (and omitted from `measurements[]`) when `buffer_bytes < 2 MiB + 32 B`, while the
+command remains complete; consumers of a particular pattern/operation metric must require
+`aggregates.patterns.<kind>.<op>.status == "measured"` and a non-null `value`. TLB consumers must also honor the
+selected detection/evidence fields. Core-to-core affinity-scenario conclusions additionally require
+`affinity_hint_comparison_interpretable == true`. Position-balanced comparisons additionally require
+`operation_order_balance_complete == true` (in `cpu_bandwidth`, `patterns`, and `gpu_bandwidth`),
+`pattern_order_balance_complete == true` (in `patterns`), and `target_order_balance_complete == true` (in `cpu_bandwidth`
+and `cpu_latency`).
 
 LLM schema 2 replaces the unpublished schema-1 contract without compatibility aliases or a fallback reader. It has top-level `mode: "llm_memory"`, `schema_version: 2`, and exact
 `backend`, `phase`, `kv_layout`, and `methodology_version` selectors. Methodology is derived as
@@ -836,14 +843,16 @@ mutations. `make test-all` includes this gate alongside `test-script-examples` a
 
 ## Independent CPU artifact verifiers
 
-`python3 script-examples/verify_cpu_bandwidth_result.py result.json` and
-`python3 script-examples/verify_cpu_latency_result.py result.json` independently verify direct schema-1 `cpu_bandwidth`
-and `cpu_latency` artifacts as well as schema-1 sweep envelopes (`configuration.mode == "sweep"`,
-`configuration.sweep_schema_version == 1`, `configuration.base_mode` in `{"cpu_bandwidth", "cpu_latency"}`) using Python 3
-standard-library arithmetic only (`script-examples/cpu_verify_common.py`). Both tools accept optional `--binary PATH`
-(streaming SHA-256 against `build_manifest.binary_sha256` without executing the binary) and `--require-raw-timing`
-(requiring `execution.timing.cpu_raw` ticks and matching timebase), while `verify_cpu_latency_result.py` also accepts
-`--max-chain-nodes N` (default `8,388,608`).
+`python3 script-examples/verify_cpu_bandwidth_result.py result.json`,
+`python3 script-examples/verify_cpu_latency_result.py result.json`, and
+`python3 script-examples/verify_patterns_result.py result.json` independently verify direct schema-1 `cpu_bandwidth`,
+`cpu_latency`, and `patterns` artifacts as well as schema-1 sweep envelopes (`configuration.mode == "sweep"`,
+`configuration.sweep_schema_version == 1`, `configuration.base_mode` in `{"cpu_bandwidth", "cpu_latency", "patterns"}`)
+using Python 3 standard-library arithmetic only (`script-examples/cpu_verify_common.py`). All three tools accept optional
+`--binary PATH` (streaming SHA-256 against `build_manifest.binary_sha256` without executing the binary) and
+`--require-raw-timing` (requiring `execution.timing.cpu_raw` ticks and matching timebase), while
+`verify_cpu_latency_result.py` also accepts `--max-chain-nodes N` (default `8,388,608`) and
+`verify_patterns_result.py` also accepts `--max-random-indices N` (default `1,000,000`).
 
 - **`verify_cpu_bandwidth_result.py`**: Reconstructs target selection (`main_memory`, `l1`, `l2`, `custom`), 64-byte worker
   partitions, SplitMix64 target/op/write-pattern/pre-copy-sentinel seeds, O(1) GF(2) read-pass XORs (`cpu-bw-buffer-pattern-v1`,
@@ -858,17 +867,30 @@ standard-library arithmetic only (`script-examples/cpu_verify_common.py`). Both 
   and `end_node_indices` (`indices[cum_steps % N]`), `pooled_sample_distribution`, optional paired `--compare-locality`
   (`locality_16k` vs `locality_global` rounds and `locality_latency_delta_ns = median(global) - median(16k)`),
   `validation.checks[]`, `cpu_raw` durations, cyclic target order, statistics, and `run_accepted`.
+- **`verify_patterns_result.py`**: Reconstructs all 7 canonical patterns (`sequential_forward`, `sequential_reverse`,
+  `strided_64`, `strided_4096`, `strided_16384`, `strided_2mb`, `random`), `strided_2mb` skip eligibility, 64-byte worker
+  partitions and strided worker reduction, SplitMix64 domain/op seeds, slot-tagged GF(2) `patterns-buffer-pattern-v1` and
+  O(1) sequential/2D-partial-strided/random `patterns-read-checksum-v1` worker/run checksums, per-worker
+  `splitmix64-coprime-fisher-yates-v1` random indices + `random_indices_sha256`, unique odd `write_pattern`/`attempt_seed`/
+  `pre_op_sentinel` derivations, ordered 6-entry `validation.checks[]` (`post-validation-structure`, `read-checksum`,
+  `write-final-touched-bytes`, `copy-final-touched-bytes`, `untouched-sentinel-isolation`, `src-readonly-protection`),
+  `cpu_raw` durations, 2-axis cyclic Latin-square order, `memory_budget`, statistics/`relative_to_forward_pct`/CV warnings,
+  `checkpoint_lifecycle`, and `run_accepted`.
 - **Exit codes, JSON verdict, and bounds**: Shared limits are 64 MiB UTF-8 JSON, depth 64, 1,000,000 JSON nodes, and
-  1,000,000 oracle/shuffle work steps across single artifacts and sweeps. Exit `0` indicates `artifact_consistent: true`
-  and `run_accepted: true`; exit `1` indicates inconsistency or a consistently described unaccepted artifact; exit `2`
-  indicates an unsupported schema/methodology, resource bound, or missing required evidence (`artifact_consistent: null`).
-  Both scripts emit a single sorted JSON verdict line matching the LLM verifier envelope (`artifact_consistent`,
-  `run_accepted`, `reason_code`, `checks.{checksum,timing,build}`, `oracle_work_used`, plus `artifact_kind: "cpu_bandwidth_sweep"`
-  or `"cpu_latency_sweep"`, `planned_runs`, `completed_runs`, `verified_runs`, and `run_verdicts` for sweeps).
-- **`make test-cpu-verifiers`**: Exercises `tests/test_cpu_bandwidth_verifier.py` and `tests/test_cpu_latency_verifier.py`
-  covering O(1) vs brute-force differential tests, all chain modes, schema-1 fixtures, `--compare-locality`, `--max-chain-nodes`,
-  sweep verification, `--binary` / `--require-raw-timing`, and semantic/checksum/timing/mutation rejections. See
-  [CPU Bandwidth Whitepaper](CPU_BANDWIDTH_WHITEPAPER.md) and [Latency Whitepaper](LATENCY_WHITEPAPER.md) for the exact
+  1,000,000 oracle/shuffle work steps across single artifacts and sweeps (plus `4,096` operation plans and `100,000`
+  measurements). Exit `0` indicates `artifact_consistent: true` and `run_accepted: true`; exit `1` indicates inconsistency
+  or a consistently described unaccepted artifact; exit `2` indicates an unsupported schema/methodology, resource bound,
+  or missing required evidence (`artifact_consistent: null`). Each script emits a single sorted JSON verdict line matching
+  the LLM verifier envelope (`artifact_consistent`, `run_accepted`, `reason_code`, `checks.{checksum,timing,build}`,
+  `oracle_work_used`, plus `artifact_kind: "cpu_bandwidth_sweep"`, `"cpu_latency_sweep"`, or `"patterns_sweep"`,
+  `planned_runs`, `completed_runs`, `verified_runs`, and `run_verdicts` for sweeps).
+- **`make test-cpu-verifiers` and `make test-patterns-verifier`**: `make test-patterns-verifier` runs
+  `tests/test_patterns_verifier.py` directly, and `make test-cpu-verifiers` runs `tests/test_cpu_bandwidth_verifier.py`,
+  `tests/test_cpu_latency_verifier.py`, and `tests/test_patterns_verifier.py` covering O(1) vs brute-force differential
+  tests, all chain modes, 7-pattern/2D-strided/random goldens, schema-1 fixtures, `--compare-locality`,
+  `--max-chain-nodes`, `--max-random-indices`, sweep verification, `--binary` / `--require-raw-timing`, and semantic/
+  checksum/timing/mutation rejections. See [CPU Bandwidth Whitepaper](CPU_BANDWIDTH_WHITEPAPER.md),
+  [Latency Whitepaper](LATENCY_WHITEPAPER.md), and [Patterns Whitepaper](PATTERNS_WHITEPAPER.md) for the exact
   mathematical specifications.
 
 ## Consumer acceptance procedure
@@ -926,10 +948,13 @@ jq -e '.schema_version == 1 and .mode == "cpu_latency" and
        .status == "complete" and .results_complete == true and
        .run_accepted == true' cpu_latency.json
 
-memory_benchmark --patterns --buffer-size 512 --count 5 --seed 42 --output - \
+memory_benchmark --patterns --buffer-size 512 --count 3 --seed 42 --output - \
   >patterns.json 2>patterns.log
-jq -e '.configuration.pattern_schema_version == 3 and
-       .status == "complete" and .results_complete == true' patterns.json
+jq -e '.schema_version == 1 and .mode == "patterns" and
+       .methodology_version == "patterns-v1-arm64-phase-calibrated-seeded-balanced" and
+       (.configuration.output_file | type) == "string" and
+       .status == "complete" and .results_complete == true and
+       .run_accepted == true' patterns.json
 ```
 
 The corresponding TLB and core-to-core command predicates are:
@@ -1002,7 +1027,7 @@ separate. Require the successful producer process outcome before applying `jq -e
 - `version`, the GPU `software_version` field, and CPU bandwidth/latency/LLM `software.version` identify the application
   release; none is a result schema version or compatibility selector. Consumers may retain and display this provenance
   independently of schema and methodology acceptance.
-- CPU bandwidth schema 1, CPU latency schema 1, pattern schema 3, TLB schema 4, core-to-core schema 2, GPU schema 1, and
+- CPU bandwidth schema 1, CPU latency schema 1, patterns schema 1, TLB schema 4, core-to-core schema 2, GPU schema 1, and
   LLM schema 2 remain authoritative at their existing locations. The schema field is intentionally not normalized across
   these established payloads.
 - LLM schema 2 deliberately replaces the unpublished schema-1 shape and changes methodology selectors. The concrete
@@ -1013,7 +1038,7 @@ separate. Require the successful producer process outcome before applying `jq -e
   `schema_version == 1`, `cpu-latency-v1-arm64-calibrated-seeded-balanced`), `status == "complete"`, `results_complete == true`,
   `run_accepted == true`, and consumed field shapes match. They retain `software.version` as provenance only and provide no
   translation layer for legacy standard schema-3/2, unversioned historical JSON layouts, or other methodology identities.
-- CPU bandwidth, CPU latency, general (pattern/TLB), core-to-core, and LLM sweep envelopes use
+- CPU bandwidth, CPU latency, patterns, TLB, core-to-core, and LLM sweep envelopes use
   `configuration.sweep_schema_version == 1`; nested results keep their independent mode schema versions.
 - Additive optional fields may remain within a schema version only when old consumers can safely ignore them.
 - Removing or renaming a field, changing its type, or changing its meaning requires a mode schema-version bump.
@@ -1021,10 +1046,10 @@ separate. Require the successful producer process outcome before applying `jq -e
   is unchanged.
 - A transport change alone does not change the measurement schema.
 - Schema-location normalization belongs in client code; this API does not move existing version fields.
-- Direct CPU bandwidth, CPU latency, GPU, and LLM payloads retain raw `configuration.output_file`. With stdout transport
+- Direct CPU bandwidth, CPU latency, patterns, GPU, and LLM payloads retain raw `configuration.output_file`. With stdout transport
   it is the original target token `"-"`, not a filesystem path; `./-`, flag-shaped names, and every other non-empty
-  non-sentinel value retain their file meaning. Nested CPU bandwidth, CPU latency, and LLM sweep payloads record
-  `configuration.output_file: ""` because the sweep envelope owns persistence. All four additionally retain their exact
+  non-sentinel value retain their file meaning. Nested CPU bandwidth, CPU latency, patterns, and LLM sweep payloads record
+  `configuration.output_file: ""` because the sweep envelope owns persistence. All five additionally retain their exact
   captured `argv`.
 
 ## Benchmark process policy

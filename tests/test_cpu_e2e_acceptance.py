@@ -1443,7 +1443,9 @@ class Tier4FaultToleranceDeterminismAndRegressionTests(E2EAcceptanceTestCase):
             proc_p = self.run_binary(["-P", "-b", "1", "-i", "1", "-r", "1", "-t", "1", "--seed", "42", "-o", str(p_out)], cwd=cwd)
             self.assert_run_succeeded(proc_p, "sibling -P")
             doc_p = self.assert_atomic_json_file(p_out)
-            self.assertEqual(doc_p["configuration"]["mode"], "patterns")
+            self.assertEqual(doc_p["schema_version"], 1)
+            self.assertEqual(doc_p["mode"], "patterns")
+            self.assertTrue(doc_p["run_accepted"])
 
             # -C core-to-core smoke
             c_out = cwd / "core2core.json"

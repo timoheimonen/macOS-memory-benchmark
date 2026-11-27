@@ -10,7 +10,7 @@ Runtime platform: macOS 26 or later on Apple Silicon (ARM64).
 |-------------|-------------|-------|-------------|
 | `-B` | `--cpu-bandwidth` | — | Run the standalone audited CPU memory bandwidth benchmark |
 | `-L` | `--cpu-latency` | — | Run the standalone audited CPU pointer-chasing latency benchmark |
-| `-P` | `--patterns` | — | Run the CPU access-pattern benchmark |
+| `-P` | `--patterns` | — | Run the standalone audited CPU access-pattern benchmark |
 | `-T` | `--analyze-tlb` | — | Run standalone TLB analysis |
 | `-C` | `--analyze-core2core` | — | Run standalone two-thread acquire/release token-protocol handoff analysis |
 | `-G` | `--gpu-bandwidth` | — | Run standalone Metal GPU memory bandwidth |
@@ -29,9 +29,9 @@ Runtime platform: macOS 26 or later on Apple Silicon (ARM64).
 | — | `--batch-size` | `<count>` | Positive LLM batch-sequence count; default `1` |
 | — | `--kv-layout` | `contiguous\|paged` | LLM KV layout; default `contiguous` |
 | — | `--kv-block-tokens` | `<G>` | Required only for paged KV: a positive power of two no greater than `UINT32_MAX`; may exceed the active phase length |
-| `-i` | `--iterations` | `<count>` | Positive exact R/W/Copy pass count (complete chain cycles in `--cpu-latency`, or LLM scenario work-unit count). Maximum is `1,000,000,000` in `--cpu-bandwidth` and `--cpu-latency`, `INT_MAX` in `--patterns`, and work-dependent ceilings in GPU and LLM modes. Omission enables automatic calibration in the applicable mode |
-| `-b` | `--buffer-size` | `<MB>` | Default `512` MB. `--cpu-bandwidth` and `--cpu-latency` permit `0` (`0..2^53 - 1`) to omit main memory while at least one cache target remains active; `--patterns` requires a positive value; `--gpu-bandwidth` minimum is `64` MB |
-| `-r` | `--count` | `<count>` | Positive loop count; default `1` for `--patterns` and `3` for `--cpu-bandwidth`, `--cpu-latency`, `--analyze-core2core`, `--gpu-bandwidth`, and `--llm-memory`. Maximum is `2^53 - 1` (`9,007,199,254,740,991`) in `--cpu-bandwidth`/`--cpu-latency`, `INT_MAX` in `--patterns`/`--analyze-core2core`/`--gpu-bandwidth`, and `floor((2^53 - 1) / 3)` (`3,002,399,751,580,330`) in `--llm-memory` |
+| `-i` | `--iterations` | `<count>` | Positive exact R/W/Copy pass count (complete chain cycles in `--cpu-latency`, or LLM scenario work-unit count). Maximum is `1,000,000,000` in `--cpu-bandwidth`, `--cpu-latency`, and `--patterns`, and work-dependent ceilings in GPU and LLM modes. Omission enables automatic calibration in the applicable mode |
+| `-b` | `--buffer-size` | `<MB>` | Default `512` MB. `--cpu-bandwidth` and `--cpu-latency` permit `0` (`0..2^53 - 1`) to omit main memory while at least one cache target remains active; `--patterns` accepts `1..2^53 - 1` (`0` rejected) and enforces strict `memory_budget` without capping; `--gpu-bandwidth` minimum is `64` MB |
+| `-r` | `--count` | `<count>` | Positive loop count; default `3` for `--cpu-bandwidth`, `--cpu-latency`, `--patterns`, `--analyze-core2core`, `--gpu-bandwidth`, and `--llm-memory`. Maximum is `2^53 - 1` (`9,007,199,254,740,991`) in `--cpu-bandwidth`, `--cpu-latency`, and `--patterns`, `INT_MAX` in `--analyze-core2core`/`--gpu-bandwidth`, and `floor((2^53 - 1) / 3)` (`3,002,399,751,580,330`) in `--llm-memory` |
 | — | `--seed` | `<uint64>` | Unsigned 64-bit reproducibility seed (`0..UINT64_MAX`) for `--cpu-bandwidth`, `--cpu-latency`, `--patterns`, `--analyze-tlb`, `--gpu-bandwidth`, or `--llm-memory`; generated once when omitted |
 | `-n` | `--latency-samples` | `<count>` | Sample-window count up to `INT_MAX` (`2,147,483,647`); default `1000` in `--cpu-latency` and `--analyze-core2core`. `--cpu-latency` permits `0` to disable sample windows; `--analyze-core2core` requires a positive count |
 | `-s` | `--latency-stride-bytes` | `<bytes>` | Positive, pointer-aligned (`8`-byte aligned) latency-chain stride; default `256` bytes. Maximum is `UINT32_MAX` (`4,294,967,295`) in `--cpu-latency`, and at most the system page size in `--analyze-tlb` |
@@ -39,12 +39,12 @@ Runtime platform: macOS 26 or later on Apple Silicon (ARM64).
 | `-l` | `--latency-tlb-locality-kb` | `<KB>` | Latency-chain locality window; default `1024` KB (`0..2^53 - 1` in `--cpu-latency`). With `auto`, `0` selects `global-random` |
 | — | `--compare-locality` | — | In `--cpu-latency`, run paired 16 KiB `random-box` vs `global-random` comparison rounds (requires `--buffer-size > 0` and `--latency-stride-bytes <= 8192`) |
 | `-D` | `--tlb-density` | `low\|medium\|high` | Standalone TLB runtime profile; default `medium` |
-| `-t` | `--threads` | `<count>` | Positive requested bandwidth worker count. `--cpu-bandwidth` accepts `1..UINT32_MAX` (`4,294,967,295`; defaults to logical cores for main memory and `1` for caches, explicit applies to all targets); `--patterns` accepts `1..INT_MAX` and caps above detected cores; CPU LLM accepts `1..(2^53 - 1)` and preserves requested, detected, and executable effective counts separately, while `--cpu-latency` and Metal LLM reject this option |
+| `-t` | `--threads` | `<count>` | Positive requested bandwidth worker count. `--cpu-bandwidth` and `--patterns` accept `1..UINT32_MAX` (`4,294,967,295`; `--cpu-bandwidth` defaults to logical cores for main memory and `1` for caches, explicit applies to all targets; `--patterns` defaults to logical cores, preserves `requested_workers`, and clamps `effective_workers` per pattern); CPU LLM accepts `1..(2^53 - 1)` and preserves requested, detected, and executable effective counts separately, while `--cpu-latency` and Metal LLM reject this option |
 | `-k` | `--cache-size` | `<KB>` | Custom cache target: `16..1048576` KB, or `0` in `--cpu-bandwidth` and `--cpu-latency` to omit cache targets |
 | `-u` | `--non-cacheable` | — | Apply best-effort `madvise(MADV_RANDOM)` cache-discouraging allocation hints; does not create truly uncached memory |
-| `-o` | `--output` | `<target>` | Result target syntax. Exact `-` selects one final stdout document for result-producing modes. An empty direct value disables JSON; every other non-empty value is a file. Direct `--cpu-bandwidth`, `--cpu-latency`, and `--llm-memory` file outputs snapshot every `K=max(1,ceil(count/8))` completed loops and at command terminal; sweep files checkpoint after each attempted run without intra-run snapshots |
+| `-o` | `--output` | `<target>` | Result target syntax. Exact `-` selects one final stdout document for result-producing modes. An empty direct value disables JSON; every other non-empty value is a file. Direct `--cpu-bandwidth`, `--cpu-latency`, `--patterns`, and `--llm-memory` file outputs snapshot every `K=max(1,ceil(count/8))` completed loops and at command terminal; sweep files checkpoint after each attempted run without intra-run snapshots |
 | `-S` | `--sweep` | `<key=a,b>` | Add a Cartesian sweep parameter; repeat once per distinct key and use with `--output` |
-| `-X` | `--sweep-max-runs` | `<count>` | Positive generated-run limit; default `256`, or `16` with `--analyze-tlb`; effective only with `--sweep`. Upper bound is `2^53 - 1` (`9,007,199,254,740,991`) in `--cpu-bandwidth`, `--cpu-latency`, and active `--llm-memory --sweep`; `LLONG_MAX` in `--patterns`/`--analyze-tlb`; `INT_MAX` in `--analyze-core2core`; rejected by `--gpu-bandwidth` |
+| `-X` | `--sweep-max-runs` | `<count>` | Positive generated-run limit; default `256`, or `16` with `--analyze-tlb`; effective only with `--sweep`. Upper bound is `2^53 - 1` (`9,007,199,254,740,991`) in `--cpu-bandwidth`, `--cpu-latency`, `--patterns`, and active `--llm-memory --sweep`; `LLONG_MAX` in `--analyze-tlb`; `INT_MAX` in `--analyze-core2core`; rejected by `--gpu-bandwidth` |
 | `-h` | `--help` | — | Show help across all seven primary modes (including `--analyze-tlb`) after syntactic, whitelist, duplicate, and value-parse validation |
 
 Short and long forms are equivalent. The compatibility tables below use long forms as canonical names; the standalone
@@ -58,10 +58,10 @@ single-dash inline forms (`-b=512`) remain rejected. Every single-occurrence opt
 (`-B`, `-L`, `-P`, `-T`, `-C`, `-G`, `-M`), boolean flags (`--compare-locality`, `-u`, `-h`), and single-value options —
 may appear at most once across all seven modes; only `-S`/`--sweep` may be repeated for distinct parameter keys. All
 seven mode parsers emit concise single-line `Error: ...` diagnostics on stderr without dumping full usage text, and
-standalone whitelist modes (`--cpu-bandwidth`, `--cpu-latency`, `--analyze-tlb`, `--analyze-core2core`, `--gpu-bandwidth`,
-`--llm-memory`) explicitly name the offending option (`Unsupported option '<token>': ...`). Numeric values must be
-complete decimal tokens without whitespace, a leading `+`, or trailing characters; unsigned seeds and standalone
-`--cpu-bandwidth`, `--cpu-latency`, and `--llm-memory` numeric options reject either sign. Serialized `--llm-memory`
+standalone whitelist modes (`--cpu-bandwidth`, `--cpu-latency`, `--patterns`, `--analyze-tlb`, `--analyze-core2core`,
+`--gpu-bandwidth`, `--llm-memory`) explicitly name the offending option (`Unsupported option '<token>': ...`). Numeric
+values must be complete decimal tokens without whitespace, a leading `+`, or trailing characters; unsigned seeds and
+standalone `--cpu-bandwidth`, `--cpu-latency`, `--patterns`, and `--llm-memory` numeric options reject either sign. Serialized `--llm-memory`
 integer configuration fields (and `--sweep-max-runs` when `--sweep` is active) must not exceed the IEEE-754 exact safe
 integer bound `2^53 - 1` (`9,007,199,254,740,991`; `reason_code=json-integer-out-of-range`), and `--count` is further
 bounded by `floor((2^53 - 1) / 3)` (`3,002,399,751,580,330`).
@@ -128,27 +128,23 @@ CPU latency (`-L` / `--cpu-latency`) uses an exact 16-option whitelist. Short an
 | `-h, --help` | ✅ | Prints `-L` help to stdout and exits `0` after syntactic/whitelist/value checks (including with `--output -`) |
 | `--threads` and all other modifiers | ❌ | Rejected by the standalone whitelist (`Unsupported option '<token>': ...`) |
 
-### Modifiers with `--patterns`
+### Modifiers with `--patterns` (standalone mode)
+
+Patterns mode (`-P` / `--patterns`) uses an exact 11-option whitelist (`patterns-v1-arm64-phase-calibrated-seeded-balanced`, schema 1). Short and long aliases are equivalent, `--seed` is long-only, and every non-sweep option may appear at most once.
 
 | Modifier | Compatible | Notes |
 |----------|------------|-------|
-| `--iterations <n>` | ✅ | Positive exact pass override; omission enables automatic duration calibration |
-| `--buffer-size <MB>` | ✅ | Default `512`; must be positive. Oversized requests can be reduced to the memory-safety cap with a warning |
-| `--count <n>` | ✅ | Positive integer; default `1` |
-| `--seed <uint64>` | ✅ | Reproduces random workload; generated once when omitted |
-| `--latency-samples <n>` | ❌ | Rejected; pattern benchmarks do not run cache or latency tests |
-| `--latency-stride-bytes <n>` | ❌ | Rejected; pattern benchmarks do not run cache or latency tests |
-| `--latency-chain-mode <mode>` | ❌ | Rejected; pattern benchmarks do not run cache or latency tests |
-| `--latency-tlb-locality-kb <n>` | ❌ | Rejected; pattern benchmarks do not run cache or latency tests |
-| `--threads <n>` | ✅ | Omission uses the detected CPU core count; sparse-stride work may reduce the effective worker count |
-| `--cache-size <KB>` | ❌ | Rejected; pattern benchmarks do not run cache or latency tests |
-| `--non-cacheable` | ✅ | |
-| `--output <target>` | ✅ | Exact `-` selects final JSON stdout; an empty direct value disables JSON and an empty sweep value is invalid; every other non-empty value is a file, including `./-` and `-G` |
-| `--sweep <key=a,b>` | ✅ | Requires `--output`; supported keys: `buffer-size`, `threads`; cannot be combined with the matching direct option |
-| `--sweep-max-runs <n>` | ✅ | Default `256`; accepted without `--sweep` but has no effect then |
-| `--tlb-density <low\|medium\|high>` | ❌ | Parsed only by standalone `--analyze-tlb` |
-| `--compare-locality` | ❌ | Unknown option outside `--cpu-latency` |
-| `--help` | ✅ | Prints general help to stdout and exits `0` after syntactic/value checks, before semantic validation, OS queries, timer creation, seed generation, or output-session setup (including with `--output -`) |
+| `-b, --buffer-size <MB>` | ✅ | `1..9007199254740991` (`1..2^53 - 1`), default `512` (`0` is rejected). Oversized buffers are rejected at strict `memory_budget` preflight (`memory-budget-exceeded`) without silent capping. When `buffer_bytes < 2 MiB + 32 B`, `strided_2mb` is `status: "skipped"` (`buffer-too-small-for-stride-transition`) |
+| `-t, --threads <n>` | ✅ | `1..4294967295` (`1..UINT32_MAX`); omitted uses detected logical CPU cores. `requested_workers` is preserved while `effective_workers` is clamped per pattern (`min(requested, available, max_aligned)` and strided `>= 2` accesses/worker) |
+| `-i, --iterations <n>` | ✅ | `1..1000000000` fixed pass count per operation; omission enables excluded duration calibration toward 150 ms (`[0.100s, 0.250s]`, max 2 adjustments) |
+| `-r, --count <n>` | ✅ | `1..9007199254740991`; default `3`. Two-axis cyclic Latin-square order rotates active patterns (`loop % active_patterns.size()`) and operations (`loop % 3`) |
+| `--seed <uint64>` | ✅ | `0..UINT64_MAX`; derives domain-separated `src`, `random`, and `pre_op_sentinel` seeds; generated once when omitted and shared across sweep runs |
+| `-u, --non-cacheable` | ✅ | Best-effort `madvise(MADV_RANDOM)` allocation hint |
+| `-o, --output <target>` | ✅ | Exact `-` selects one final schema-1 stdout JSON; empty disables direct JSON (invalid for sweeps); any other non-empty token is an atomic file checkpointed every `K=max(1,ceil(count/8))` completed loops and at terminal |
+| `-S, --sweep <key=v1,v2,...>` | ✅ | Requires non-empty `--output`; supported keys: `buffer-size`, `threads`; cannot combine with matching direct flag; preflights all generated combinations before run 0 |
+| `-X, --sweep-max-runs <n>` | ✅ | `1..9007199254740991`; default `256`; accepted without `--sweep` with no effect |
+| `-h, --help` | ✅ | Prints dedicated `-P` help (`print_patterns_help`) to stdout and exits `0` after syntactic/whitelist/value checks (including with `--output -`) |
+| All others (cache/latency/TLB/core2core/GPU/LLM modifiers) | ❌ | Rejected by the standalone whitelist (`Unsupported option '<token>': ...`) |
 
 ### Modifiers with `--analyze-tlb` (standalone mode)
 
@@ -305,9 +301,9 @@ and LLM-memory envelopes use `configuration.sweep_schema_version: 1`; each neste
 Additional sweep rules:
 
 - `--sweep-max-runs <n>` limits the generated Cartesian product; default is `16` with `--analyze-tlb` and `256` otherwise.
-  Upper bounds are `2^53 - 1` (`9,007,199,254,740,991`) in `--cpu-bandwidth`, `--cpu-latency`, and active `--llm-memory --sweep`
-  (`json-integer-out-of-range` for LLM), `LLONG_MAX` (`--patterns` and `--analyze-tlb`), and `INT_MAX` (`--analyze-core2core`).
-- In `--cpu-bandwidth`, `--cpu-latency`, general CPU (`--patterns`), core-to-core, and LLM modes, `--sweep-max-runs` is
+  Upper bounds are `2^53 - 1` (`9,007,199,254,740,991`) in `--cpu-bandwidth`, `--cpu-latency`, `--patterns`, and active `--llm-memory --sweep`
+  (`json-integer-out-of-range` for LLM), `LLONG_MAX` (`--analyze-tlb`), and `INT_MAX` (`--analyze-core2core`).
+- In `--cpu-bandwidth`, `--cpu-latency`, `--patterns`, core-to-core, and LLM modes, `--sweep-max-runs` is
   accepted without `--sweep` but has no effect in that case (in direct `--llm-memory` without `--sweep`, any positive
   `size_t` is accepted without enforcing `2^53 - 1`). The GPU standalone parser rejects it.
 - A sweep parameter key may appear only once; duplicate keys are rejected before execution with the centralized `sweep parameter specified more than once: <key>` diagnostic across all sweep-capable modes.
@@ -329,8 +325,9 @@ Additional sweep rules:
   bandwidth attempt is complete only with nested `mode: "cpu_bandwidth"`, `schema_version: 1`, `status: "complete"`,
   `results_complete: true`, `run_accepted: true`, and `configuration.output_file: ""`; a CPU latency attempt is complete
   only with nested `mode: "cpu_latency"`, `schema_version: 1`, `status: "complete"`, `results_complete: true`,
-  `run_accepted: true`, and `configuration.output_file: ""`. A pattern attempt requires nested `status: "complete"` and
-  `results_complete: true`; TLB requires nested `tlb_analysis.status: "complete"` and `tlb_analysis.conclusions_valid: true`;
+  `run_accepted: true`, and `configuration.output_file: ""`. A pattern attempt requires nested `mode: "patterns"`,
+  `schema_version: 1`, `status: "complete"`, `results_complete: true`, `run_accepted: true`, `configuration.output_file: ""`,
+  and a non-empty `measurements[]` array in which every scheduled entry is `status: "measured"`; TLB requires nested `tlb_analysis.status: "complete"` and `tlb_analysis.conclusions_valid: true`;
   core-to-core requires nested `core_to_core_latency.status: "complete"` and `measurements_complete: true`; LLM-memory
   requires nested `mode: "llm_memory"`, `schema_version: 2`, `status: "complete"`, `results_complete: true`,
   `run_accepted: true`, and every planned `measurements[]` entry having `status: "measured"`. The authoritative schema-1
@@ -355,7 +352,7 @@ Additional sweep rules:
 | `--cpu-latency --compare-locality` with `--buffer-size 0` or `--latency-stride-bytes > 8192` | Paired locality comparison requires main memory (`--buffer-size > 0`) and stride `<= 8192` bytes |
 | `--cpu-latency` with box chain mode (`random-box`, `same-random-in-box`, `diff-random-in-box`) and `--latency-tlb-locality-kb 0` | Box chain modes require a positive page-multiple `--latency-tlb-locality-kb` |
 | Removed pre-split combined-mode and subset flags | Rejected as unknown (`Unknown option: ...`) or unsupported (`Unsupported option ...`); use `-B`/`--cpu-bandwidth` or `-L`/`--cpu-latency` |
-| `--patterns` + `--cache-size` / `--latency-samples` / `--latency-stride-bytes` / `--latency-chain-mode` / `--latency-tlb-locality-kb` | Pattern benchmarks do not run cache or latency tests |
+| `--patterns` + `--cache-size` / `--latency-samples` / `--latency-stride-bytes` / `--latency-chain-mode` / `--latency-tlb-locality-kb` (or any option outside the 11-option whitelist) | Outside the standalone `--patterns` 11-option whitelist (`Unsupported option ...`) |
 | `--tlb-density` without `--analyze-tlb` | TLB density is parsed only by the standalone TLB mode |
 | `--gpu-bandwidth` + any other primary mode | GPU is a standalone primary mode |
 | `--gpu-bandwidth` + any option outside `buffer-size`, `iterations`, `count`, `seed`, `output`, `help` | GPU schema 1 exact whitelist |

@@ -11,7 +11,7 @@ Bandwidth is reported as **effective workload payload divided by measured time**
 | CPU bandwidth (`--cpu-bandwidth`) | Effective read, write, and copy payload rate for main-memory or cache-sized working sets | Physical DRAM traffic, cache residency, or memory-controller utilization |
 | GPU bandwidth (`--gpu-bandwidth`) | Effective Metal compute-kernel payload rate using GPU timestamps | Verified DRAM residency, separate VRAM performance, or CPU-to-GPU transfer rate |
 | CPU latency (`--cpu-latency`) | Dependent pointer-chase load-to-use latency | Bulk bandwidth or an isolated TLB/page-walk cost |
-| Access patterns (`--patterns`) | Payload-rate sensitivity to access order, regularity, and virtual stride | Which single cache, prefetch, translation, or scheduling mechanism caused a difference |
+| Access patterns (`--patterns`) | Audited read, write, and copy payload-rate sensitivity across 7 access orders, regularity, and virtual strides with GF(2) read checksums and cold post-validation | Which single cache, prefetch, translation, or scheduling mechanism caused a difference |
 | TLB analysis (`--analyze-tlb`) | Paired spread/packed latency deltas and empirical boundary estimates | Guaranteed architectural TLB sizes or direct DRAM latency |
 | Core-to-core (`--analyze-core2core`) | Effective round-trip time of a repeated two-thread acquire/release token exchange under scheduler hints | Isolated physical cache-line migration or coherence-path latency, exact physical-core placement, or a definitive topology map |
 | LLM memory profile (`--llm-memory`) | Effective logical model-payload rate and synthetic work-unit latency for CPU or capability-gated Metal decode/prefill with contiguous or paged KV | Transformer computation, inference tokens/s, TTFT, physical DRAM traffic, runtime page allocation, ANE execution, or framework performance |
@@ -220,13 +220,13 @@ Explicitly passing `--compare-locality` (which requires `--buffer-size > 0` and 
 
 ## Access-Pattern Analysis
 
-Standalone `--patterns` mode compares effective read, write, and copy bandwidth for sequential forward, sequential reverse, 64 B, 4096 B, 16384 B, and 2 MiB virtual strides, and random access.
+Standalone `-P`/`--patterns` mode (`mode: "patterns"`, schema 1, `patterns-v1-arm64-phase-calibrated-seeded-balanced`, exact 11-option whitelist, default `--count 3`) compares effective `read`, `write`, and `copy` payload bandwidth across seven canonical access geometries: `sequential_forward`, `sequential_reverse`, `strided_64`, `strided_4096`, `strided_16384`, `strided_2mb`, and `random`.
 
-The suite exposes sensitivity to access order, spatial locality, regularity, stride, and worker count. Differences can motivate hypotheses about cache reuse, hardware prefetching, translation, scheduling, or memory-controller behavior, but the tool does not directly control or measure the prefetcher and cannot identify one mechanism as the cause.
+The suite exposes sensitivity to access order, spatial locality, regularity, 32-byte-access / 64-byte-partitioned stride transitions, and worker count. Differences can motivate hypotheses about cache reuse, hardware prefetching, translation, scheduling, or memory-controller behavior, but the tool does not directly control or measure the prefetcher and cannot identify one mechanism as the cause. `strided_2mb` denotes a 2 MiB virtual-address stride (`large_page_backing_verified: false`, `large_page_backing_status: "not-verified"`) and does not prove physical superpage backing; use `--analyze-tlb` for controlled translation-boundary questions.
 
-Pattern work uses warmup and, in automatic mode, excluded same-shape calibration. Sparse-stride workloads may use fewer effective workers than requested so active workers still perform meaningful work. Exact completed payload is the authoritative bandwidth numerator.
+When `--buffer-size` is smaller than `stride_bytes + 32` (for example, `1 MiB` or `2 MiB` for `strided_2mb`), that pattern is published as `status: "skipped"` (`reason_code: "buffer-too-small-for-stride-transition"`) in `resolved_plan` and `aggregates` rather than failing the run, and omitted from `calibration`, `measurements[]`, and `loop_records[]`. Active strided patterns may reduce `effective_workers` so each worker performs at least two 32-byte accesses (one stride transition). Oversized buffers exceeding strict `memory_budget` (`known_owned_peak_bytes <= admitted_budget_bytes`) are rejected (`memory-budget-exceeded`) without silent downsizing.
 
-`strided_2mb` means a 2 MiB virtual-address interval; it does not assert physical superpage backing. Use matched buffer, thread, seed, and system settings for comparisons, and use `--analyze-tlb` for controlled translation-related questions.
+Before timing starts, `src` is populated with a slot-tagged O(1) GF(2) pattern (`patterns-buffer-pattern-v1`) and protected via `mprotect(PROT_READ)`. Random workloads generate per-worker 32-byte-aligned index tables via `splitmix64-coprime-fisher-yates-v1` (with `random_indices_sha256` and a `<= 8 MiB` sorted validation copy). When `--iterations` is omitted, excluded calibration (`0.150 s` target in `[0.100 s, 0.250 s]`, max `2` corrections) runs once before loop `0`, plans freeze atomically in `frozen_plan_refs`, and `frozen_measurement_warmup` warms each active `(pattern, op)` before loop `0`. Repeated `--count` loops rotate both active patterns and `read`/`write`/`copy` operations in a 2-axis cyclic Latin-square schedule. Timed reads verify non-cancelling per-worker and folded `patterns-read-checksum-v1` values against O(1) sequential and 2D partial-cycle strided oracles; write (`memory_write_pattern_loop_asm`, `memory_write_reverse_pattern_loop_asm`, `memory_write_strided_phased_pattern_loop_asm`, `memory_write_random_pattern_loop_asm`) and copy runs use unique odd `write_pattern` / `pre_op_sentinel` values and undergo parallel cold 100% touched-byte and 100% untouched-sentinel post-validation (`execution.validation.checks[]` with 6 checks), recording Mach `cpu_raw` ticks and `K=max(1,ceil(count/8))` bounded loop checkpoints. See the [Patterns Whitepaper](PATTERNS_WHITEPAPER.md) for the complete mathematical, validation, and schema specification.
 
 ## TLB Analysis
 
@@ -257,17 +257,18 @@ Every result-producing direct mode and supported sweep reserves the exact target
 machine-readable output: stdout contains one final JSON document and the post-parse human transcript is routed to
 stderr. An empty output value disables JSON for a direct command but is missing/invalid for a sweep. Every other
 non-empty value is a file target, including `./-` and flag-shaped names such as `-G`. File output is atomic; CPU
-bandwidth, CPU latency, GPU, LLM, and sweep files retain their mode-specific checkpoints, while stdout remains
-final-only. Direct CPU bandwidth, CPU latency, and LLM stdout skip intermediate snapshot preparation while preserving
+bandwidth, CPU latency, patterns, GPU, LLM, and sweep files retain their mode-specific checkpoints, while stdout remains
+final-only. Direct CPU bandwidth, CPU latency, patterns, and LLM stdout skip intermediate snapshot preparation while preserving
 task-boundary stop observations; GPU stdout retains logical checkpoint transitions without intermediate serialization.
 The current support matrix and process acceptance procedure are in the [Machine-Readable CLI API](API.md).
 
-CPU bandwidth (`-B`) and CPU latency (`-L`) results use schema version `1` (`mode: "cpu_bandwidth"` with
-`methodology_version: "cpu-bandwidth-v1-arm64-calibrated-seeded-balanced"`, and `mode: "cpu_latency"` with
-`methodology_version: "cpu-latency-v1-arm64-calibrated-seeded-balanced"`), preserving raw `configuration.output_file`,
-`build_manifest`, `cpu_raw` Mach tick evidence, `checkpoint_lifecycle`, `results_complete`, and `run_accepted`. Both
-modes are independently verifiable (direct or schema-1 sweep envelopes) with `script-examples/verify_cpu_bandwidth_result.py`
-and `script-examples/verify_cpu_latency_result.py` (`make test-cpu-verifiers`). Bundled `script-examples/` scripts
+CPU bandwidth (`-B`), CPU latency (`-L`), and patterns (`-P`) results use schema version `1` (`mode: "cpu_bandwidth"` with
+`methodology_version: "cpu-bandwidth-v1-arm64-calibrated-seeded-balanced"`, `mode: "cpu_latency"` with
+`methodology_version: "cpu-latency-v1-arm64-calibrated-seeded-balanced"`, and `mode: "patterns"` with
+`methodology_version: "patterns-v1-arm64-phase-calibrated-seeded-balanced"`), preserving raw `configuration.output_file`,
+`build_manifest`, `cpu_raw` Mach tick evidence, `checkpoint_lifecycle`, `results_complete`, and `run_accepted`. All three
+modes are independently verifiable (direct or schema-1 sweep envelopes) with `script-examples/verify_cpu_bandwidth_result.py`,
+`script-examples/verify_cpu_latency_result.py`, and `script-examples/verify_patterns_result.py` (`make test-patterns-verifier` / `make test-cpu-verifiers`). Bundled `script-examples/` scripts
 accept compatible producer releases after validating schema 1, mode, methodology identity, `status == "complete"`,
 `results_complete == true`, `run_accepted == true`, and consumed field shapes, retaining `software.version` as provenance
 only without translating legacy standard JSON layouts.

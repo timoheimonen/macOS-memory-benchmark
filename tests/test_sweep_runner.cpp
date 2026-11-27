@@ -37,10 +37,6 @@ Json make_tlb_result(const std::string& status, bool conclusions_valid) {
   return {{"tlb_analysis", {{"status", status}, {"conclusions_valid", conclusions_valid}}}};
 }
 
-Json make_pattern_result(const std::string& status, bool results_complete, const std::string& reason = "") {
-  return {{"status", status}, {"status_reason", reason}, {"results_complete", results_complete}};
-}
-
 Json make_cpu_mode_result(const std::string& mode, const std::string& status,
                           bool results_complete, bool run_accepted,
                           const std::string& reason = "") {
@@ -53,6 +49,14 @@ Json make_cpu_mode_result(const std::string& mode, const std::string& status,
       {"run_accepted", run_accepted},
       {"measurements", Json::array({{{"measurement_id", 0}, {"status", "measured"}}})},
   };
+}
+
+Json make_pattern_result(const std::string& status, bool results_complete,
+                         const std::string& reason = "",
+                         bool run_accepted = false) {
+  const bool accepted = run_accepted || (status == "complete" && results_complete);
+  return make_cpu_mode_result(Constants::PATTERNS_JSON_MODE_NAME, status,
+                              results_complete, accepted, reason);
 }
 
 Json make_core_to_core_result(const std::string& status, bool measurements_complete) {
@@ -124,13 +128,13 @@ TEST(SweepRunnerTest, NestedCompletionIsModeAware) {
       {"pattern-partial", SweepNestedMode::Patterns, make_pattern_result("partial", false, "pattern loops remain"),
        SweepAttemptStatus::Partial, "pattern loops remain"},
       {"pattern-inconsistent-complete", SweepNestedMode::Patterns, make_pattern_result("complete", false),
-       SweepAttemptStatus::Partial, "nested-pattern-result-incomplete"},
+       SweepAttemptStatus::Partial, "nested-patterns-result-incomplete"},
       {"pattern-interrupted", SweepNestedMode::Patterns, make_pattern_result("interrupted", false, "stop requested"),
        SweepAttemptStatus::Interrupted, "stop requested"},
       {"pattern-failed", SweepNestedMode::Patterns, make_pattern_result("failed", false, "allocation failed"),
        SweepAttemptStatus::Failed, "allocation failed"},
       {"pattern-malformed", SweepNestedMode::Patterns, {{"status", "complete"}}, SweepAttemptStatus::Partial,
-       "missing-pattern-completion-metadata"},
+       "missing-patterns-schema-version"},
   };
 
   for (const ModeCase& entry : cases) {
@@ -324,7 +328,7 @@ TEST(SweepRunnerTest, FailureClassificationRetainsPayloadAndHonorsExplicitReason
   for (const FailureCase& entry :
        {FailureCase{"override", SweepNestedMode::Patterns, diagnostic, "simulated-execution-failure",
                     "simulated-execution-failure", true},
-        FailureCase{"classifier", SweepNestedMode::Patterns, diagnostic, "", "missing-pattern-completion-metadata", false},
+        FailureCase{"classifier", SweepNestedMode::Patterns, diagnostic, "", "missing-patterns-schema-version", false},
         FailureCase{"mode reason", SweepNestedMode::Patterns,
                     make_pattern_result("failed", false, "pattern allocation failed"), "", "pattern allocation failed",
                     false},

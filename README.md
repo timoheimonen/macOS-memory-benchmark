@@ -18,7 +18,7 @@ expose calibration, workload, completion, and repeatability metadata so results 
 
 - **Apple Silicon native:** C++17 and ARM64 assembly measurement paths for macOS.
 - **Bandwidth and latency:** main-memory and cache read/write/copy throughput plus dependent pointer-chase latency.
-- **Access-pattern analysis:** sequential, reverse, strided, and random workloads with exact effective-payload accounting.
+- **Access-pattern analysis:** sequential, reverse, strided, and random workloads with `mprotect(PROT_READ)` sources, O(1) GF(2) read checksums, cold touched/untouched-sentinel write/copy post-validation, and exact effective-payload accounting.
 - **Dedicated TLB analysis:** paired spread/packed chains, adaptive rounds, confidence intervals, and independent boundary validation.
 - **Core-to-core analysis:** calibrated acquire/release token-exchange measurements under scheduler-hint scenarios.
 - **Metal GPU bandwidth:** standalone read/write/copy compute kernels with GPU timestamps and validation metadata.
@@ -181,7 +181,7 @@ checkpoints are required; see the [Machine-Readable CLI API](documents/API.md) s
 |---|---|
 | `--cpu-bandwidth` | Standalone audited CPU read/write/copy bandwidth benchmark (`-B`) for main memory and L1/L2 (or `--cache-size`) with GF(2) read checksums and full-buffer write/copy validation. |
 | `--cpu-latency` | Standalone audited CPU pointer-chasing latency benchmark (`-L`) for L1/L2 (or `--cache-size`) and main memory with canonical hashed chains, optional `--compare-locality`, and sample windows. |
-| `--patterns` | Effective read/write/copy bandwidth for sequential-forward, sequential-reverse, 64 B, 4096 B, 16384 B and 2 MiB virtual strides, and random access. |
+| `--patterns` | Standalone audited CPU access-pattern benchmark (`-P`, schema 1, default `--count 3`) for sequential-forward, sequential-reverse, 64 B, 4096 B, 16384 B and 2 MiB virtual strides, and random access with `PROT_READ` GF(2) sources, read checksums, and write/copy post-validation. |
 | `--analyze-tlb` | Standalone paired spread/packed TLB analysis with adaptive measurement rounds, confidence intervals, and boundary validation. |
 | `--analyze-core2core` | Calibrated two-thread acquire/release token-protocol round-trip latency under best-effort macOS scheduler hints. |
 | `--gpu-bandwidth` | Standalone Metal GPU read/write/copy effective compute-payload bandwidth. |
@@ -339,22 +339,22 @@ Treat benchmark values as measurements of the configured workload under the obse
   pinning.
 
 JSON output records completion and nullable measurement state instead of using zero for unavailable results. Standalone
-CPU bandwidth (`-B`/`--cpu-bandwidth`) and CPU latency (`-L`/`--cpu-latency`) both use schema version `1` with
-`mode: "cpu_bandwidth"` (`methodology_version: "cpu-bandwidth-v1-arm64-calibrated-seeded-balanced"`) and
-`mode: "cpu_latency"` (`methodology_version: "cpu-latency-v1-arm64-calibrated-seeded-balanced"`), preserving raw
+CPU bandwidth (`-B`/`--cpu-bandwidth`), CPU latency (`-L`/`--cpu-latency`), and patterns (`-P`/`--patterns`) all use schema version `1` with
+`mode: "cpu_bandwidth"` (`methodology_version: "cpu-bandwidth-v1-arm64-calibrated-seeded-balanced"`),
+`mode: "cpu_latency"` (`methodology_version: "cpu-latency-v1-arm64-calibrated-seeded-balanced"`), and
+`mode: "patterns"` (`methodology_version: "patterns-v1-arm64-phase-calibrated-seeded-balanced"`), preserving raw
 `configuration.output_file`, `build_manifest`, `cpu_raw` Mach tick evidence, `results_complete`, and `run_accepted`
-(sweeps embed nested schema-1 artifacts in a schema-1 sweep envelope with `base_mode` `"cpu_bandwidth"` or
-`"cpu_latency"`). The bundled `script-examples/` accept compatible producer releases by checking `schema_version == 1`,
+(sweeps embed nested schema-1 artifacts in a schema-1 sweep envelope with `base_mode` `"cpu_bandwidth"`, `"cpu_latency"`, or `"patterns"`). The bundled `script-examples/` accept compatible producer releases by checking `schema_version == 1`,
 mode/methodology identity, `status == "complete"`, `results_complete == true`, `run_accepted == true`, and consumed field
 shapes; they retain `software.version` as provenance only and do not translate legacy standard JSON layouts.
 Consumers making conclusions should reject incomplete or interrupted runs according to the mode-specific status fields.
 Every result-producing direct command or supported sweep using `--output -` reserves stdout for one final JSON document and
-routes its post-parse human transcript to stderr; file output is atomic. Direct CPU bandwidth, CPU latency, and LLM files
+routes its post-parse human transcript to stderr; file output is atomic. Direct CPU bandwidth, CPU latency, patterns, and LLM files
 receive a progress snapshot every `K=max(1,ceil(count/8))` completed loops plus a terminal snapshot: at most eight
-progress writes, with up to `3K` completed attempts potentially missing after abrupt termination. Sweep files (including
-CPU bandwidth, CPU latency, and LLM sweeps) checkpoint the schema-1 envelope after each attempted run without intra-run
+progress writes, with up to `3K` (or `K * active_patterns.size() * 3` for `-P`) completed attempts potentially missing after abrupt termination. Sweep files (including
+CPU bandwidth, CPU latency, patterns, and LLM sweeps) checkpoint the schema-1 envelope after each attempted run without intra-run
 snapshots. Stdout emits one final document. A correct complete one-loop run can have `run_accepted: true` while
-target or operation position balance is incomplete and quality is insufficient for a comparison. Inspect sample count,
+target, pattern, or operation position balance is incomplete and quality is insufficient for a comparison. Inspect sample count,
 observed CV, duration and environment separately. Exact process acceptance rules are in the
 [Machine-Readable CLI API](documents/API.md), with schema and checkpoint details in the
 [User Manual](documents/MANUAL.md), [Technical Specification](documents/TECHNICAL_SPECIFICATION.md), and mode
@@ -401,6 +401,7 @@ supported inputs and metrics.
 - [Technical Specification](documents/TECHNICAL_SPECIFICATION.md): architecture, execution flow, memory model, and output contracts.
 - [CPU Bandwidth Whitepaper](documents/CPU_BANDWIDTH_WHITEPAPER.md): audited ARM64 bandwidth methodology, O(1) GF(2) read checksums, full-buffer validation, and JSON schema 1.
 - [Latency Whitepaper](documents/LATENCY_WHITEPAPER.md): audited dependent pointer-chase methodology, chain hashing, sample windows, `--compare-locality`, and JSON schema 1.
+- [Patterns Whitepaper](documents/PATTERNS_WHITEPAPER.md): audited 7-pattern ARM64 methodology, slot-tagged GF(2) read checksums, 2D partial-cycle strided oracles, cold touched/untouched-sentinel post-validation, and JSON schema 1.
 - [TLB Analysis Whitepaper](documents/TLB_ANALYSIS_WHITEPAPER.md): paired analysis, boundary rules, confidence model, and JSON verification contract.
 - [Core-to-Core Whitepaper](documents/CORE_TO_CORE_WHITEPAPER.md): LDAR/STLR handoff protocol, scheduler-hint scenarios, and JSON schema.
 - [GPU Bandwidth Whitepaper](documents/GPU_BANDWIDTH_WHITEPAPER.md): Metal methodology, timing, validation, resource model, and interpretation limits.
@@ -429,8 +430,8 @@ make test-all
 ```
 
 `make test-all` requires Python 3; it runs all GTest cases followed by the script-example, independent LLM verifier
-(`test-llm-verifier`), and independent CPU bandwidth/latency verifier (`test-cpu-verifiers`) suites. `jq` is not
-required by the test gate.
+(`test-llm-verifier`), and independent CPU bandwidth/latency/patterns verifier (`test-cpu-verifiers`, plus standalone
+`make test-patterns-verifier`) suites. `jq` is not required by the test gate.
 
 Generate isolated LLVM production-source coverage reports under `/tmp`:
 
@@ -442,17 +443,19 @@ make coverage-all
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidance and [Project Structure](documents/PROJECT_STRUCTURE.md) for
 repository navigation and the current test-suite map. C++ reference documentation can be generated with `make docs`.
 
-CPU bandwidth, CPU latency, and CPU LLM results retain the original Mach tick boundaries and timebase for duration
+CPU bandwidth, CPU latency, patterns, and CPU LLM results retain the original Mach tick boundaries and timebase for duration
 reconstruction. The build embeds compiler, flags, SDK/deployment target and Git provenance; the command hashes the
 executable once before tasks. These fields bind available artifacts and do not constitute signed execution attestation.
 See the [Machine-Readable CLI API](documents/API.md) for availability and numeric rules. Python 3 is required to generate
 build provenance.
 
-Verify a saved CPU bandwidth, CPU latency, or LLM result (direct or sweep) independently (standard library only):
+Verify a saved CPU bandwidth, CPU latency, patterns, or LLM result (direct or sweep) independently (standard library only):
 
 ```bash
 python3 script-examples/verify_cpu_bandwidth_result.py cpu-bandwidth.json --binary ./memory_benchmark --require-raw-timing
 python3 script-examples/verify_cpu_latency_result.py cpu-latency.json --binary ./memory_benchmark --require-raw-timing
+python3 script-examples/verify_patterns_result.py patterns.json --binary ./memory_benchmark --require-raw-timing
+make test-patterns-verifier
 make test-cpu-verifiers
 python3 script-examples/verify_llm_result.py llm-result.json --binary ./memory_benchmark --require-raw-timing
 make test-llm-verifier

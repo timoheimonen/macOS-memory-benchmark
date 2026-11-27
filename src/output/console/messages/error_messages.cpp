@@ -68,11 +68,6 @@ const std::string& error_missing_primary_mode() {
   return msg;
 }
 
-std::string error_patterns_incompatible_option(const std::string& option) {
-  return "--patterns cannot be used with " + option +
-         " (pattern benchmarks do not run cache or latency tests)";
-}
-
 const std::string& reason_signed_integer_invalid() {
   static const std::string reason =
       "must be an integer without whitespace, a plus sign, or trailing characters";

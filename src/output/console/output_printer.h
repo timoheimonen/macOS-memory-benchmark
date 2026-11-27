@@ -57,14 +57,11 @@ void print_runtime_banner();
  * @param perf_cores Number of performance cores
  * @param eff_cores Number of efficiency cores
  * @param num_threads Number of threads
- * @param run_patterns Whether pattern benchmarks are run (bandwidth-only, uses 2x buffers)
- * @param user_specified_iterations Whether --iterations explicitly disables pattern auto-calibration
  */
 void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total_allocation_bytes, int iterations,
                           int loop_count, bool use_non_cacheable, size_t latency_stride_bytes,
                           const std::string& latency_chain_mode_name, size_t latency_tlb_locality_bytes,
-                          const std::string& cpu_name, int perf_cores, int eff_cores, int num_threads,
-                          bool run_patterns, bool user_specified_iterations);
+                          const std::string& cpu_name, int perf_cores, int eff_cores, int num_threads);
 
 /**
  * @brief Print cache size information

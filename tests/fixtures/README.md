@@ -1,11 +1,13 @@
 # Test fixtures
 
-## CPU Bandwidth & CPU Latency schema-1 verifier fixtures
+## CPU Bandwidth, CPU Latency & Patterns schema-1 verifier fixtures
 
-`cpu-bandwidth-schema-v1-complete-current.json` and `cpu-latency-schema-v1-complete-current.json` are schema-1 fixtures for the standalone `-B`/`--cpu-bandwidth` (`mode: "cpu_bandwidth"`) and `-L`/`--cpu-latency` (`mode: "cpu_latency"`) modes, exercised by `tests/test_cpu_bandwidth_verifier.py` and `tests/test_cpu_latency_verifier.py` (`make test-cpu-verifiers`) as well as `tests/test_script_examples.py` (`make test-script-examples`).
+`cpu-bandwidth-schema-v1-complete-current.json`, `cpu-latency-schema-v1-complete-current.json`, `patterns-schema-v1-complete-current.json`, and `patterns-schema-v1-skipped-2mb-current.json` are schema-1 fixtures for the standalone `-B`/`--cpu-bandwidth` (`mode: "cpu_bandwidth"`), `-L`/`--cpu-latency` (`mode: "cpu_latency"`), and `-P`/`--patterns` (`mode: "patterns"`) modes, exercised by `tests/test_cpu_bandwidth_verifier.py`, `tests/test_cpu_latency_verifier.py`, and `tests/test_patterns_verifier.py` (`make test-patterns-verifier` and `make test-cpu-verifiers`) as well as `tests/test_script_examples.py` (`make test-script-examples`).
 
 - `cpu-bandwidth-schema-v1-complete-current.json`: complete `-B` fixture covering main memory + custom cache bandwidth measurements, GF(2) oracle / write-pattern post-validation checks, and raw Mach timing evidence.
 - `cpu-latency-schema-v1-complete-current.json`: complete `-L` fixture covering custom cache + main memory latency measurements, canonical pointer-chain permutation hashes, final-pointer verification, and `pooled_sample_distribution` sample-window evidence.
+- `patterns-schema-v1-complete-current.json`: complete `-P` fixture (`-P -b 3 -t 2 -i 2 -r 3 --seed 424242 -o ...`) with all 7 patterns active, slot-tagged GF(2) read checksums (`patterns-read-checksum-v1`), 6-check write/copy cold post-validation, `splitmix64-coprime-fisher-yates-v1` random indices (`random_indices_sha256`), and raw Mach timing evidence (`cpu_raw`). Verified with `python3 script-examples/verify_patterns_result.py tests/fixtures/patterns-schema-v1-complete-current.json --require-raw-timing`.
+- `patterns-schema-v1-skipped-2mb-current.json`: complete `-P` fixture (`-P -b 1 -t 2 -i 2 -r 3 --seed 424242 -o ...`) where `strided_2mb` is explicitly `status: "skipped"` (`reason_code: "buffer-too-small-for-stride-transition"`) and omitted from `calibration`, `measurements[]`, and `loop_records[]`. Verified with `python3 script-examples/verify_patterns_result.py tests/fixtures/patterns-schema-v1-skipped-2mb-current.json --require-raw-timing`.
 
 ## LLM schema 2 verifier fixtures
 

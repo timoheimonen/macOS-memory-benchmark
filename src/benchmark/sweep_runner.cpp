@@ -32,7 +32,6 @@
 #include "core/config/constants.h"
 #include "core/config/sweep_utils.h"
 #include "core/config/version.h"
-#include "core/memory/buffer_allocator.h"
 #include "core/signal/signal_handler.h"
 #include "core/system/benchmark_qos.h"
 #include "core/system/system_info.h"
@@ -41,7 +40,6 @@
 #include "output/console/output_printer.h"
 #include "output/json/json_output/json_output_api.h"
 #include "output/json/json_output/json_output_session.h"
-#include "pattern_benchmark/pattern_benchmark.h"
 #include "third_party/nlohmann/json.hpp"
 #include "utils/json_utils.h"
 
@@ -64,18 +62,12 @@ void report_sweep_nested_run_exception(const std::string& details) noexcept {
   }
 }
 
-std::string base_mode_name(const BenchmarkConfig& config) {
-  if (config.analyze_tlb) {
-    return Constants::TLB_ANALYSIS_JSON_MODE_NAME;
-  }
-  return Constants::PATTERNS_JSON_MODE_NAME;
+std::string base_mode_name(const BenchmarkConfig&) {
+  return Constants::TLB_ANALYSIS_JSON_MODE_NAME;
 }
 
-SweepNestedMode nested_mode_for_config(const BenchmarkConfig& config) {
-  if (config.analyze_tlb) {
-    return SweepNestedMode::TlbAnalysis;
-  }
-  return SweepNestedMode::Patterns;
+SweepNestedMode nested_mode_for_config(const BenchmarkConfig&) {
+  return SweepNestedMode::TlbAnalysis;
 }
 
 nlohmann::ordered_json build_sweep_parameters_json(const BenchmarkConfig& config) {
@@ -197,47 +189,6 @@ std::vector<std::vector<SweepAssignment>> build_sweep_assignments(const Benchmar
   return assignments;
 }
 
-int finalize_run_config(BenchmarkConfig& config) {
-  if (validate_config(config) != EXIT_SUCCESS) {
-    return EXIT_FAILURE;
-  }
-  calculate_buffer_sizes(config);
-  calculate_access_counts(config);
-  size_t peak_allocation_bytes = 0;
-  return calculate_total_allocation_bytes(config, peak_allocation_bytes);
-}
-
-int run_pattern_sweep_point(BenchmarkConfig& run_config, nlohmann::ordered_json& result_json) {
-  auto timer_opt = HighResTimer::create();
-  if (!timer_opt) {
-    std::cerr << Messages::error_prefix() << Messages::error_timer_creation_failed() << std::endl;
-    return EXIT_FAILURE;
-  }
-  auto& timer = *timer_opt;
-  timer.start();
-
-  if (finalize_run_config(run_config) != EXIT_SUCCESS) {
-    return EXIT_FAILURE;
-  }
-
-  PatternStatistics stats;
-  run_all_pattern_benchmarks(run_config, stats);
-
-  if (run_config.loop_count == 1 && !stats.loop_results.empty()) {
-    print_pattern_results(extract_pattern_results_at(stats, 0));
-  } else if (!stats.loop_results.empty()) {
-    print_pattern_results(extract_pattern_median_results(stats));
-    print_pattern_statistics(run_config.loop_count, stats);
-  }
-
-  const double elapsed_sec = timer.stop();
-  result_json = build_pattern_results_json(run_config, stats, elapsed_sec);
-  // The nested completion contract carries failed/partial/interrupted states.
-  // Returning success here lets the sweep classifier preserve that exact state
-  // and reason instead of replacing it with a generic execution failure.
-  return EXIT_SUCCESS;
-}
-
 int run_tlb_sweep_point(BenchmarkConfig& run_config,
                         nlohmann::ordered_json& result_json) {
   return run_tlb_analysis_collect(run_config, result_json);
@@ -248,7 +199,7 @@ int run_sweep_point(BenchmarkConfig& run_config,
   if (run_config.analyze_tlb) {
     return run_tlb_sweep_point(run_config, result_json);
   }
-  return run_pattern_sweep_point(run_config, result_json);
+  return EXIT_FAILURE;
 }
 
 std::string optional_string(const nlohmann::ordered_json& object, const char* key) {
@@ -333,27 +284,61 @@ SweepNestedCompletion classify_core_to_core_completion(const nlohmann::ordered_j
 }
 
 SweepNestedCompletion classify_pattern_completion(const nlohmann::ordered_json& result_json) {
-  if (!result_json.is_object() || !result_json.contains("status") ||
-      !result_json["status"].is_string() ||
-      !result_json.contains("results_complete") ||
-      !result_json["results_complete"].is_boolean()) {
-    return {SweepAttemptStatus::Partial, "missing-pattern-completion-metadata"};
+  if (!result_json.is_object() || !result_json.contains("schema_version") ||
+      !result_json.contains("mode")) {
+    return {SweepAttemptStatus::Partial, "missing-patterns-schema-version"};
   }
+  const nlohmann::ordered_json& schema_version = result_json["schema_version"];
+  if (!schema_version.is_number_integer() || schema_version.is_boolean() ||
+      schema_version != 1) {
+    return {SweepAttemptStatus::Partial, "unsupported-patterns-schema-version"};
+  }
+  const bool has_mode = result_json["mode"].is_string() &&
+                        result_json["mode"] == Constants::PATTERNS_JSON_MODE_NAME;
+  const bool has_status =
+      result_json.contains("status") && result_json["status"].is_string();
+  const bool has_results_complete =
+      result_json.contains("results_complete") &&
+      result_json["results_complete"].is_boolean();
+  const bool has_run_accepted = result_json.contains("run_accepted") &&
+                                result_json["run_accepted"].is_boolean();
+  if (!has_mode || !has_status || !has_results_complete || !has_run_accepted) {
+    return {SweepAttemptStatus::Partial, "invalid-patterns-schema-contract"};
+  }
+
   const std::string status = optional_string(result_json, "status");
-  const std::string reason = optional_string(result_json, "status_reason");
-  if (status == "complete" && optional_bool(result_json, "results_complete")) {
+  const std::string reason = optional_string(result_json, "reason_code");
+  if (status == "complete" &&
+      result_json["results_complete"].get<bool>() &&
+      result_json["run_accepted"].get<bool>()) {
+    if (!result_json.contains("measurements") ||
+        !result_json["measurements"].is_array() ||
+        result_json["measurements"].empty()) {
+      return {SweepAttemptStatus::Partial, "invalid-patterns-schema-contract"};
+    }
+    for (const auto& measurement : result_json["measurements"]) {
+      if (!measurement.is_object() || !measurement.contains("status") ||
+          !measurement["status"].is_string() ||
+          measurement["status"] != "measured") {
+        return {SweepAttemptStatus::Partial, "invalid-patterns-schema-contract"};
+      }
+    }
     return {SweepAttemptStatus::Complete, ""};
   }
   if (status == "interrupted") {
     return {SweepAttemptStatus::Interrupted,
-            reason.empty() ? "nested-pattern-run-interrupted" : reason};
+            reason.empty() ? "nested-patterns-run-interrupted" : reason};
+  }
+  if (status == "unsupported") {
+    return {SweepAttemptStatus::Failed,
+            reason.empty() ? "nested-patterns-run-unsupported" : reason};
   }
   if (status == "failed") {
     return {SweepAttemptStatus::Failed,
-            reason.empty() ? "nested-pattern-run-failed" : reason};
+            reason.empty() ? "nested-patterns-run-failed" : reason};
   }
   return {SweepAttemptStatus::Partial,
-          reason.empty() ? "nested-pattern-result-incomplete" : reason};
+          reason.empty() ? "nested-patterns-result-incomplete" : reason};
 }
 
 /**
@@ -721,6 +706,9 @@ SweepExecutionResult execute_sweep_plan(SweepNestedMode mode, const std::vector<
 
 SweepExecutionResult run_sweep_mode(const BenchmarkConfig& base_config,
                                     JsonOutputSession& output_session) {
+  if (!base_config.analyze_tlb) {
+    return {};
+  }
   const size_t run_count = calculate_sweep_run_count_from_specs(base_config.sweep_specs);
   const std::vector<std::vector<SweepAssignment>> assignments = build_sweep_assignments(base_config);
 

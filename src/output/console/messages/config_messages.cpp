@@ -71,17 +71,6 @@ std::string config_iterations(int iterations) {
   return oss.str();
 }
 
-std::string config_pattern_iterations_auto(double target_seconds,
-                                           double min_seconds,
-                                           double max_seconds) {
-  std::ostringstream oss;
-  oss << std::fixed << std::setprecision(0)
-      << "Pattern Passes: automatic duration calibration (target "
-      << target_seconds * 1000.0 << " ms; intended window "
-      << min_seconds * 1000.0 << "-" << max_seconds * 1000.0 << " ms)";
-  return oss.str();
-}
-
 std::string config_loop_count(int loop_count) {
   std::ostringstream oss;
   oss << "Loop Count (total benchmark repetitions): " << loop_count;

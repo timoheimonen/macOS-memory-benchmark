@@ -331,7 +331,6 @@ namespace Constants {
   
   // Pattern benchmark constants
   constexpr size_t PATTERN_ACCESS_SIZE_BYTES = 32;  // Bytes per access in pattern benchmarks (cache line alignment)
-  constexpr size_t PATTERN_MIN_BUFFER_SIZE_BYTES = 32;  // Minimum buffer size for pattern benchmarks
   constexpr size_t PATTERN_STRIDE_CACHE_LINE = 64;  // Cache line stride (bytes)
   constexpr size_t PATTERN_STRIDE_PAGE = 4096;  // Page stride (bytes)
   constexpr size_t PATTERN_STRIDE_PAGE_16K = 16 * 1024;  // Apple Silicon page-size stride candidate (bytes)
@@ -344,18 +343,12 @@ namespace Constants {
       BANDWIDTH_CALIBRATION_MAX_SECONDS;
   constexpr size_t PATTERN_CALIBRATION_MAX_CORRECTIONS =
       BANDWIDTH_CALIBRATION_MAX_CORRECTIONS;
-  constexpr int PATTERN_JSON_SCHEMA_VERSION = 3;
-  constexpr const char* PATTERN_METHODOLOGY_VERSION =
-      "pattern-v2-phase-calibrated-seeded";
   constexpr size_t PATTERN_CALIBRATION_MIN_PILOT_BYTES =
       BANDWIDTH_CALIBRATION_MIN_PILOT_BYTES;
   constexpr size_t PATTERN_CALIBRATION_MAX_PASSES =
       BANDWIDTH_CALIBRATION_MAX_PASSES;
   constexpr size_t PATTERN_RANDOM_ACCESS_MIN = 1000;  // Minimum number of random accesses
   constexpr size_t PATTERN_RANDOM_ACCESS_MAX = 1000000;  // Maximum number of random accesses
-  constexpr double PATTERN_MIN_TIME_NS = 1e-9;  // Minimum time for bandwidth calculation (nanoseconds)
-  constexpr int PATTERN_PERCENTAGE_PRECISION = 1;  // Decimal places for percentage values
-  constexpr int PATTERN_BANDWIDTH_PRECISION = 3;  // Decimal places for bandwidth values in pattern results
   constexpr double PATTERN_STREAMING_CV_WARNING_PCT = 5.0;
   constexpr double PATTERN_SPARSE_CV_WARNING_PCT = 10.0;
   

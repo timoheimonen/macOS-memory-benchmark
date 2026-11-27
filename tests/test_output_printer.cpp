@@ -21,22 +21,19 @@
 #include "output/console/messages/messages_api.h"
 #include "output/console/output_printer.h"
 
-TEST(OutputPrinterTest, ConfigurationSelectsPatternAutomaticWorkWithoutLatencySection) {
+TEST(OutputPrinterTest, ConfigurationFormatsScalarFieldsWithoutLatencySection) {
   testing::internal::CaptureStdout();
-  print_configuration(1024 * 1024, 1, 2 * 1024 * 1024, 7, 3, false, 256, "auto", 0, "Apple Test", 4, 2, 6,
-                      true, false);
+  print_configuration(1024 * 1024, 1, 2 * 1024 * 1024, 7, 3, false, 256, "auto", 0, "Apple Test", 4, 2, 6);
   const std::string output = testing::internal::GetCapturedStdout();
 
   const std::string expected =
       Messages::config_buffer_size(1.0, 1) + "\n" + Messages::config_total_allocation(2.0) + "\n" +
-      Messages::config_pattern_iterations_auto(Constants::PATTERN_CALIBRATION_TARGET_SECONDS,
-                                               Constants::PATTERN_CALIBRATION_MIN_SECONDS,
-                                               Constants::PATTERN_CALIBRATION_MAX_SECONDS) +
-      "\n" + Messages::config_loop_count(3) + "\n" + Messages::config_non_cacheable(false) + "\n" +
-      Messages::config_latency_stride(256) + "\n" + Messages::config_latency_chain_mode("auto") + "\n" +
-      Messages::config_latency_tlb_locality(0) + "\n" + Messages::config_processor_name("Apple Test") + "\n" +
-      Messages::config_performance_cores(4) + "\n" + Messages::config_efficiency_cores(2) + "\n" +
-      Messages::config_total_cores(6) + "\n" + Messages::config_benchmark_threads(6) + "\n";
+      Messages::config_iterations(7) + "\n" + Messages::config_loop_count(3) + "\n" +
+      Messages::config_non_cacheable(false) + "\n" + Messages::config_latency_stride(256) + "\n" +
+      Messages::config_latency_chain_mode("auto") + "\n" + Messages::config_latency_tlb_locality(0) + "\n" +
+      Messages::config_processor_name("Apple Test") + "\n" + Messages::config_performance_cores(4) + "\n" +
+      Messages::config_efficiency_cores(2) + "\n" + Messages::config_total_cores(6) + "\n" +
+      Messages::config_benchmark_threads(6) + "\n";
   EXPECT_EQ(output, expected);
 }
 

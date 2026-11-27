@@ -15,41 +15,15 @@
 //
 /**
  * @file json_output_api.h
- * @brief JSON output generation for benchmark results
+ * @brief Shared JSON key constants and atomic file writer API
  * @author Timo Heimonen <timo.heimonen@proton.me>
- * @date 2025
- *
- * This header provides the public API and internal functions for generating
- * JSON output files from benchmark results. Uses the nlohmann/json library
- * for JSON manipulation.
- *
- * Features:
- * - Structured JSON output with configuration, results, and metadata
- * - Statistical aggregation (average, percentiles, stddev) for multi-loop runs
- * - Support for main memory, cache, and pattern benchmark results
- * - ISO 8601 timestamp generation
- * - File path resolution and output
- *
- * JSON Structure:
- * - configuration: System info and benchmark parameters
- * - execution_time_sec: Total benchmark duration
- * - main_memory/cache/patterns: Bandwidth and latency results with statistics
- * - timestamp: ISO 8601 UTC timestamp
- * - version: Software version
+ * @date 2026
  */
 #ifndef JSON_OUTPUT_JSON_OUTPUT_API_H
 #define JSON_OUTPUT_JSON_OUTPUT_API_H
 
-#include <cstdlib>  // EXIT_SUCCESS, EXIT_FAILURE
-#include <vector>
-#include <string>
 #include <filesystem>
 #include "third_party/nlohmann/json.hpp"
-
-// Forward declarations
-struct BenchmarkConfig;
-struct PatternResults;
-struct PatternStatistics;
 
 // JSON structure constants
 namespace JsonKeys {
@@ -114,54 +88,8 @@ namespace JsonKeys {
   constexpr const char* RANDOM = "random";
 }
 
-nlohmann::json build_config_json(const BenchmarkConfig& config, const char* mode_name);
-nlohmann::json build_patterns_json(const PatternStatistics& stats);
 int write_json_to_file(const std::filesystem::path& file_path,
                        const nlohmann::ordered_json& json_output,
                        bool announce_success = true);
-
-/**
- * @brief Build the pattern benchmark schema-3 payload in memory.
- *
- * The document shape is governed by
- * `configuration.pattern_schema_version`; this builder performs no output
- * target classification or I/O.
- *
- * @param config Immutable command configuration recorded in the payload.
- * @param stats Immutable pattern statistics and retained per-loop evidence.
- * @param total_execution_time_sec Command elapsed time in seconds.
- * @return A caller-owned ordered JSON value containing the complete schema-3
- *         snapshot. The returned value retains no references to the inputs.
- * @throws std::exception If allocation, timestamp creation, string handling,
- *         or JSON construction fails.
- * @note Concurrent calls are safe when each caller keeps its referenced inputs
- *       immutable for the duration of the call.
- */
-nlohmann::ordered_json build_pattern_results_json(const BenchmarkConfig& config,
-                                                  const PatternStatistics& stats,
-                                                  double total_execution_time_sec);
-
-/**
- * @brief Build and atomically replace a file with pattern schema-3 JSON.
- *
- * This is a legacy file-only adapter. An empty target is a successful no-op.
- * Command code that accepts stdout must first classify the raw target and use
- * `JsonOutputSession` for the exact `-` sentinel.
- *
- * @param config Immutable configuration whose non-empty `output_file` names a
- *        real file target.
- * @param stats Immutable pattern statistics snapshot to serialize.
- * @param total_execution_time_sec Command elapsed time in seconds.
- * @return `EXIT_SUCCESS` for a disabled target or successful atomic replace;
- *         `EXIT_FAILURE` for a contained file-output failure.
- * @throws std::exception If payload construction or output-path resolution
- *         fails before the atomic writer's return-code boundary.
- * @pre A non-empty `config.output_file` is not the exact stdout sentinel `-`.
- * @note The function retains no references and is synchronous. Callers must
- *       not mutate its inputs or target path concurrently.
- */
-int save_pattern_results_to_json(const BenchmarkConfig& config,
-                                 const PatternStatistics& stats,
-                                 double total_execution_time_sec);
 
 #endif // JSON_OUTPUT_JSON_OUTPUT_API_H

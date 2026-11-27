@@ -100,10 +100,6 @@ std::string statistics_max(double value, int precision) {
   return oss.str();
 }
 
-std::string statistics_pattern_bandwidth_header(const std::string& pattern_name) {
-  return "\n" + pattern_name + " Pattern Bandwidth (GB/s):";
-}
-
 std::string statistics_coefficient_of_variation(double value, int precision) {
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(precision)

@@ -620,13 +620,17 @@ TEST(ExecutableCliIntegrationTest, InvalidCommandsFailBeforeOutputAcrossModesInt
       {{"--only-bandwidth"}, Messages::error_unknown_option("--only-bandwidth"), true},
       {{"--only-latency"}, Messages::error_unknown_option("--only-latency"), true},
       {{"--patterns", "--cache-size=256", "--output=-"},
-       Messages::error_patterns_incompatible_option("--cache-size"),
+       Messages::error_option_not_allowed_in_mode(
+           "--cache-size=256",
+           "-P/--patterns, -b/--buffer-size, -t/--threads, -i/--iterations, "
+           "-r/--count, --seed, -u/--non-cacheable, -o/--output, -S/--sweep, "
+           "-X/--sweep-max-runs, -h/--help"),
        true},
       {{"--patterns", "--buffer-size=128", "--sweep=buffer-size=128,256", "--output=-"},
        Messages::error_sweep_option_conflict("--buffer-size", "buffer-size"),
        true},
       {{"--patterns", "--buffer-size", "-G"},
-       Messages::error_invalid_value("--buffer-size", "-G", Messages::reason_signed_integer_invalid()),
+       Messages::error_invalid_value("--buffer-size", "-G", Messages::reason_unsigned_integer_invalid()),
        true},
       {{"--patterns=1"}, Messages::error_option_does_not_take_value("--patterns"), true},
       {{"--patterns", "--patterns"}, Messages::error_duplicate_option("--patterns"), true},
@@ -639,7 +643,11 @@ TEST(ExecutableCliIntegrationTest, InvalidCommandsFailBeforeOutputAcrossModesInt
        Messages::error_gpu_buffer_size_below_minimum(63, Constants::GPU_MIN_BUFFER_SIZE_MB),
        true},
       {{"--patterns", "--output", "-", "--not-a-real-option"},
-       Messages::error_unknown_option("--not-a-real-option"),
+       Messages::error_option_not_allowed_in_mode(
+           "--not-a-real-option",
+           "-P/--patterns, -b/--buffer-size, -t/--threads, -i/--iterations, "
+           "-r/--count, --seed, -u/--non-cacheable, -o/--output, -S/--sweep, "
+           "-X/--sweep-max-runs, -h/--help"),
        true},
       {{"--analyze-core2core", "--output", "-", "--buffer-size", "256"},
        Messages::error_option_not_allowed_in_mode("--buffer-size",
@@ -786,16 +794,13 @@ TEST(ExecutableCliIntegrationTest, PatternAndCpuSweepFileAndStdoutIntegration) {
       const nlohmann::json& nested = run["result"];
       EXPECT_EQ(nested["status"], "complete");
       EXPECT_TRUE(nested["results_complete"].get<bool>());
+      EXPECT_EQ(nested["schema_version"], 1);
+      EXPECT_EQ(nested["mode"], test_case.base_mode);
+      EXPECT_EQ(nested["configuration"]["output_file"], "");
+      EXPECT_TRUE(nested["run_accepted"].get<bool>());
       if (test_case.is_pattern) {
-        EXPECT_EQ(nested["configuration"]["mode"], test_case.base_mode);
-        EXPECT_EQ(nested["configuration"]["pattern_schema_version"], Constants::PATTERN_JSON_SCHEMA_VERSION);
-        EXPECT_EQ(nested["planned_loops"], test_case.loops);
-        EXPECT_EQ(nested["completed_loops"], test_case.loops);
-      } else {
-        EXPECT_EQ(nested["schema_version"], 1);
-        EXPECT_EQ(nested["mode"], test_case.base_mode);
-        EXPECT_EQ(nested["configuration"]["output_file"], "");
-        EXPECT_TRUE(nested["run_accepted"].get<bool>());
+        EXPECT_EQ(nested["counters"]["planned_loops"], test_case.loops);
+        EXPECT_EQ(nested["counters"]["completed_loops"], test_case.loops);
       }
     }
   }
@@ -810,28 +815,28 @@ TEST(ExecutableCliIntegrationTest, PatternBenchmarkWritesSingleJsonDocumentToStd
     const CliResult result = run_memory_benchmark(args);
     expect_process_completed(result);
     ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.stderr_output;
-    const nlohmann::json json = expect_stdout_json_transport(result, Messages::msg_running_pattern_benchmarks());
-    EXPECT_EQ(json["configuration"]["mode"], Constants::PATTERNS_JSON_MODE_NAME);
-    EXPECT_EQ(json["configuration"]["pattern_schema_version"], Constants::PATTERN_JSON_SCHEMA_VERSION);
+    const nlohmann::json json = expect_stdout_json_transport(result, "Patterns Mode (schema v1)");
+    EXPECT_EQ(json["schema_version"], 1);
+    EXPECT_EQ(json["mode"], Constants::PATTERNS_JSON_MODE_NAME);
+    EXPECT_EQ(json["methodology_version"], "patterns-v1-arm64-phase-calibrated-seeded-balanced");
     EXPECT_EQ(json["status"], "complete");
     EXPECT_TRUE(json["results_complete"].get<bool>());
-    EXPECT_EQ(json["planned_loops"], 1u);
-    EXPECT_EQ(json["completed_loops"], 1u);
+    EXPECT_TRUE(json["run_accepted"].get<bool>());
+    EXPECT_EQ(json["counters"]["planned_loops"], 1u);
+    EXPECT_EQ(json["counters"]["completed_loops"], 1u);
+    EXPECT_EQ(json["resolved_plan"]["patterns"]["strided_2mb"]["status"], "skipped");
+    EXPECT_EQ(json["resolved_plan"]["patterns"]["strided_2mb"]["reason_code"],
+              "buffer-too-small-for-stride-transition");
+    EXPECT_FALSE(json["calibration"]["attempts"].contains("strided_2mb"));
     if (automatic_calibration) {
-      EXPECT_NE(result.stderr_output.find("automatic duration calibration"), std::string::npos);
-      EXPECT_EQ(json["configuration"]["pattern_pass_policy"], "automatic-duration-calibration");
-      EXPECT_EQ(json["configuration"]["calibration_max_corrections"], 2u);
-      for (const auto& pattern : json["patterns"].items()) {
-        for (const auto& operation : pattern.value()["bandwidth"].items()) {
-          ASSERT_EQ(operation.value()["measurements"].size(), 1u);
-          const nlohmann::json& measurement = operation.value()["measurements"][0];
-          if (measurement["status"] == "measured") {
-            EXPECT_TRUE(measurement["automatic_calibration"].get<bool>());
-            EXPECT_GT(measurement["pilot_elapsed_seconds"].get<double>(), 0.0);
-            EXPECT_GT(measurement["elapsed_seconds"].get<double>(), 0.0);
-            EXPECT_GT(measurement["passes"].get<size_t>(), 0u);
-          }
-        }
+      EXPECT_NE(result.stderr_output.find("automatic_calibration"), std::string::npos);
+      EXPECT_EQ(json["configuration"]["work_policy"], "automatic_calibration");
+      ASSERT_FALSE(json["calibration"]["attempts"].empty());
+      for (const auto& row : json["measurements"]) {
+        EXPECT_EQ(row["status"], "measured");
+        EXPECT_TRUE(row["execution"]["timing"]["valid"].get<bool>());
+        EXPECT_TRUE(row["execution"]["timing"]["cpu_raw"].is_object());
+        EXPECT_GT(row["execution"]["timing"]["elapsed_seconds"].get<double>(), 0.0);
       }
     }
   }

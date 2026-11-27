@@ -38,6 +38,7 @@ from cpu_verify_common import (
     equal,
     hash_binary,
     integer,
+    partition_64b,
     require,
     rotl64,
     run_verifier_cli,
@@ -153,30 +154,6 @@ def bw_pass_xor(target_src_seed, offset_bytes, span_bytes, table_cache=None):
         tail_xor ^= (w_val >> (8 * (pos & 7))) & 0xFF
 
     return (vec_xor ^ tail_xor) & U64
-
-
-def partition_64b(total_bytes, workers):
-    """Canonical 64-byte aligned partition across workers."""
-    active = min(total_bytes, workers)
-    if active <= 0:
-        return [(0, 0)] * workers
-    boundaries = [0]
-    for rank in range(1, active):
-        target = total_bytes // active * rank + min(rank, total_bytes % active)
-        lo = boundaries[-1] + 1
-        hi = total_bytes - (active - rank)
-        target = max(lo, min(hi, target))
-        aligned_lo = ((lo + 63) // 64) * 64
-        aligned_hi = (hi // 64) * 64
-        if aligned_lo <= aligned_hi:
-            down = max(aligned_lo, min(aligned_hi, (target // 64) * 64))
-            up = min(aligned_hi, down + 64) if down < target else down
-            target = min((down, up), key=lambda x: (abs(x - target), x))
-        boundaries.append(target)
-    boundaries.append(total_bytes)
-    return [(a, b - a) for a, b in zip(boundaries, boundaries[1:])] + [(0, 0)] * (
-        workers - active
-    )
 
 
 def fold_bw_workers(worker_tuples):

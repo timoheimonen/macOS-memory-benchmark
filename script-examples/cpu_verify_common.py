@@ -127,8 +127,11 @@ def load_strict_json(path):
     """Load untrusted JSON enforcing 64 MiB cap, UTF-8, no duplicate keys,
     no non-finite numbers, depth <= 64, and node count <= 1,000,000.
     """
-    with open(path, "rb") as f:
-        data = f.read(MAX_INPUT + 1)
+    if str(path) == "-":
+        data = sys.stdin.buffer.read(MAX_INPUT + 1)
+    else:
+        with open(path, "rb") as f:
+            data = f.read(MAX_INPUT + 1)
     if len(data) > MAX_INPUT:
         raise Rejected("unsupported-input-limit", True)
 
@@ -185,22 +188,54 @@ def splitmix64_next(state):
     return draw, next_state
 
 
+def splitmix64_bounded_draw(state, bound, budget=None):
+    """Draw uniform integer in [0, bound) via SplitMix64 rejection sampling."""
+    if bound <= 1:
+        return 0, state
+    threshold = (1 << 64) % bound
+    while True:
+        draw, state = splitmix64_next(state)
+        if draw >= threshold:
+            return draw % bound, state
+        if budget is not None:
+            budget(1)
+
+
 def fisher_yates_rejection_shuffle(items, state, budget=None):
     """In-place descending Fisher-Yates shuffle using SplitMix64 rejection sampling
     (`splitmix64-fisher-yates-rejection-v1`), returning updated SplitMix64 state.
     """
     n = len(items)
     for bound in range(n, 1, -1):
-        threshold = (1 << 64) % bound
-        while True:
-            draw, state = splitmix64_next(state)
-            if draw >= threshold:
-                break
-            if budget is not None:
-                budget(1)
-        j = draw % bound
+        j, state = splitmix64_bounded_draw(state, bound, budget=budget)
         items[bound - 1], items[j] = items[j], items[bound - 1]
     return state
+
+
+def partition_64b(total_bytes, workers):
+    """Canonical 64-byte aligned partition across workers."""
+    if workers <= 0:
+        return []
+    active = min(total_bytes, workers)
+    if active <= 0:
+        return [(0, 0)] * workers
+    boundaries = [0]
+    for rank in range(1, active):
+        target = total_bytes // active * rank + min(rank, total_bytes % active)
+        lo = boundaries[-1] + 1
+        hi = total_bytes - (active - rank)
+        target = max(lo, min(hi, target))
+        aligned_lo = ((lo + 63) // 64) * 64
+        aligned_hi = (hi // 64) * 64
+        if aligned_lo <= aligned_hi:
+            down = max(aligned_lo, min(aligned_hi, (target // 64) * 64))
+            up = min(aligned_hi, down + 64) if down < target else down
+            target = min((down, up), key=lambda x: (abs(x - target), x))
+        boundaries.append(target)
+    boundaries.append(total_bytes)
+    return [(a, b - a) for a, b in zip(boundaries, boundaries[1:])] + [(0, 0)] * (
+        workers - active
+    )
 
 
 def verify_cpu_raw_timing(raw, elapsed=None):
@@ -658,6 +693,7 @@ def check_quality_warnings(
     iterations,
     rows,
     duration_window,
+    target_key="target",
 ):
     """Validate quality_warnings types, uniqueness, vocabulary, and consistency."""
     require(
@@ -725,7 +761,7 @@ def check_quality_warnings(
                 dq = "above-target-window"
             else:
                 continue
-            tname = row["target"]
+            tname = row[target_key]
             if operations is not None:
                 expected_duration_warnings.add(f"{tname}-{row['operation']}-duration-{dq}")
             else:
@@ -1035,7 +1071,7 @@ def verify_sweep_envelope(
 def run_verifier_cli(verify_fn, description, extra_args_fn=None):
     """Standard CLI entrypoint handling exit codes 0/1/2 and single sorted JSON line."""
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("result")
+    parser.add_argument("result", nargs="?", default=None)
     parser.add_argument("--binary", type=Path)
     parser.add_argument(
         "--require-raw-timing",
@@ -1045,6 +1081,11 @@ def run_verifier_cli(verify_fn, description, extra_args_fn=None):
     if extra_args_fn is not None:
         extra_args_fn(parser)
     args = parser.parse_args()
+    if args.result is None:
+        if not sys.stdin.isatty():
+            args.result = "-"
+        else:
+            parser.error("the following arguments are required: result")
     try:
         doc = load_strict_json(args.result)
         verdict = verify_fn(doc, args)

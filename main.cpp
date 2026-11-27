@@ -41,26 +41,22 @@
 
 #include <cstdlib>  // Exit codes
 #include <exception>
-#include <iomanip>  // Output formatting
 #include <iostream>
 #include <optional>
 #include <string>
 
-#include "utils/benchmark.h"
 #include "core/config/cli_parser.h"
 #include "core/config/config.h"
 #include "core/config/mode_selector.h"
-#include "core/memory/buffer_allocator.h"
 #include "benchmark/core_to_core_latency.h"
 #include "benchmark/sweep_runner.h"
 #include "benchmark/tlb_analysis.h"
 #include "cpu_bandwidth/cpu_bandwidth.h"
 #include "cpu_latency/cpu_latency.h"
 #include "output/console/messages/messages_api.h"
-#include "core/config/constants.h"
-#include "output/json/json_output/json_output_api.h"
+#include "output/console/output_printer.h"
 #include "output/json/json_output/json_output_session.h"
-#include "pattern_benchmark/pattern_benchmark.h"
+#include "pattern_benchmark/patterns.h"
 #include "core/signal/signal_handler.h"
 #include "core/system/benchmark_qos.h"
 #include "gpu_bandwidth/gpu_bandwidth.h"
@@ -95,23 +91,6 @@ void report_json_output_boundary_failure(const std::string& raw_output,
   } catch (...) {
     // A secondary diagnostic failure must not escape the command boundary.
   }
-}
-
-template <typename Builder>
-int build_and_write_final_json(JsonOutputSession& session,
-                               const std::string& raw_output,
-                               Builder&& builder) noexcept {
-  try {
-    return session.write_final(builder());
-  } catch (const std::exception& error) {
-    report_json_output_boundary_failure(
-        raw_output,
-        Messages::error_json_payload_construction_failed(error.what()));
-  } catch (...) {
-    report_json_output_boundary_failure(
-        raw_output, Messages::error_json_payload_construction_failed(""));
-  }
-  return EXIT_FAILURE;
 }
 
 }  // namespace
@@ -153,10 +132,10 @@ int build_and_write_final_json(JsonOutputSession& session,
  *       the command thread. Core-to-core mode instead requests QoS independently
  *       for its workers.
  * @note All allocated buffers are automatically freed when going out of scope
- * @note Pattern mode owns one shared source/destination pair for the command lifetime.
+ * @note Standalone modes manage their own configuration, buffers, and JSON output.
  *
- * @see parse_arguments() for command-line argument details
- * @see run_all_pattern_benchmarks() for pattern benchmark execution
+ * @see parse_arguments() for TLB/general argument parsing
+ * @see run_patterns_mode() for standalone pattern benchmark execution
  */
 int main(int argc, char *argv[]) {
   // Install signal handlers early (before any benchmark logic)
@@ -197,6 +176,9 @@ int main(int argc, char *argv[]) {
   if (mode_selection.mode == PrimaryBenchmarkMode::CpuLatency) {
     return run_cpu_latency_mode(argc, argv);
   }
+  if (mode_selection.mode == PrimaryBenchmarkMode::Patterns) {
+    return run_patterns_mode(argc, argv);
+  }
   if (mode_selection.mode == PrimaryBenchmarkMode::LlmMemory) {
     return run_llm_memory_mode(argc, argv);
   }
@@ -233,7 +215,7 @@ int main(int argc, char *argv[]) {
   }
 
   // Reject modifier-only invocations without a primary mode before opening any JSON output session.
-  if (!config.analyze_tlb && !config.run_patterns) {
+  if (!config.analyze_tlb) {
     validate_config(config);
     return EXIT_FAILURE;
   }
@@ -316,85 +298,5 @@ int main(int argc, char *argv[]) {
     });
   }
 
-  if (validate_config(config) != EXIT_SUCCESS) {
-    return EXIT_FAILURE;
-  }
-
-  // Start total execution timer for pattern benchmark execution.
-  auto timer_opt = HighResTimer::create();
-  if (!timer_opt) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_timer_creation_failed()
-              << std::endl;
-    return EXIT_FAILURE;
-  }
-  auto& total_execution_timer = *timer_opt;
-  total_execution_timer.start();
-
-  calculate_buffer_sizes(config);
-  calculate_access_counts(config);
-
-  size_t peak_allocation_bytes = 0;
-  if (calculate_total_allocation_bytes(config, peak_allocation_bytes) != EXIT_SUCCESS) {
-    return EXIT_FAILURE;
-  }
-
-  // --- Print Config ---
-  print_runtime_banner();
-  print_configuration(config.buffer_size, config.buffer_size_mb, peak_allocation_bytes,
-                      config.iterations, config.loop_count,
-                      config.use_non_cacheable, config.latency_stride_bytes,
-                      latency_chain_mode_to_string(resolve_latency_chain_mode(
-                          config.latency_chain_mode, config.latency_tlb_locality_bytes)),
-                      config.latency_tlb_locality_bytes,
-                      config.cpu_name, config.perf_cores, config.eff_cores, config.num_threads,
-                      config.run_patterns, config.user_specified_iterations);
-  print_cache_info(config.l1_cache_size, config.l2_cache_size, config.use_custom_cache_size,
-                   config.custom_cache_size_bytes);
-
-  // --- Run Benchmarks ---
-  const int benchmark_result = run_with_benchmark_preparation(config, [&]() {
-    // The pattern coordinator owns its shared src/dst mappings.
-    PatternStatistics pattern_stats;
-    const int pattern_run_status =
-        run_all_pattern_benchmarks(config, pattern_stats);
-
-    // Print detailed single-loop results or robust median headlines for repeated loops.
-    if (config.loop_count == 1 && !pattern_stats.loop_results.empty()) {
-      print_pattern_results(extract_pattern_results_at(pattern_stats, 0));
-    } else if (!pattern_stats.loop_results.empty()) {
-      print_pattern_results(extract_pattern_median_results(pattern_stats));
-
-      // Print summary statistics
-      print_pattern_statistics(config.loop_count, pattern_stats);
-    }
-
-    // --- Save JSON Output if requested ---
-    if (output_session->kind() != JsonOutputKind::Disabled) {
-      double total_elapsed_time_sec = total_execution_timer.stop();
-      if (build_and_write_final_json(
-              *output_session, config.output_file,
-              [&]() {
-                return build_pattern_results_json(
-                    config, pattern_stats, total_elapsed_time_sec);
-              }) != EXIT_SUCCESS) {
-        return EXIT_FAILURE;
-      }
-    }
-
-    if (pattern_run_status != EXIT_SUCCESS) {
-      return pattern_run_status;
-    }
-
-    return EXIT_SUCCESS;
-  });
-  if (benchmark_result != EXIT_SUCCESS) {
-    return benchmark_result;
-  }
-
-  // --- Print Total Time ---
-  double total_elapsed_time_sec = total_execution_timer.stop();                      // Stop overall timer
-  std::cout << Messages::msg_done_total_time(total_elapsed_time_sec) << std::endl;  // Print duration
-
-  return EXIT_SUCCESS;  // Indicate success
+  return EXIT_FAILURE;
 }

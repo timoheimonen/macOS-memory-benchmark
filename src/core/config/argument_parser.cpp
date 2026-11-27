@@ -21,8 +21,8 @@
  * @date 2026
  *
  * This file implements the descriptor-driven command-line argument parser for
- * the pattern (`-P/--patterns`) and standalone TLB analysis (`-T/--analyze-tlb`)
- * modes.
+ * standalone TLB analysis (`-T/--analyze-tlb`) and general help/modifier-only
+ * preflight diagnostics.
  *
  * Syntactic scanning (short flags, long flags, `--option=value`, duplicate
  * detection, missing values, unexpected values, and unknown options) is handled
@@ -155,8 +155,6 @@ constexpr const char* OPT_NON_CACHEABLE_SHORT = "-u";
 constexpr const char* OPT_NON_CACHEABLE_LONG = "--non-cacheable";
 constexpr const char* OPT_OUTPUT_SHORT = "-o";
 constexpr const char* OPT_OUTPUT_LONG = "--output";
-constexpr const char* OPT_PATTERNS_SHORT = "-P";
-constexpr const char* OPT_PATTERNS_LONG = "--patterns";
 constexpr const char* OPT_SEED_LONG = "--seed";
 constexpr const char* OPT_SWEEP_SHORT = "-S";
 constexpr const char* OPT_SWEEP_LONG = "--sweep";
@@ -201,8 +199,7 @@ constexpr std::array<CliOptionSpec, 9> kTlbOptionSpecs{{
 }};
 
 enum GeneralOptionId {
-  GEN_OPT_PATTERNS = 1,
-  GEN_OPT_NON_CACHEABLE,
+  GEN_OPT_NON_CACHEABLE = 1,
   GEN_OPT_HELP,
   GEN_OPT_ITERATIONS,
   GEN_OPT_BUFFER_SIZE,
@@ -219,9 +216,7 @@ enum GeneralOptionId {
   GEN_OPT_SWEEP_MAX_RUNS,
 };
 
-constexpr std::array<CliOptionSpec, 16> kGeneralOptionSpecs{{
-    {GEN_OPT_PATTERNS, OPT_PATTERNS_SHORT, OPT_PATTERNS_LONG,
-     CliOptionValueKind::None, CliOptionArity::Single},
+constexpr std::array<CliOptionSpec, 15> kGeneralOptionSpecs{{
     {GEN_OPT_NON_CACHEABLE, OPT_NON_CACHEABLE_SHORT, OPT_NON_CACHEABLE_LONG,
      CliOptionValueKind::None, CliOptionArity::Single},
     {GEN_OPT_HELP, OPT_HELP_SHORT, OPT_HELP_LONG,
@@ -588,14 +583,10 @@ int parse_general_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   bool has_requested_threads = false;
   long long requested_latency_tlb_locality_kb_ll = -1;
   bool seed_seen = false;
-  uint64_t parsed_general_seed = 0;
 
   for (const CliParsedOption& opt : parsed.options) {
     try {
       switch (opt.id) {
-        case GEN_OPT_PATTERNS:
-          config.run_patterns = true;
-          break;
         case GEN_OPT_NON_CACHEABLE:
           config.use_non_cacheable = true;
           break;
@@ -693,7 +684,7 @@ int parse_general_arguments(int argc, char* argv[], BenchmarkConfig& config) {
           config.output_file = opt.value;
           break;
         case GEN_OPT_SEED:
-          parsed_general_seed = parse_unsigned_decimal_or_throw(opt.value);
+          (void)parse_unsigned_decimal_or_throw(opt.value);
           seed_seen = true;
           break;
         case GEN_OPT_SWEEP:
@@ -763,10 +754,7 @@ int parse_general_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   }
 
   if (seed_seen) {
-    config.pattern_seed = parsed_general_seed;
-    config.user_specified_pattern_seed = true;
-  } else if (config.run_patterns) {
-    config.pattern_seed = generate_config_seed();
+    config.user_specified_seed = true;
   }
 
   return EXIT_SUCCESS;
