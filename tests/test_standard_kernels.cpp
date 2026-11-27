@@ -19,9 +19,10 @@
 #include "asm/asm_functions.h"
 #include "benchmark/benchmark_tests.h"
 #include "benchmark/parallel_test_framework.h"
-#include "benchmark/benchmark_work_plan.h"
+#include "core/config/constants.h"
 #include "core/memory/memory_utils.h"
 #include "core/timing/timer.h"
+#include "test_timer_system_calls.h"
 
 extern "C" uint64_t verify_pattern_callee_saved_registers_asm(
     uintptr_t function_address, uintptr_t arg0, uintptr_t arg1, uintptr_t arg2,
@@ -119,23 +120,6 @@ uint64_t expected_random_checksum(const unsigned char* data,
 using ReadKernel = uint64_t (*)(const void*, size_t);
 using WriteKernel = void (*)(void*, size_t);
 using CopyKernel = void (*)(void*, const void*, size_t);
-
-std::atomic<size_t> fake_read_bytes{0};
-std::atomic<size_t> fake_read_calls{0};
-std::atomic<size_t> fake_copy_bytes{0};
-std::atomic<size_t> fake_copy_calls{0};
-
-uint64_t fake_read_kernel(const void*, size_t size) {
-  fake_read_bytes.fetch_add(size, std::memory_order_relaxed);
-  fake_read_calls.fetch_add(1, std::memory_order_relaxed);
-  return static_cast<uint64_t>(size);
-}
-
-void fake_copy_kernel(void* destination, const void* source, size_t size) {
-  std::memcpy(destination, source, size);
-  fake_copy_bytes.fetch_add(size, std::memory_order_relaxed);
-  fake_copy_calls.fetch_add(1, std::memory_order_relaxed);
-}
 
 void verify_read_kernel_boundaries(ReadKernel kernel) {
   for (size_t size : kTailSizes) {
@@ -466,50 +450,148 @@ TEST(StandardKernelIntegrationTest, StandardAndPatternKernelsPreserveCalleeSaved
             1u);
 }
 
-TEST(StandardKernelIntegrationTest, ExecutorConsumesPlannerAccountingExactly) {
-  constexpr size_t kSize = 513;
-  constexpr size_t kPasses = 3;
-  alignas(64) std::array<unsigned char, kSize> source{};
-  alignas(64) std::array<unsigned char, kSize> destination{};
+namespace {
+
+uint64_t deterministic_executor_timer_tick = 0;
+
+uint64_t deterministic_executor_timer_ticks() {
+  deterministic_executor_timer_tick += 100;
+  return deterministic_executor_timer_tick;
+}
+
+void reset_deterministic_executor_timer_ticks() {
+  deterministic_executor_timer_tick = 0;
+}
+
+struct ThreadExitTickProbe {
+  std::atomic<uint64_t>* observed_tick;
+
+  ~ThreadExitTickProbe() {
+    observed_tick->store(deterministic_executor_timer_tick,
+                         std::memory_order_relaxed);
+  }
+};
+
+using ScopedDeterministicExecutorTimerSystemCalls =
+    test_timer_system_calls::ScopedTimerSystemCalls<
+        deterministic_executor_timer_ticks,
+        reset_deterministic_executor_timer_ticks>;
+
+}  // namespace
+
+TEST(StandardKernelIntegrationTest,
+     ParallelExecutorConsumesAlignedUnevenChunksExactly) {
+  const ScopedDeterministicExecutorTimerSystemCalls timer_system_calls;
+  alignas(Constants::CACHE_LINE_SIZE_BYTES)
+      std::array<unsigned char, 2049> buffer{};
   auto timer = HighResTimer::create();
   ASSERT_TRUE(timer.has_value());
 
-  BenchmarkWorkPlan read_plan = build_benchmark_bandwidth_work_plan(
-      kSize, 4, kPasses, BenchmarkTarget::MainMemory,
-      BenchmarkOperation::Read);
-  ASSERT_EQ(read_plan.status, BenchmarkMeasurementStatus::Measured);
-  fake_read_bytes.store(0, std::memory_order_relaxed);
-  fake_read_calls.store(0, std::memory_order_relaxed);
-  uint64_t checksum = 0;
-  ParallelExecutionMetadata read_metadata;
-  EXPECT_GT(run_read_test_with_plan(source.data(), read_plan, checksum, *timer,
-                                    fake_read_kernel, &read_metadata),
-            0.0);
-  EXPECT_EQ(fake_read_bytes.load(std::memory_order_relaxed),
-            read_plan.total_payload_bytes);
-  EXPECT_EQ(fake_read_calls.load(std::memory_order_relaxed) / kPasses,
-            static_cast<size_t>(read_plan.effective_threads));
-  EXPECT_EQ(read_metadata.created_workers, read_plan.effective_threads);
-  EXPECT_EQ(read_metadata.qos_successful_workers +
-                read_metadata.qos_failed_workers,
-            static_cast<size_t>(read_plan.effective_threads));
-  EXPECT_FALSE(read_metadata.worker_startup_failed);
+  std::array<size_t, 10> observed_offsets{};
+  std::array<size_t, 10> observed_sizes{};
+  std::array<std::atomic<bool>, 10> executed;
+  for (std::atomic<bool>& flag : executed) {
+    flag.store(false, std::memory_order_relaxed);
+  }
+  auto make_work = [&](size_t offset, size_t size, int iterations,
+                       size_t worker_index) {
+    observed_offsets[worker_index] = offset;
+    observed_sizes[worker_index] = size;
+    EXPECT_EQ(iterations, 1);
+    return [&, worker_index] {
+      executed[worker_index].store(true, std::memory_order_relaxed);
+    };
+  };
+  ParallelExecutionMetadata metadata;
+  const double elapsed = run_parallel_test_common(
+      buffer.data(), buffer.size(), 1, 10, *timer, "partition-test", make_work,
+      nullptr, &metadata);
 
-  BenchmarkWorkPlan copy_plan = build_benchmark_bandwidth_work_plan(
-      kSize, 4, kPasses, BenchmarkTarget::MainMemory,
-      BenchmarkOperation::Copy);
-  ASSERT_EQ(copy_plan.status, BenchmarkMeasurementStatus::Measured);
-  fake_copy_bytes.store(0, std::memory_order_relaxed);
-  fake_copy_calls.store(0, std::memory_order_relaxed);
-  ParallelExecutionMetadata copy_metadata;
-  EXPECT_GT(run_copy_test_with_plan(destination.data(), source.data(), copy_plan,
-                                    *timer, fake_copy_kernel, &copy_metadata),
-            0.0);
-  EXPECT_EQ(fake_copy_bytes.load(std::memory_order_relaxed) * 2,
-            copy_plan.total_payload_bytes);
-  EXPECT_EQ(fake_copy_calls.load(std::memory_order_relaxed) / kPasses,
-            static_cast<size_t>(copy_plan.effective_threads));
-  EXPECT_EQ(copy_metadata.created_workers, copy_plan.effective_threads);
+  EXPECT_DOUBLE_EQ(elapsed, 100.0 / 1e9);
+  EXPECT_EQ(metadata.created_workers, 10);
+  EXPECT_FALSE(metadata.worker_startup_failed);
+
+  size_t covered = 0;
+  for (size_t index = 0; index < observed_offsets.size(); ++index) {
+    EXPECT_EQ(observed_offsets[index], covered);
+    EXPECT_GT(observed_sizes[index], 0u);
+    EXPECT_TRUE(executed[index].load(std::memory_order_relaxed));
+    covered += observed_sizes[index];
+    if (index + 1 < observed_offsets.size()) {
+      const uintptr_t boundary_address =
+          reinterpret_cast<uintptr_t>(buffer.data()) + covered;
+      EXPECT_EQ(boundary_address % Constants::CACHE_LINE_SIZE_BYTES, 0u);
+    }
+  }
+  EXPECT_EQ(covered, buffer.size());
+}
+
+TEST(StandardKernelIntegrationTest, ParallelTimingStopsBeforeWorkerTeardown) {
+  const ScopedDeterministicExecutorTimerSystemCalls timer_system_calls;
+  std::array<unsigned char, 4096> buffer{};
+  auto timer = HighResTimer::create();
+  ASSERT_TRUE(timer.has_value());
+
+  uint64_t tick_during_work = 0;
+  std::atomic<uint64_t> tick_at_worker_teardown{0};
+  auto make_work = [&](size_t, size_t, int, size_t) {
+    return [&] {
+      thread_local ThreadExitTickProbe probe{&tick_at_worker_teardown};
+      static_cast<void>(probe);
+      tick_during_work = deterministic_executor_timer_tick;
+    };
+  };
+
+  const double measured_duration = run_parallel_test_common(
+      buffer.data(), buffer.size(), 1, 1, *timer, "timing_test", make_work);
+
+  EXPECT_DOUBLE_EQ(measured_duration, 100.0 / 1e9);
+  EXPECT_EQ(tick_during_work, 100u);
+  EXPECT_EQ(tick_at_worker_teardown.load(std::memory_order_relaxed), 200u);
+  EXPECT_EQ(deterministic_executor_timer_tick, 200u);
+}
+
+TEST(StandardKernelIntegrationTest,
+     LatencySamplingClampsAndContinuesFromPriorTerminalPointer) {
+  const ScopedDeterministicExecutorTimerSystemCalls timer_system_calls;
+  auto timer = HighResTimer::create();
+  ASSERT_TRUE(timer.has_value());
+
+  auto verify_sampling = [&](int requested_samples,
+                             const std::vector<size_t>& expected_access_counts,
+                             const std::vector<double>& expected_samples) {
+    reset_deterministic_executor_timer_ticks();
+    std::array<uintptr_t, 8> nodes{};
+    std::vector<uintptr_t*> observed_starts;
+    std::vector<size_t> observed_access_counts;
+    size_t chase_calls = 0;
+    LatencyMeasurementTestHooks hooks;
+    hooks.chase = [&](uintptr_t* start, size_t access_count) {
+      observed_starts.push_back(start);
+      observed_access_counts.push_back(access_count);
+      ++chase_calls;
+      return &nodes[chase_calls];
+    };
+
+    std::vector<double> samples;
+    const double total_duration_ns = run_latency_test(
+        &nodes[0], 7, *timer, &samples, requested_samples, &hooks);
+
+    std::vector<uintptr_t*> expected_starts;
+    for (size_t index = 0; index < expected_access_counts.size(); ++index) {
+      expected_starts.push_back(&nodes[index]);
+    }
+    EXPECT_DOUBLE_EQ(
+        total_duration_ns,
+        100.0 * static_cast<double>(expected_access_counts.size()));
+    EXPECT_EQ(samples, expected_samples);
+    EXPECT_EQ(observed_starts, expected_starts);
+    EXPECT_EQ(observed_access_counts, expected_access_counts);
+  };
+
+  verify_sampling(3, {3, 2, 2}, {100.0 / 3.0, 50.0, 50.0});
+  verify_sampling(100, {1, 1, 1, 1, 1, 1, 1},
+                  {100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0});
 }
 
 TEST(StandardKernelIntegrationTest, WorkerStartupFailureIsDeterministicAndNotMeasured) {
@@ -532,4 +614,105 @@ TEST(StandardKernelIntegrationTest, WorkerStartupFailureIsDeterministicAndNotMea
   EXPECT_EQ(metadata.requested_workers, 2);
   EXPECT_EQ(metadata.created_workers, 1);
   EXPECT_EQ(metadata.qos_successful_workers + metadata.qos_failed_workers, 1u);
+  EXPECT_FALSE(metadata.timing_snapshot.has_value());
+}
+
+namespace {
+std::atomic<uint64_t> deterministic_kernel_ticks{0};
+
+void reset_deterministic_kernel_ticks() {
+  deterministic_kernel_ticks.store(0, std::memory_order_relaxed);
+}
+
+uint64_t next_deterministic_kernel_ticks() {
+  const uint64_t call =
+      deterministic_kernel_ticks.fetch_add(1, std::memory_order_relaxed);
+  return call == 0 ? 1000ULL : 2500ULL;
+}
+}  // namespace
+
+TEST(StandardKernelIntegrationTest, ParallelExecutionMetadataPropagatesMachTimingSnapshot) {
+  test_timer_system_calls::ScopedTimerSystemCalls<
+      next_deterministic_kernel_ticks, reset_deterministic_kernel_ticks>
+      scoped_timer;
+
+  alignas(64) std::array<unsigned char, 4096> buffer{};
+  auto timer = HighResTimer::create();
+  ASSERT_TRUE(timer.has_value());
+
+  ParallelExecutionMetadata metadata;
+  auto make_work = [](size_t, size_t, int, size_t) {
+    return [] {};
+  };
+
+  const double elapsed = run_parallel_test_common(
+      buffer.data(), buffer.size(), 1, 2, *timer, "timing-snapshot",
+      make_work, nullptr, &metadata);
+
+  EXPECT_GT(elapsed, 0.0);
+  EXPECT_FALSE(metadata.worker_startup_failed);
+  ASSERT_TRUE(metadata.timing_snapshot.has_value());
+  ASSERT_TRUE(timer->last_snapshot.has_value());
+  EXPECT_EQ(metadata.timing_snapshot->start_ticks, 1000ULL);
+  EXPECT_EQ(metadata.timing_snapshot->stop_ticks, 2500ULL);
+  EXPECT_EQ(metadata.timing_snapshot->delta_ticks, 1500ULL);
+  EXPECT_EQ(metadata.timing_snapshot->numer, 1u);
+  EXPECT_EQ(metadata.timing_snapshot->denom, 1u);
+}
+
+TEST(StandardKernelIntegrationTest, ParallelExecutionEarlyReturnsLeaveTimingSnapshotNullopt) {
+  alignas(64) std::array<unsigned char, 4096> buffer{};
+  auto timer = HighResTimer::create();
+  ASSERT_TRUE(timer.has_value());
+  auto make_work = [](size_t, size_t, int, size_t) {
+    return [] {};
+  };
+
+  ParallelExecutionMetadata metadata;
+  metadata.timing_snapshot = MachTimingSnapshot{1, 2, 1, 1, 1};
+  EXPECT_EQ(run_parallel_test_common(buffer.data(), 0, 1, 2, *timer, "zero-size",
+                                     make_work, nullptr, &metadata),
+            0.0);
+  EXPECT_FALSE(metadata.timing_snapshot.has_value());
+
+  metadata.timing_snapshot = MachTimingSnapshot{1, 2, 1, 1, 1};
+  EXPECT_EQ(run_parallel_test_common(buffer.data(), buffer.size(), 1, 0, *timer,
+                                     "zero-threads", make_work, nullptr, &metadata),
+            0.0);
+  EXPECT_FALSE(metadata.timing_snapshot.has_value());
+
+  const std::vector<size_t> invalid_boundaries = {0, 100};
+  metadata.timing_snapshot = MachTimingSnapshot{1, 2, 1, 1, 1};
+  EXPECT_EQ(run_parallel_test_common(buffer.data(), buffer.size(), 1, 1, *timer,
+                                     "bad-boundaries", make_work,
+                                     &invalid_boundaries, &metadata),
+            0.0);
+  EXPECT_FALSE(metadata.timing_snapshot.has_value());
+
+  ParallelExecutionTestControl fail_first;
+  fail_first.fail_before_worker_index = 0;
+  metadata.timing_snapshot = MachTimingSnapshot{1, 2, 1, 1, 1};
+  EXPECT_EQ(run_parallel_test_common(buffer.data(), buffer.size(), 1, 2, *timer,
+                                     "fail-first", make_work, nullptr,
+                                     &metadata, &fail_first),
+            0.0);
+  EXPECT_TRUE(metadata.worker_startup_failed);
+  EXPECT_FALSE(metadata.timing_snapshot.has_value());
+
+  const std::vector<size_t> single_boundary = {0};
+  metadata.timing_snapshot = MachTimingSnapshot{1, 2, 1, 1, 1};
+  EXPECT_EQ(run_parallel_test_indexed_with_boundaries(
+                buffer.data(), buffer.size(), 1, *timer, single_boundary,
+                [](void*, size_t, int, size_t) {}, "bad-indexed", &metadata),
+            0.0);
+  EXPECT_FALSE(metadata.timing_snapshot.has_value());
+
+  metadata.timing_snapshot = MachTimingSnapshot{1, 2, 1, 1, 1};
+  EXPECT_EQ(run_parallel_test_copy_indexed_with_boundaries(
+                buffer.data(), buffer.data(), buffer.size(), 1, *timer,
+                single_boundary,
+                [](void*, void*, size_t, int, size_t) {}, "bad-copy-indexed",
+                &metadata),
+            0.0);
+  EXPECT_FALSE(metadata.timing_snapshot.has_value());
 }

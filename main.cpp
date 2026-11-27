@@ -24,15 +24,16 @@
  * output here. The LLM-memory path owns its dedicated production runner and
  * schema-v1 transport behind the standalone command boundary.
  *
- * The program supports six benchmark modes:
- * - Standard benchmarks: Memory bandwidth and latency tests for different cache levels
+ * The program supports seven primary benchmark modes:
+ * - CPU bandwidth: Standalone audited CPU read/write/copy measurements (-B/--cpu-bandwidth)
+ * - CPU latency: Standalone audited CPU pointer-chasing latency measurements (-L/--cpu-latency)
  * - Pattern benchmarks: Access pattern-specific tests (forward, reverse, strided, random)
  * - TLB analysis: Page-native paired locality measurements and boundary analysis
  * - Core-to-core analysis: Best-effort inter-core round-trip latency measurements
  * - GPU bandwidth: Standalone Metal GPU memory read/write/copy measurements
  * - LLM memory profile: Standalone CPU/Metal synthetic decode/prefill memory workloads with contiguous or paged KV
  *
- * Standard, pattern, TLB, core-to-core, and LLM-memory modes also support validated parameter sweeps.
+ * CPU bandwidth, CPU latency, pattern, TLB, core-to-core, and LLM-memory modes also support validated parameter sweeps.
  * GPU bandwidth is intentionally standalone and does not participate in sweeps.
  *
  * @author Timo Heimonen
@@ -50,10 +51,11 @@
 #include "core/config/config.h"
 #include "core/config/mode_selector.h"
 #include "core/memory/buffer_allocator.h"
-#include "benchmark/benchmark_runner.h"
 #include "benchmark/core_to_core_latency.h"
 #include "benchmark/sweep_runner.h"
 #include "benchmark/tlb_analysis.h"
+#include "cpu_bandwidth/cpu_bandwidth.h"
+#include "cpu_latency/cpu_latency.h"
 #include "output/console/messages/messages_api.h"
 #include "core/config/constants.h"
 #include "output/json/json_output/json_output_api.h"
@@ -124,9 +126,9 @@ int build_and_write_final_json(JsonOutputSession& session,
  * preflight, full-size resource preparation, execution, console rendering,
  * and JSON transport.
  *
- * The program supports multiple execution modes:
- * - Bandwidth-only measurements (--only-bandwidth)
- * - Latency-only measurements (--only-latency)
+ * The program supports seven mutually exclusive primary modes:
+ * - CPU bandwidth measurements (--cpu-bandwidth)
+ * - CPU latency measurements (--cpu-latency)
  * - Pattern-specific benchmarks (--patterns)
  * - Standalone TLB analysis (--analyze-tlb)
  * - Standalone core-to-core analysis (--analyze-core2core)
@@ -146,15 +148,14 @@ int build_and_write_final_json(JsonOutputSession& session,
  *         failure. An initialized mode may still emit inspectable terminal
  *         evidence before returning failure.
  *
- * @note Standard, pattern, TLB, sweep, GPU, and LLM-memory entry paths make a
- *       best-effort QOS_CLASS_USER_INTERACTIVE request for the command thread.
- *       Core-to-core mode instead requests QoS independently for its workers.
+ * @note CPU bandwidth, CPU latency, pattern, TLB, sweep, GPU, and LLM-memory
+ *       entry paths make a best-effort QOS_CLASS_USER_INTERACTIVE request for
+ *       the command thread. Core-to-core mode instead requests QoS independently
+ *       for its workers.
  * @note All allocated buffers are automatically freed when going out of scope
- * @note Standard mode uses per-phase allocation; pattern mode owns one shared
- *       source/destination pair for the command lifetime.
+ * @note Pattern mode owns one shared source/destination pair for the command lifetime.
  *
  * @see parse_arguments() for command-line argument details
- * @see run_all_benchmarks() for standard benchmark execution
  * @see run_all_pattern_benchmarks() for pattern benchmark execution
  */
 int main(int argc, char *argv[]) {
@@ -189,6 +190,12 @@ int main(int argc, char *argv[]) {
                      mode_selection.selected_options[1])
               << std::endl;
     return EXIT_FAILURE;
+  }
+  if (mode_selection.mode == PrimaryBenchmarkMode::CpuBandwidth) {
+    return run_cpu_bandwidth_mode(argc, argv);
+  }
+  if (mode_selection.mode == PrimaryBenchmarkMode::CpuLatency) {
+    return run_cpu_latency_mode(argc, argv);
   }
   if (mode_selection.mode == PrimaryBenchmarkMode::LlmMemory) {
     return run_llm_memory_mode(argc, argv);
@@ -226,7 +233,7 @@ int main(int argc, char *argv[]) {
   }
 
   // Reject modifier-only invocations without a primary mode before opening any JSON output session.
-  if (!config.analyze_tlb && !config.run_benchmark && !config.run_patterns) {
+  if (!config.analyze_tlb && !config.run_patterns) {
     validate_config(config);
     return EXIT_FAILURE;
   }
@@ -313,7 +320,7 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
-  // Start total execution timer for standard and pattern benchmark execution.
+  // Start total execution timer for pattern benchmark execution.
   auto timer_opt = HighResTimer::create();
   if (!timer_opt) {
     std::cerr << Messages::error_prefix()
@@ -341,96 +348,42 @@ int main(int argc, char *argv[]) {
                           config.latency_chain_mode, config.latency_tlb_locality_bytes)),
                       config.latency_tlb_locality_bytes,
                       config.cpu_name, config.perf_cores, config.eff_cores, config.num_threads,
-                      config.only_bandwidth, config.only_latency, config.run_patterns,
-                      config.user_specified_iterations);
+                      config.run_patterns, config.user_specified_iterations);
   print_cache_info(config.l1_cache_size, config.l2_cache_size, config.use_custom_cache_size,
                    config.custom_cache_size_bytes);
 
   // --- Run Benchmarks ---
   const int benchmark_result = run_with_benchmark_preparation(config, [&]() {
-    if (config.run_patterns) {
-      // The pattern coordinator owns its shared src/dst mappings.
-      PatternStatistics pattern_stats;
-      const int pattern_run_status =
-          run_all_pattern_benchmarks(config, pattern_stats);
+    // The pattern coordinator owns its shared src/dst mappings.
+    PatternStatistics pattern_stats;
+    const int pattern_run_status =
+        run_all_pattern_benchmarks(config, pattern_stats);
 
-      // Print detailed single-loop results or robust median headlines for repeated loops.
-      if (config.loop_count == 1 && !pattern_stats.loop_results.empty()) {
-        print_pattern_results(extract_pattern_results_at(pattern_stats, 0));
-      } else if (!pattern_stats.loop_results.empty()) {
-        print_pattern_results(extract_pattern_median_results(pattern_stats));
+    // Print detailed single-loop results or robust median headlines for repeated loops.
+    if (config.loop_count == 1 && !pattern_stats.loop_results.empty()) {
+      print_pattern_results(extract_pattern_results_at(pattern_stats, 0));
+    } else if (!pattern_stats.loop_results.empty()) {
+      print_pattern_results(extract_pattern_median_results(pattern_stats));
 
-        // Print summary statistics
-        print_pattern_statistics(config.loop_count, pattern_stats);
+      // Print summary statistics
+      print_pattern_statistics(config.loop_count, pattern_stats);
+    }
+
+    // --- Save JSON Output if requested ---
+    if (output_session->kind() != JsonOutputKind::Disabled) {
+      double total_elapsed_time_sec = total_execution_timer.stop();
+      if (build_and_write_final_json(
+              *output_session, config.output_file,
+              [&]() {
+                return build_pattern_results_json(
+                    config, pattern_stats, total_elapsed_time_sec);
+              }) != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
       }
+    }
 
-      // --- Save JSON Output if requested ---
-      if (output_session->kind() != JsonOutputKind::Disabled) {
-        double total_elapsed_time_sec = total_execution_timer.stop();
-        if (build_and_write_final_json(
-                *output_session, config.output_file,
-                [&]() {
-                  return build_pattern_results_json(
-                      config, pattern_stats, total_elapsed_time_sec);
-                }) != EXIT_SUCCESS) {
-          return EXIT_FAILURE;
-        }
-      }
-
-      if (pattern_run_status != EXIT_SUCCESS) {
-        return pattern_run_status;
-      }
-    } else {
-      // Run standard benchmarks
-      std::cout << Messages::msg_running_benchmarks() << std::endl;
-
-      BenchmarkStatistics stats;
-      const int standard_run_status =
-          run_all_benchmarks(config, stats, nullptr, &*output_session);
-
-      // --- Print Stats ---
-      // Print summary statistics if more than one loop was run
-      if (standard_run_status == EXIT_SUCCESS) {
-        print_statistics(config.loop_count, stats.all_read_bw_gb_s, stats.all_write_bw_gb_s, stats.all_copy_bw_gb_s,
-                         stats.all_l1_latency_ns, stats.all_l2_latency_ns,
-                         stats.all_l1_read_bw_gb_s, stats.all_l1_write_bw_gb_s, stats.all_l1_copy_bw_gb_s,
-                         stats.all_l2_read_bw_gb_s, stats.all_l2_write_bw_gb_s, stats.all_l2_copy_bw_gb_s,
-                         stats.all_average_latency_ns,
-                         stats.all_tlb_hit_latency_ns,
-                         stats.all_tlb_miss_latency_ns,
-                         stats.all_page_walk_penalty_ns,
-                         config.use_custom_cache_size,
-                         stats.all_custom_latency_ns, stats.all_custom_read_bw_gb_s,
-                         stats.all_custom_write_bw_gb_s, stats.all_custom_copy_bw_gb_s,
-                         stats.all_main_mem_latency_samples,
-                         stats.all_l1_latency_samples,
-                         stats.all_l2_latency_samples,
-                         stats.all_custom_latency_samples,
-                         config.only_bandwidth,
-                         config.only_latency);
-      }
-
-      // --- Save JSON Output if requested ---
-      // A failed file checkpoint is terminal and must not be retried here.
-      // Stdout checkpoints are successful no-ops, so a failed run can still
-      // emit its representable terminal evidence exactly once.
-      const bool write_standard_final = should_write_standard_final_json(
-          output_session->kind(), standard_run_status);
-      if (write_standard_final) {
-        double total_elapsed_time_sec = total_execution_timer.stop();
-        if (build_and_write_final_json(
-                *output_session, config.output_file,
-                [&]() {
-                  return build_results_json(
-                      config, stats, total_elapsed_time_sec);
-                }) != EXIT_SUCCESS) {
-          return EXIT_FAILURE;
-        }
-      }
-
-      if (standard_run_status != EXIT_SUCCESS) {
-        return standard_run_status;
-      }
+    if (pattern_run_status != EXIT_SUCCESS) {
+      return pattern_run_status;
     }
 
     return EXIT_SUCCESS;

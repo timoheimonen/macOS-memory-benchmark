@@ -13,8 +13,9 @@ mkdir -p "${TMP_DIR}"
 
 # Prefer the binary built in the repository; allow an explicit override or an
 # installed memory_benchmark from PATH when the local binary is unavailable.
-# Whichever producer is selected must emit the supported standard schema 3 and
-# methodology; extraction below intentionally rejects incompatible contracts.
+# Whichever producer is selected must emit the supported CPU latency schema 1
+# (mode: "cpu_latency") and methodology; extraction below intentionally rejects
+# incompatible contracts.
 DEFAULT_BENCHMARK="${SCRIPT_DIR}/../memory_benchmark"
 if [ -x "${DEFAULT_BENCHMARK}" ]; then
     BENCHMARK_CMD="${BENCHMARK_CMD:-${DEFAULT_BENCHMARK}}"
@@ -24,7 +25,6 @@ fi
 BUFFER_SIZE_MB=0
 LATENCY_SAMPLES=5000
 LOOP_COUNT=5
-ONLY_LATENCY=true
 tlb_locality_sizes_kb=(16 512 1024 2048 4096 8192 16384 32768)
 
 # Leave empty by default for cleaner cache-hierarchy latency runs.
@@ -50,7 +50,7 @@ elif ! command -v "${BENCHMARK_CMD}" > /dev/null 2>&1; then
 fi
 
 echo "Configuration:"
-echo "  --only-latency: ${ONLY_LATENCY}"
+echo "  Mode: --cpu-latency"
 echo "  --buffer-size: ${BUFFER_SIZE_MB} MB"
 echo "  --latency-samples: ${LATENCY_SAMPLES}"
 echo "  --count: ${LOOP_COUNT}"
@@ -77,7 +77,7 @@ for tlb_kb in "${tlb_locality_sizes_kb[@]}"; do
 
         cmd=(
             "${BENCHMARK_CMD}"
-            --benchmark
+            --cpu-latency
             --latency-tlb-locality-kb "${tlb_kb}"
             --cache-size "${cache_size}"
             --buffer-size "${BUFFER_SIZE_MB}"
@@ -85,10 +85,6 @@ for tlb_kb in "${tlb_locality_sizes_kb[@]}"; do
             --latency-samples "${LATENCY_SAMPLES}"
             --count "${LOOP_COUNT}"
         )
-
-        if [ "${ONLY_LATENCY}" = true ]; then
-            cmd+=("--only-latency")
-        fi
 
         if [ -n "${NON_CACHEABLE}" ]; then
             cmd+=("${NON_CACHEABLE}")
@@ -139,7 +135,7 @@ final_output="${SCRIPT_DIR}/final_output.txt"
 # Clear/create the final output file
 > "${final_output}"
 
-# Function to extract supported standard schema-3 pooled sample statistics.
+# Function to extract supported CPU latency schema-1 pooled sample statistics.
 extract_with_jq() {
     local json_file=$1
     local cache_size=$2
@@ -147,18 +143,20 @@ extract_with_jq() {
     local extracted_file="${TMP_DIR}/extracted_tlb_${tlb_kb}_cache_${cache_size}.json"
     if ! jq '
              if type != "object"
+                  or (.schema_version | type) != "number"
+                  or .schema_version != 1
+                  or .mode != "cpu_latency"
+                  or .methodology_version != "cpu-latency-v1-arm64-calibrated-seeded-balanced"
+                  or (.software | type) != "object"
+                  or (.software.version | type) != "string"
+                  or (.software.version | length) == 0
                   or (.configuration | type) != "object"
-                  or (.version | type) != "string"
-                  or (.version | length) == 0
-                  or .configuration.mode != "benchmark"
-                  or .configuration.benchmark_schema_version != 3
-                  or .configuration.methodology_version != "benchmark-v2-calibrated-seeded-balanced"
+                  or (.configuration.output_file | type) != "string"
                   or .status != "complete"
                   or .results_complete != true
-                  or .conclusions_valid != true
-                  or (.configuration.output_file | type) != "string"
-               then error("not a complete supported standard schema-3 benchmark result")
-               else .cache.custom.latency.headline_ns.pooled_sample_distribution.statistics
+                  or .run_accepted != true
+               then error("not a complete supported CPU latency schema-1 result")
+               else .aggregates.targets.custom.pooled_sample_distribution.statistics
                end
              | if type == "object"
                   and .average != null and .median != null
@@ -179,7 +177,7 @@ extract_with_jq() {
     rm -f "${extracted_file}"
 }
 
-# Function to extract supported standard schema-3 pooled sample statistics.
+# Function to extract supported CPU latency schema-1 pooled sample statistics.
 extract_with_python() {
     local json_file=$1
     local cache_size=$2
@@ -190,30 +188,36 @@ import json
 import sys
 
 
-def require_supported_standard_result(data):
+def require_supported_cpu_latency_result(data):
+    software = data.get("software") if isinstance(data, dict) else None
     configuration = data.get("configuration") if isinstance(data, dict) else None
     if not (
-        isinstance(configuration, dict)
-        and isinstance(data.get("version"), str)
-        and bool(data["version"])
-        and configuration.get("mode") == "benchmark"
-        and type(configuration.get("benchmark_schema_version")) is int
-        and configuration["benchmark_schema_version"] == 3
-        and configuration.get("methodology_version") == "benchmark-v2-calibrated-seeded-balanced"
+        isinstance(data, dict)
+        and type(data.get("schema_version")) is int
+        and data["schema_version"] == 1
+        and data.get("mode") == "cpu_latency"
+        and data.get("methodology_version") == "cpu-latency-v1-arm64-calibrated-seeded-balanced"
+        and isinstance(software, dict)
+        and isinstance(software.get("version"), str)
+        and bool(software["version"])
+        and isinstance(configuration, dict)
+        and isinstance(configuration.get("output_file"), str)
         and data.get("status") == "complete"
         and data.get("results_complete") is True
-        and data.get("conclusions_valid") is True
-        and isinstance(configuration.get("output_file"), str)
+        and data.get("run_accepted") is True
     ):
-        raise RuntimeError("not a complete supported standard schema-3 benchmark result")
+        raise RuntimeError("not a complete supported CPU latency schema-1 result")
 
 
 try:
-    with open(sys.argv[1], 'r') as f:
+    with open(sys.argv[1], 'r', encoding='utf-8') as f:
         data = json.load(f)
-        require_supported_standard_result(data)
-        latency = data['cache']['custom']['latency']
-        stats = latency['headline_ns']['pooled_sample_distribution']['statistics']
+        require_supported_cpu_latency_result(data)
+        custom_target = data['aggregates']['targets']['custom']
+        pooled = custom_target.get('pooled_sample_distribution')
+        if not isinstance(pooled, dict) or not isinstance(pooled.get('statistics'), dict):
+            raise RuntimeError('missing latency statistics')
+        stats = pooled['statistics']
         required_statistics = ('average', 'median', 'p90', 'p95', 'p99', 'min', 'max', 'stddev')
         missing_statistics = [name for name in required_statistics if stats.get(name) is None]
         if missing_statistics:

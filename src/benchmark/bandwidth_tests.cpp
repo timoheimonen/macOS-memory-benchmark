@@ -29,10 +29,6 @@
  * - High-resolution timing via HighResTimer
  */
 
-#include <cstdint>               // For uint64_t
-#include <limits>
-#include <vector>
-
 #include "benchmark/benchmark_tests.h"  // Function declarations
 #include "core/timing/timer.h"  // HighResTimer
 #include "asm/asm_functions.h"  // Assembly function declarations
@@ -73,39 +69,6 @@ double run_copy_test_impl(void* dst,
 
 }  // namespace
 
-double run_read_test_with_plan(void* buffer,
-                               const BenchmarkWorkPlan& plan,
-                               uint64_t& checksum,
-                               HighResTimer& timer,
-                               uint64_t (*read_func)(const void*, size_t),
-                               ParallelExecutionMetadata* execution_metadata) {
-  if (plan.status != BenchmarkMeasurementStatus::Measured ||
-      plan.operation != BenchmarkOperation::Read || plan.passes == 0 ||
-      plan.passes > static_cast<size_t>(std::numeric_limits<int>::max())) {
-    return 0.0;
-  }
-
-  std::vector<uint64_t> worker_checksums(plan.workers.size(), 0);
-  const double elapsed = run_parallel_test_indexed_with_boundaries(
-      buffer, plan.buffer_size_bytes, static_cast<int>(plan.passes), timer,
-      plan.boundaries,
-      [read_func, &worker_checksums](char* chunk_start, size_t chunk_size,
-                                    int iterations, size_t worker_index) {
-        uint64_t local_checksum = 0;
-        for (int iteration = 0; iteration < iterations; ++iteration) {
-          local_checksum ^= read_func(chunk_start, chunk_size);
-        }
-        worker_checksums[worker_index] = local_checksum;
-      },
-      "read", execution_metadata);
-
-  checksum = 0;
-  for (const uint64_t worker_checksum : worker_checksums) {
-    checksum ^= worker_checksum;
-  }
-  return elapsed;
-}
-
 /**
  * @brief Executes the multi-threaded write bandwidth benchmark.
  *
@@ -130,34 +93,11 @@ double run_read_test_with_plan(void* buffer,
  * @note Thread synchronization and alignment are handled by run_parallel_test().
  * @note No checksum validation needed - writes have observable side effects.
  *
- * @see run_read_test_with_plan() for read bandwidth measurement
  * @see run_copy_test() for copy bandwidth measurement
  * @see memory_write_loop_asm() for the low-level write implementation
  */
 double run_write_test(void *buffer, size_t size, int iterations, int num_threads, HighResTimer &timer) {
   return run_write_test_impl(buffer, size, iterations, num_threads, timer, memory_write_loop_asm);
-}
-
-double run_write_test_with_plan(void* buffer,
-                                const BenchmarkWorkPlan& plan,
-                                HighResTimer& timer,
-                                void (*write_func)(void*, size_t),
-                                ParallelExecutionMetadata* execution_metadata) {
-  if (plan.status != BenchmarkMeasurementStatus::Measured ||
-      plan.operation != BenchmarkOperation::Write || plan.passes == 0 ||
-      plan.passes > static_cast<size_t>(std::numeric_limits<int>::max())) {
-    return 0.0;
-  }
-  return run_parallel_test_indexed_with_boundaries(
-      buffer, plan.buffer_size_bytes, static_cast<int>(plan.passes), timer,
-      plan.boundaries,
-      [write_func](char* chunk_start, size_t chunk_size, int iterations,
-                   size_t) {
-        for (int iteration = 0; iteration < iterations; ++iteration) {
-          write_func(chunk_start, chunk_size);
-        }
-      },
-      "write", execution_metadata);
 }
 
 /**
@@ -190,33 +130,9 @@ double run_write_test_with_plan(void* buffer,
  * @note Thread synchronization and alignment are handled by run_parallel_test_copy().
  * @note Copy bandwidth includes both read and write operations.
  *
- * @see run_read_test_with_plan() for read bandwidth measurement
  * @see run_write_test() for write bandwidth measurement
  * @see memory_copy_loop_asm() for the low-level copy implementation
  */
 double run_copy_test(void *dst, void *src, size_t size, int iterations, int num_threads, HighResTimer &timer) {
   return run_copy_test_impl(dst, src, size, iterations, num_threads, timer, memory_copy_loop_asm);
-}
-
-double run_copy_test_with_plan(void* dst,
-                               void* src,
-                               const BenchmarkWorkPlan& plan,
-                               HighResTimer& timer,
-                               void (*copy_func)(void*, const void*, size_t),
-                               ParallelExecutionMetadata* execution_metadata) {
-  if (plan.status != BenchmarkMeasurementStatus::Measured ||
-      plan.operation != BenchmarkOperation::Copy || plan.passes == 0 ||
-      plan.passes > static_cast<size_t>(std::numeric_limits<int>::max())) {
-    return 0.0;
-  }
-  return run_parallel_test_copy_indexed_with_boundaries(
-      dst, src, plan.buffer_size_bytes, static_cast<int>(plan.passes), timer,
-      plan.boundaries,
-      [copy_func](char* dst_chunk, char* src_chunk, size_t chunk_size,
-                  int iterations, size_t) {
-        for (int iteration = 0; iteration < iterations; ++iteration) {
-          copy_func(dst_chunk, src_chunk, chunk_size);
-        }
-      },
-      "copy", execution_metadata);
 }

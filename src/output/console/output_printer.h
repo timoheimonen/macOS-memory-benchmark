@@ -29,7 +29,6 @@
 #include <string>   // std::string
 
 struct BenchmarkConfig;
-struct BenchmarkResults;
 
 // --- Output/Printing Functions ---
 /**
@@ -58,8 +57,6 @@ void print_runtime_banner();
  * @param perf_cores Number of performance cores
  * @param eff_cores Number of efficiency cores
  * @param num_threads Number of threads
- * @param only_bandwidth Whether only bandwidth tests are run
- * @param only_latency Whether only latency tests are run
  * @param run_patterns Whether pattern benchmarks are run (bandwidth-only, uses 2x buffers)
  * @param user_specified_iterations Whether --iterations explicitly disables pattern auto-calibration
  */
@@ -67,16 +64,7 @@ void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total
                           int loop_count, bool use_non_cacheable, size_t latency_stride_bytes,
                           const std::string& latency_chain_mode_name, size_t latency_tlb_locality_bytes,
                           const std::string& cpu_name, int perf_cores, int eff_cores, int num_threads,
-                          bool only_bandwidth, bool only_latency, bool run_patterns,
-                          bool user_specified_iterations);
-
-/**
- * @brief Print results for one loop
- * @param loop Zero-based loop index
- * @param config Configuration used for the loop and output selection
- * @param results Status-aware measurements produced by the loop
- */
-void print_results(int loop, const BenchmarkConfig& config, const BenchmarkResults& results);
+                          bool run_patterns, bool user_specified_iterations);
 
 /**
  * @brief Print cache size information

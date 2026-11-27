@@ -28,6 +28,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/audit/checkpoint_policy.h"
 #include "core/config/constants.h"
 #include "core/config/version.h"
 #include "utils/json_utils.h"
@@ -1532,18 +1533,13 @@ OrderedJson counters_json(const LlmMemoryResult& result) {
 }
 
 OrderedJson checkpoint_lifecycle_json(const LlmMemoryResult& result) {
-  OrderedJson output;
-  output["checkpoint_failed"] = result.checkpoint_failed;
-  output["observation_point"] = "before-current-snapshot-preparation";
-  output["prior_file_writer_attempts"] = result.prior_file_writer_attempts;
-  output["prior_successful_file_writes"] = result.prior_successful_file_writes;
-  output["current_request"] = std::string(result.snapshot_request);
-  output["current_persistence_success"] = nullptr;
-  output["snapshot_interval_loops"] = result.snapshot_interval_loops;
-  output["checkpoint_policy"] = "bounded-loop-snapshots";
-  output["file_checkpoint_failure_is_terminal_and_not_retried"] = true;
-  output["stdout_intermediate_checkpoints_are_lazy"] = true;
-  return output;
+  return build_checkpoint_lifecycle_json(CheckpointLifecycleState{
+      result.checkpoint_failed,
+      result.prior_file_writer_attempts,
+      result.prior_successful_file_writes,
+      result.snapshot_request,
+      result.snapshot_interval_loops,
+  });
 }
 
 OrderedJson loop_records_json(const LlmMemoryResult& result) {

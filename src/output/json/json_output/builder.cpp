@@ -20,7 +20,7 @@
  * @date 2025
  *
  * This file provides the shared configuration builder used by the active
- * status-bearing standard and pattern JSON producers.
+ * status-bearing pattern JSON producer.
  *
  * Functions:
  * - build_config_json(): Creates configuration section with system info
@@ -88,56 +88,6 @@ nlohmann::json build_config_json(const BenchmarkConfig& config, const char* mode
         "fixed-read-write-copy-with-operation-specific-warmup";
     config_json["native_page_size_bytes"] = get_system_page_size_bytes();
     config_json["qos_policy"] = "best-effort-scheduler-hint-no-core-pinning";
-    config_json["thread_selection_policy"] =
-        config.user_specified_threads ? "explicit-request-capped-to-detected-cores"
-                                      : "detected-core-count-default";
-  } else if (std::string(mode_name) == Constants::BENCHMARK_JSON_MODE_NAME) {
-    config_json["benchmark_schema_version"] =
-        Constants::BENCHMARK_JSON_SCHEMA_VERSION;
-    config_json["output_file"] = config.output_file;
-    config_json["methodology_version"] =
-        Constants::BENCHMARK_METHODOLOGY_VERSION;
-    config_json["benchmark_seed"] = std::to_string(config.benchmark_seed);
-    config_json["benchmark_seed_source"] =
-        config.user_specified_benchmark_seed ? "user" : "generated";
-    config_json["benchmark_seed_encoding"] = "uint64-decimal-string";
-    config_json["bandwidth_work_policy"] =
-        config.user_specified_iterations ? "explicit-iterations"
-                                         : "automatic-duration-calibration";
-    config_json["bandwidth_calibration_target_seconds"] =
-        Constants::BENCHMARK_CALIBRATION_TARGET_SECONDS;
-    config_json["bandwidth_calibration_window_min_seconds"] =
-        Constants::BENCHMARK_CALIBRATION_MIN_SECONDS;
-    config_json["bandwidth_calibration_window_max_seconds"] =
-        Constants::BENCHMARK_CALIBRATION_MAX_SECONDS;
-    config_json["calibration_max_corrections"] =
-        Constants::BENCHMARK_CALIBRATION_MAX_CORRECTIONS;
-    config_json["latency_calibration_target_seconds"] =
-        Constants::BENCHMARK_LATENCY_TARGET_SECONDS;
-    config_json["latency_calibration_window_min_seconds"] =
-        Constants::BENCHMARK_LATENCY_CALIBRATION_MIN_SECONDS;
-    config_json["latency_calibration_window_max_seconds"] =
-        Constants::BENCHMARK_LATENCY_CALIBRATION_MAX_SECONDS;
-    config_json["latency_minimum_complete_chain_cycles"] =
-        Constants::BENCHMARK_LATENCY_MIN_COMPLETE_CYCLES;
-    config_json["phase_execution_order_policy"] =
-        "cyclic-latin-square-across-count-loops";
-    config_json["operation_execution_order_policy"] =
-        "cyclic-read-write-copy-with-operation-specific-warmup";
-    config_json["latency_headline_semantics"] =
-        "one-continuous-pointer-chase-pass";
-    config_json["latency_sample_semantics"] =
-        "separate-continuing-window-pass";
-    config_json["locality_comparison_semantics"] =
-        "paired-alternating-rounds-global-minus-locality-16k";
-    config_json["warmup_semantics"] = "steady-state-warm-memory";
-    config_json["native_page_size_bytes"] = get_system_page_size_bytes();
-    config_json["qos_policy"] =
-        "best-effort-scheduler-hint-no-core-pinning";
-    config_json["main_thread_qos"] = {
-        {"requested", config.main_thread_qos_requested},
-        {"applied", config.main_thread_qos_applied},
-        {"code", config.main_thread_qos_code}};
     config_json["thread_selection_policy"] =
         config.user_specified_threads ? "explicit-request-capped-to-detected-cores"
                                       : "detected-core-count-default";

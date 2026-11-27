@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -8,7 +9,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt # pyright: ignore[reportMissingModuleSource]
 
 # Uses JSON output from, for example:
-# memory_benchmark --benchmark --count 5 --only-latency --output results/<file>.json
+# memory_benchmark --cpu-latency --compare-locality --count 5 --output results/<file>.json
 
 ALLOWED_METRICS = {
     "average": "Average",
@@ -30,13 +31,13 @@ def parse_args():
         "-f",
         "--file",
         required=True,
-        help="Path to a supported standard schema-3 benchmark JSON or console-text statistics file",
+        help="Path to a supported CPU latency schema-1 JSON (run with --compare-locality) or console-text statistics file",
     )
     parser.add_argument(
         "--metric",
         choices=sorted(ALLOWED_METRICS.keys()),
-        default="average",
-        help="Statistic to plot (default: average)",
+        default="median",
+        help="Statistic to plot (default: median)",
     )
     parser.add_argument(
         "--save",
@@ -75,30 +76,82 @@ def resolve_input_path(raw_path: str) -> Path:
     raise RuntimeError(f"Input file not found: {raw_path}")
 
 
-def require_supported_standard_result(data: object, source: str) -> dict:
-    """Require the supported standard schema and methodology contract."""
+def is_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def linear_percentile(sorted_values: list[float], percentile: float) -> float:
+    n = len(sorted_values)
+    if n == 1:
+        return float(sorted_values[0])
+    index = percentile * (n - 1)
+    lower = int(index)
+    upper = lower + 1
+    if upper >= n:
+        return float(sorted_values[-1])
+    weight = index - lower
+    return sorted_values[lower] * (1.0 - weight) + sorted_values[upper] * weight
+
+
+def compute_metric(values: list[float], metric: str, label: str) -> float:
+    if not values:
+        raise RuntimeError(f"Missing measured locality rounds for '{label}'.")
+    sorted_vals = sorted(float(v) for v in values)
+    if metric == "average":
+        return sum(sorted_vals) / len(sorted_vals)
+    if metric == "median":
+        return linear_percentile(sorted_vals, 0.50)
+    if metric == "p90":
+        return linear_percentile(sorted_vals, 0.90)
+    if metric == "p95":
+        return linear_percentile(sorted_vals, 0.95)
+    if metric == "p99":
+        return linear_percentile(sorted_vals, 0.99)
+    if metric == "min":
+        return sorted_vals[0]
+    if metric == "max":
+        return sorted_vals[-1]
+    if metric == "stddev":
+        if len(sorted_vals) <= 1:
+            return 0.0
+        mean = sum(sorted_vals) / len(sorted_vals)
+        variance = sum((v - mean) ** 2 for v in sorted_vals) / (len(sorted_vals) - 1)
+        return math.sqrt(variance)
+    raise RuntimeError(f"Unsupported metric '{metric}'.")
+
+
+def require_supported_cpu_latency_result(data: object, source: str) -> tuple[dict, dict, dict]:
+    """Require the supported CPU latency schema-1 and methodology contract."""
+    software = data.get("software") if isinstance(data, dict) else None
     configuration = data.get("configuration") if isinstance(data, dict) else None
+    environment = data.get("environment") if isinstance(data, dict) else None
     if not (
-        isinstance(configuration, dict)
-        and isinstance(data.get("version"), str)
-        and bool(data["version"])
-        and configuration.get("mode") == "benchmark"
-        and type(configuration.get("benchmark_schema_version")) is int
-        and configuration["benchmark_schema_version"] == 3
-        and configuration.get("methodology_version") == "benchmark-v2-calibrated-seeded-balanced"
+        isinstance(data, dict)
+        and type(data.get("schema_version")) is int
+        and data["schema_version"] == 1
+        and data.get("mode") == "cpu_latency"
+        and data.get("methodology_version") == "cpu-latency-v1-arm64-calibrated-seeded-balanced"
+        and isinstance(software, dict)
+        and isinstance(software.get("version"), str)
+        and bool(software["version"])
+        and isinstance(configuration, dict)
+        and isinstance(configuration.get("output_file"), str)
+        and isinstance(environment, dict)
         and data.get("status") == "complete"
         and data.get("results_complete") is True
-        and data.get("conclusions_valid") is True
-        and isinstance(configuration.get("output_file"), str)
+        and data.get("run_accepted") is True
     ):
         raise RuntimeError(
-            f"{source} is not a complete supported standard schema-3 benchmark result")
-    return configuration
+            f"{source} is not a complete supported CPU latency schema-1 result")
+    return software, configuration, environment
 
 
 def pick_stat(metric_block: dict, metric: str, label: str) -> float:
     try:
-        return float(metric_block["statistics"][metric])
+        val = metric_block["statistics"][metric]
+        if not is_number(val):
+            raise ValueError("non-numeric")
+        return float(val)
     except (KeyError, TypeError, ValueError) as exc:
         raise RuntimeError(f"Missing supported '{metric}' statistic for '{label}'.") from exc
 
@@ -114,68 +167,58 @@ def infer_cpu_name_from_path(path: Path) -> str:
 
 
 def parse_text_statistics(path: Path, metric: str):
-    metric_aliases = {
-        "average": "average",
-        "median": "median",
-        "p90": "p90",
-        "p95": "p95",
-        "p99": "p99",
-        "min": "min",
-        "max": "max",
-        "stddev": "stddev",
-    }
+    if metric != "median":
+        raise RuntimeError(
+            f"Console text output from --cpu-latency only reports P50 (median) hierarchy and locality values; "
+            f"cannot plot '--metric {metric}'. Re-run with -o <file>.json for '{metric}'."
+        )
 
     number = r"([-+]?[0-9]+(?:\.[0-9]+)?)"
-    stat_patterns = {
-        "average": re.compile(rf"^Average:\s*{number}$"),
-        "median": re.compile(rf"^Median\s*\(P50\):\s*{number}$"),
-        "p90": re.compile(rf"^P90:\s*{number}$"),
-        "p95": re.compile(rf"^P95:\s*{number}$"),
-        "p99": re.compile(rf"^P99:\s*{number}$"),
-        "stddev": re.compile(rf"^Stddev:\s*{number}$"),
-        "min": re.compile(rf"^Min:\s*{number}$"),
-        "max": re.compile(rf"^Max:\s*{number}$"),
-    }
+    cpu_re = re.compile(r"^\s*CPU:\s*(.+?)(?:\s*\(|$)")
+    l1_re = re.compile(rf"^\s*L1 Cache\s*:\s*P50={number}\s*ns\b")
+    l2_re = re.compile(rf"^\s*L2 Cache\s*:\s*P50={number}\s*ns\b")
+    loc_re = re.compile(
+        rf"^\s*Locality Comparison:\s*16KB\s+P50={number}\s*ns,\s*Global\s+P50={number}\s*ns,\s*Delta={number}\s*ns"
+    )
 
-    section_aliases = {
-        "L1 Cache": "l1",
-        "L2 Cache": "l2",
-        "16 KiB Locality Latency (ns)": "locality_16k",
-        "Global-Random Latency (ns)": "global_random",
-        "Locality Latency Delta, Global - 16 KiB (ns)": "locality_delta",
-    }
-
-    results = {"l1": {}, "l2": {}, "locality_16k": {}, "global_random": {}, "locality_delta": {}}
-    current_section = None
+    cpu_name = None
+    l1_val = None
+    l2_val = None
+    loc_16k = None
+    loc_global = None
+    loc_delta = None
 
     for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        stripped = raw_line.strip()
-        if not stripped:
+        if cpu_name is None:
+            m_cpu = cpu_re.match(raw_line)
+            if m_cpu and m_cpu.group(1).strip():
+                cpu_name = m_cpu.group(1).strip()
+        m_l1 = l1_re.match(raw_line)
+        if m_l1:
+            l1_val = float(m_l1.group(1))
+            continue
+        m_l2 = l2_re.match(raw_line)
+        if m_l2:
+            l2_val = float(m_l2.group(1))
+            continue
+        m_loc = loc_re.match(raw_line)
+        if m_loc:
+            loc_16k = float(m_loc.group(1))
+            loc_global = float(m_loc.group(2))
+            loc_delta = float(m_loc.group(3))
             continue
 
-        if stripped.endswith(":"):
-            title = stripped[:-1]
-            current_section = section_aliases.get(title)
-            continue
-
-        if current_section is None:
-            continue
-
-        for stat_name, pattern in stat_patterns.items():
-            match = pattern.match(stripped)
-            if match:
-                results[current_section][stat_name] = float(match.group(1))
-                break
-
-    def require_metric(section_key: str, label: str):
-        values = results.get(section_key, {})
-        wanted_key = metric_aliases[metric]
-        if wanted_key in values:
-            return values[wanted_key]
-        if "average" in values:
-            return values["average"]
+    missing = []
+    if l1_val is None:
+        missing.append("L1 Cache P50")
+    if l2_val is None:
+        missing.append("L2 Cache P50")
+    if loc_16k is None or loc_global is None or loc_delta is None:
+        missing.append("Locality Comparison (16KB P50, Global P50, Delta)")
+    if missing:
         raise RuntimeError(
-            f"Missing '{metric}' and fallback 'average' for '{label}' in text statistics file."
+            "Console text file is missing required '--cpu-latency --compare-locality' fields: "
+            + ", ".join(missing)
         )
 
     categories = [
@@ -184,14 +227,70 @@ def parse_text_statistics(path: Path, metric: str):
         "Main Memory\n(16 KiB locality)",
         "Main Memory\n(Global random)",
     ]
-    latencies = [
-        require_metric("l1", "L1 Cache"),
-        require_metric("l2", "L2 Cache"),
-        require_metric("locality_16k", "16 KiB locality latency"),
-        require_metric("global_random", "Global-random latency"),
-    ]
-    delta = require_metric("locality_delta", "Locality latency delta")
-    return infer_cpu_name_from_path(path), categories, latencies, delta, None
+    latencies = [l1_val, l2_val, loc_16k, loc_global]
+    return cpu_name or infer_cpu_name_from_path(path), categories, latencies, loc_delta, None
+
+
+def extract_locality_metrics(data: dict, metric: str) -> tuple[float, float, float]:
+    aggregates = data.get("aggregates")
+    loc_agg = aggregates.get("locality_comparison") if isinstance(aggregates, dict) else None
+    if not isinstance(loc_agg, dict):
+        raise RuntimeError(
+            "JSON is missing locality comparison results. "
+            "Re-run --cpu-latency with --compare-locality."
+        )
+
+    if metric == "median":
+        loc_16k = loc_agg.get("locality_16k_latency_ns")
+        loc_global = loc_agg.get("global_random_latency_ns")
+        delta = loc_agg.get("locality_latency_delta_ns")
+        if is_number(loc_16k) and is_number(loc_global) and is_number(delta):
+            return float(loc_16k), float(loc_global), float(delta)
+        raise RuntimeError("JSON is missing median locality comparison values.")
+
+    loc_raw = data.get("locality_comparison")
+    rounds = loc_raw.get("rounds") if isinstance(loc_raw, dict) else None
+    if not isinstance(rounds, list) or not rounds:
+        raise RuntimeError(
+            f"JSON is missing locality_comparison.rounds required to compute '{metric}'."
+        )
+
+    vals_16k: list[float] = []
+    vals_global: list[float] = []
+    paired_deltas: list[float] = []
+    for rnd in rounds:
+        if not isinstance(rnd, dict):
+            continue
+        sub16 = rnd.get("locality_16k")
+        subg = rnd.get("locality_global")
+        v16 = (
+            float(sub16["latency_ns"])
+            if isinstance(sub16, dict)
+            and sub16.get("status") == "measured"
+            and is_number(sub16.get("latency_ns"))
+            else None
+        )
+        vg = (
+            float(subg["latency_ns"])
+            if isinstance(subg, dict)
+            and subg.get("status") == "measured"
+            and is_number(subg.get("latency_ns"))
+            else None
+        )
+        if v16 is not None:
+            vals_16k.append(v16)
+        if vg is not None:
+            vals_global.append(vg)
+        if v16 is not None and vg is not None:
+            paired_deltas.append(vg - v16)
+
+    loc_16k_val = compute_metric(vals_16k, metric, "16 KiB locality latency")
+    loc_global_val = compute_metric(vals_global, metric, "Global-random latency")
+    if metric == "stddev":
+        delta_val = compute_metric(paired_deltas, "stddev", "Locality latency delta")
+    else:
+        delta_val = loc_global_val - loc_16k_val
+    return loc_16k_val, loc_global_val, delta_val
 
 
 def load_latency_data(path: Path, metric: str):
@@ -201,22 +300,21 @@ def load_latency_data(path: Path, metric: str):
     except json.JSONDecodeError:
         return parse_text_statistics(path, metric)
 
-    config = require_supported_standard_result(data, str(path))
-    cpu_name = str(config.get("cpu_name", "Unknown CPU"))
-    version = data["version"]
+    software, _, environment = require_supported_cpu_latency_result(data, str(path))
+    cpu_name = str(environment.get("processor_name") or "Unknown CPU")
+    version = software["version"]
 
     try:
-        l1_block = data["cache"]["l1"]["latency"]["headline_ns"]
-        l2_block = data["cache"]["l2"]["latency"]["headline_ns"]
-        locality = data["main_memory"]["latency"]["automatic_locality_comparison"]
-        hit_block = locality["locality_16k_latency_ns"]
-        miss_block = locality["global_random_latency_ns"]
-        penalty_block = locality["locality_latency_delta_ns"]
+        targets = data["aggregates"]["targets"]
+        l1_block = targets["l1"]
+        l2_block = targets["l2"]
     except (KeyError, TypeError) as exc:
         raise RuntimeError(
-            "JSON is missing required fields for memory hierarchy plot. "
-            "Expected supported standard schema-3 headline/locality fields."
+            "JSON is missing required L1/L2 target latency aggregates for memory hierarchy plot. "
+            "Expected supported CPU latency schema-1 output (without --cache-size override)."
         ) from exc
+
+    loc_16k, loc_global, delta = extract_locality_metrics(data, metric)
 
     categories = [
         "L1 Cache",
@@ -227,10 +325,9 @@ def load_latency_data(path: Path, metric: str):
     latencies = [
         pick_stat(l1_block, metric, "L1 latency"),
         pick_stat(l2_block, metric, "L2 latency"),
-        pick_stat(hit_block, metric, "16 KiB locality latency"),
-        pick_stat(miss_block, metric, "Global-random latency"),
+        loc_16k,
+        loc_global,
     ]
-    delta = pick_stat(penalty_block, metric, "Locality latency delta")
     return cpu_name, categories, latencies, delta, version
 
 

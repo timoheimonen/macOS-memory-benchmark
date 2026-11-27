@@ -1,0 +1,52 @@
+// Copyright 2026 Timo Heimonen <timo.heimonen@proton.me>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+/**
+ * @file host_environment.h
+ * @brief Process host environment snapshot and binary SHA-256 capture
+ */
+
+#ifndef CORE_AUDIT_HOST_ENVIRONMENT_H
+#define CORE_AUDIT_HOST_ENVIRONMENT_H
+
+#include <cstdint>
+#include <string>
+
+/** Cold-path thermal, power, and physical-memory evidence. */
+struct AuditHostEnvironmentSnapshot {
+  std::string thermal_state = "unavailable";
+  bool low_power_mode_available = false;
+  bool low_power_mode_enabled = false;
+  uint64_t physical_memory_bytes = 0;
+};
+
+/**
+ * Capture process-wide host state without throwing across the command boundary.
+ *
+ * The values are observational metadata only and do not change benchmark work.
+ * Thermal state and Low Power Mode come from `NSProcessInfo`; unavailable
+ * platform fields retain explicit availability state rather than fabricated
+ * nominal values.
+ */
+AuditHostEnvironmentSnapshot capture_host_environment() noexcept;
+
+/**
+ * Stream SHA-256 of the executable path once on the cold command path.
+ * Returns empty on lookup/read failure. This binds a file, not signed execution
+ * attestation; concurrent replacement of that file is outside this evidence.
+ */
+std::string capture_binary_sha256() noexcept;
+
+#endif  // CORE_AUDIT_HOST_ENVIRONMENT_H

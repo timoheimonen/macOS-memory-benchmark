@@ -21,8 +21,8 @@
  * @date 2026
  *
  * This file implements the descriptor-driven command-line argument parser for
- * the standard (`-B/--benchmark`), pattern (`-P/--patterns`), and standalone
- * TLB analysis (`-T/--analyze-tlb`) modes.
+ * the pattern (`-P/--patterns`) and standalone TLB analysis (`-T/--analyze-tlb`)
+ * modes.
  *
  * Syntactic scanning (short flags, long flags, `--option=value`, duplicate
  * detection, missing values, unexpected values, and unknown options) is handled
@@ -133,8 +133,6 @@ namespace {
 
 constexpr const char* OPT_ANALYZE_TLB_SHORT = "-T";
 constexpr const char* OPT_ANALYZE_TLB_LONG = "--analyze-tlb";
-constexpr const char* OPT_BENCHMARK_SHORT = "-B";
-constexpr const char* OPT_BENCHMARK_LONG = "--benchmark";
 constexpr const char* OPT_BUFFER_SIZE_SHORT = "-b";
 constexpr const char* OPT_BUFFER_SIZE_LONG = "--buffer-size";
 constexpr const char* OPT_CACHE_SIZE_SHORT = "-k";
@@ -155,10 +153,6 @@ constexpr const char* OPT_LATENCY_TLB_LOCALITY_SHORT = "-l";
 constexpr const char* OPT_LATENCY_TLB_LOCALITY_LONG = "--latency-tlb-locality-kb";
 constexpr const char* OPT_NON_CACHEABLE_SHORT = "-u";
 constexpr const char* OPT_NON_CACHEABLE_LONG = "--non-cacheable";
-constexpr const char* OPT_ONLY_BANDWIDTH_SHORT = "-W";
-constexpr const char* OPT_ONLY_BANDWIDTH_LONG = "--only-bandwidth";
-constexpr const char* OPT_ONLY_LATENCY_SHORT = "-L";
-constexpr const char* OPT_ONLY_LATENCY_LONG = "--only-latency";
 constexpr const char* OPT_OUTPUT_SHORT = "-o";
 constexpr const char* OPT_OUTPUT_LONG = "--output";
 constexpr const char* OPT_PATTERNS_SHORT = "-P";
@@ -207,10 +201,7 @@ constexpr std::array<CliOptionSpec, 9> kTlbOptionSpecs{{
 }};
 
 enum GeneralOptionId {
-  GEN_OPT_BENCHMARK = 1,
-  GEN_OPT_PATTERNS,
-  GEN_OPT_ONLY_BANDWIDTH,
-  GEN_OPT_ONLY_LATENCY,
+  GEN_OPT_PATTERNS = 1,
   GEN_OPT_NON_CACHEABLE,
   GEN_OPT_HELP,
   GEN_OPT_ITERATIONS,
@@ -228,14 +219,8 @@ enum GeneralOptionId {
   GEN_OPT_SWEEP_MAX_RUNS,
 };
 
-constexpr std::array<CliOptionSpec, 19> kGeneralOptionSpecs{{
-    {GEN_OPT_BENCHMARK, OPT_BENCHMARK_SHORT, OPT_BENCHMARK_LONG,
-     CliOptionValueKind::None, CliOptionArity::Single},
+constexpr std::array<CliOptionSpec, 16> kGeneralOptionSpecs{{
     {GEN_OPT_PATTERNS, OPT_PATTERNS_SHORT, OPT_PATTERNS_LONG,
-     CliOptionValueKind::None, CliOptionArity::Single},
-    {GEN_OPT_ONLY_BANDWIDTH, OPT_ONLY_BANDWIDTH_SHORT, OPT_ONLY_BANDWIDTH_LONG,
-     CliOptionValueKind::None, CliOptionArity::Single},
-    {GEN_OPT_ONLY_LATENCY, OPT_ONLY_LATENCY_SHORT, OPT_ONLY_LATENCY_LONG,
      CliOptionValueKind::None, CliOptionArity::Single},
     {GEN_OPT_NON_CACHEABLE, OPT_NON_CACHEABLE_SHORT, OPT_NON_CACHEABLE_LONG,
      CliOptionValueKind::None, CliOptionArity::Single},
@@ -608,29 +593,8 @@ int parse_general_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   for (const CliParsedOption& opt : parsed.options) {
     try {
       switch (opt.id) {
-        case GEN_OPT_BENCHMARK:
-          config.run_benchmark = true;
-          if (config.run_patterns) {
-            std::cerr << Messages::error_prefix()
-                      << Messages::error_mutually_exclusive_modes(OPT_BENCHMARK_LONG, OPT_PATTERNS_LONG)
-                      << std::endl;
-            return EXIT_FAILURE;
-          }
-          break;
         case GEN_OPT_PATTERNS:
           config.run_patterns = true;
-          if (config.run_benchmark) {
-            std::cerr << Messages::error_prefix()
-                      << Messages::error_mutually_exclusive_modes(OPT_BENCHMARK_LONG, OPT_PATTERNS_LONG)
-                      << std::endl;
-            return EXIT_FAILURE;
-          }
-          break;
-        case GEN_OPT_ONLY_BANDWIDTH:
-          config.only_bandwidth = true;
-          break;
-        case GEN_OPT_ONLY_LATENCY:
-          config.only_latency = true;
           break;
         case GEN_OPT_NON_CACHEABLE:
           config.use_non_cacheable = true;
@@ -704,7 +668,7 @@ int parse_general_arguments(int argc, char* argv[], BenchmarkConfig& config) {
         }
         case GEN_OPT_CACHE_SIZE: {
           const long long val_ll = parse_signed_decimal_or_throw(opt.value);
-          // 0 is accepted here and validated later (allowed only with --only-latency).
+          // 0 is accepted here and validated later.
           if (val_ll < 0 || val_ll > Constants::MAX_CACHE_SIZE_KB ||
               (val_ll > 0 && val_ll < Constants::MIN_CACHE_SIZE_KB)) {
             throw std::out_of_range(Messages::error_cache_size_invalid(
@@ -799,17 +763,10 @@ int parse_general_arguments(int argc, char* argv[], BenchmarkConfig& config) {
   }
 
   if (seed_seen) {
-    if (config.run_benchmark) {
-      config.benchmark_seed = parsed_general_seed;
-      config.user_specified_benchmark_seed = true;
-    } else {
-      config.pattern_seed = parsed_general_seed;
-      config.user_specified_pattern_seed = true;
-    }
+    config.pattern_seed = parsed_general_seed;
+    config.user_specified_pattern_seed = true;
   } else if (config.run_patterns) {
     config.pattern_seed = generate_config_seed();
-  } else if (config.run_benchmark) {
-    config.benchmark_seed = generate_config_seed();
   }
 
   return EXIT_SUCCESS;

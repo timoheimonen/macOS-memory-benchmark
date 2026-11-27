@@ -27,7 +27,6 @@
 #include <utility>
 #include <vector>
 
-#include "benchmark/benchmark_runner.h"
 #include "benchmark/tlb_analysis.h"
 #include "core/config/config.h"
 #include "core/config/constants.h"
@@ -40,7 +39,6 @@
 #include "core/timing/timer.h"
 #include "output/console/messages/messages_api.h"
 #include "output/console/output_printer.h"
-#include "output/console/statistics.h"
 #include "output/json/json_output/json_output_api.h"
 #include "output/json/json_output/json_output_session.h"
 #include "pattern_benchmark/pattern_benchmark.h"
@@ -70,20 +68,14 @@ std::string base_mode_name(const BenchmarkConfig& config) {
   if (config.analyze_tlb) {
     return Constants::TLB_ANALYSIS_JSON_MODE_NAME;
   }
-  if (config.run_patterns) {
-    return Constants::PATTERNS_JSON_MODE_NAME;
-  }
-  return Constants::BENCHMARK_JSON_MODE_NAME;
+  return Constants::PATTERNS_JSON_MODE_NAME;
 }
 
 SweepNestedMode nested_mode_for_config(const BenchmarkConfig& config) {
   if (config.analyze_tlb) {
     return SweepNestedMode::TlbAnalysis;
   }
-  if (config.run_patterns) {
-    return SweepNestedMode::Patterns;
-  }
-  return SweepNestedMode::Standard;
+  return SweepNestedMode::Patterns;
 }
 
 nlohmann::ordered_json build_sweep_parameters_json(const BenchmarkConfig& config) {
@@ -215,46 +207,6 @@ int finalize_run_config(BenchmarkConfig& config) {
   return calculate_total_allocation_bytes(config, peak_allocation_bytes);
 }
 
-int run_standard_sweep_point(BenchmarkConfig& run_config, nlohmann::ordered_json& result_json) {
-  auto timer_opt = HighResTimer::create();
-  if (!timer_opt) {
-    std::cerr << Messages::error_prefix() << Messages::error_timer_creation_failed() << std::endl;
-    return EXIT_FAILURE;
-  }
-  auto& timer = *timer_opt;
-  timer.start();
-
-  if (finalize_run_config(run_config) != EXIT_SUCCESS) {
-    return EXIT_FAILURE;
-  }
-
-  BenchmarkStatistics stats;
-  const int run_status = run_all_benchmarks(run_config, stats);
-
-  const double elapsed_sec = timer.stop();
-  if (run_status == EXIT_SUCCESS) {
-    print_statistics(run_config.loop_count, stats.all_read_bw_gb_s, stats.all_write_bw_gb_s, stats.all_copy_bw_gb_s,
-                     stats.all_l1_latency_ns, stats.all_l2_latency_ns,
-                     stats.all_l1_read_bw_gb_s, stats.all_l1_write_bw_gb_s, stats.all_l1_copy_bw_gb_s,
-                     stats.all_l2_read_bw_gb_s, stats.all_l2_write_bw_gb_s, stats.all_l2_copy_bw_gb_s,
-                     stats.all_average_latency_ns,
-                     stats.all_tlb_hit_latency_ns,
-                     stats.all_tlb_miss_latency_ns,
-                     stats.all_page_walk_penalty_ns,
-                     run_config.use_custom_cache_size,
-                     stats.all_custom_latency_ns, stats.all_custom_read_bw_gb_s,
-                     stats.all_custom_write_bw_gb_s, stats.all_custom_copy_bw_gb_s,
-                     stats.all_main_mem_latency_samples,
-                     stats.all_l1_latency_samples,
-                     stats.all_l2_latency_samples,
-                     stats.all_custom_latency_samples,
-                     run_config.only_bandwidth,
-                     run_config.only_latency);
-  }
-  result_json = build_results_json(run_config, stats, elapsed_sec);
-  return run_status;
-}
-
 int run_pattern_sweep_point(BenchmarkConfig& run_config, nlohmann::ordered_json& result_json) {
   auto timer_opt = HighResTimer::create();
   if (!timer_opt) {
@@ -296,10 +248,7 @@ int run_sweep_point(BenchmarkConfig& run_config,
   if (run_config.analyze_tlb) {
     return run_tlb_sweep_point(run_config, result_json);
   }
-  if (run_config.run_patterns) {
-    return run_pattern_sweep_point(run_config, result_json);
-  }
-  return run_standard_sweep_point(run_config, result_json);
+  return run_pattern_sweep_point(run_config, result_json);
 }
 
 std::string optional_string(const nlohmann::ordered_json& object, const char* key) {
@@ -344,68 +293,6 @@ void update_sweep_output(nlohmann::ordered_json& output_json, const nlohmann::or
   output_json[JsonKeys::EXECUTION_TIME_SEC] = elapsed_sec;
   output_json[JsonKeys::TIMESTAMP] = timestamp;
   output_json[JsonKeys::VERSION] = SOFTVERSION;
-}
-
-/** Classify only current schema-3 nested standard results. */
-SweepNestedCompletion classify_standard_completion(const nlohmann::ordered_json& result_json) {
-  if (!result_json.is_object()) {
-    return {SweepAttemptStatus::Partial, "missing-standard-schema-version"};
-  }
-  if (result_json.contains("mode") || result_json.contains("schema_version")) {
-    return {SweepAttemptStatus::Partial, "invalid-standard-schema-contract"};
-  }
-  if (!result_json.contains("configuration") ||
-      !result_json["configuration"].is_object()) {
-    return {SweepAttemptStatus::Partial, "missing-standard-schema-version"};
-  }
-
-  const nlohmann::ordered_json& configuration = result_json["configuration"];
-  if (configuration.contains("pattern_schema_version") ||
-      configuration.contains("schema_version") ||
-      configuration.contains("sweep_schema_version")) {
-    return {SweepAttemptStatus::Partial, "invalid-standard-schema-contract"};
-  }
-  if (!configuration.contains("benchmark_schema_version")) {
-    return {SweepAttemptStatus::Partial, "missing-standard-schema-version"};
-  }
-
-  const nlohmann::ordered_json& schema_version =
-      configuration["benchmark_schema_version"];
-  if (!schema_version.is_number_integer() || schema_version != 3) {
-    return {SweepAttemptStatus::Partial,
-            "unsupported-standard-schema-version"};
-  }
-
-  const bool has_current_mode =
-      configuration.contains("mode") && configuration["mode"].is_string() &&
-      configuration["mode"] == Constants::BENCHMARK_JSON_MODE_NAME;
-  const bool has_results_complete =
-      result_json.contains("results_complete") &&
-      result_json["results_complete"].is_boolean();
-  const bool has_conclusions_valid =
-      result_json.contains("conclusions_valid") &&
-      result_json["conclusions_valid"].is_boolean();
-  const bool has_output_file = configuration.contains("output_file") &&
-                               configuration["output_file"].is_string();
-  if (!has_current_mode || !has_results_complete ||
-      !has_conclusions_valid || !has_output_file) {
-    return {SweepAttemptStatus::Partial, "invalid-standard-schema-contract"};
-  }
-
-  const std::string status = optional_string(result_json, "status");
-  const std::string reason = optional_string(result_json, "status_reason");
-  if (status == "complete" &&
-      result_json["results_complete"].get<bool>() &&
-      result_json["conclusions_valid"].get<bool>()) {
-    return {SweepAttemptStatus::Complete, ""};
-  }
-  if (status == "interrupted") {
-    return {SweepAttemptStatus::Interrupted, reason.empty() ? "nested-run-interrupted" : reason};
-  }
-  if (status == "failed") {
-    return {SweepAttemptStatus::Failed, reason.empty() ? "nested-run-failed" : reason};
-  }
-  return {SweepAttemptStatus::Partial, reason.empty() ? "nested-standard-result-incomplete" : reason};
 }
 
 SweepNestedCompletion classify_tlb_completion(const nlohmann::ordered_json& result_json) {
@@ -535,6 +422,122 @@ SweepNestedCompletion classify_llm_memory_completion(const nlohmann::ordered_jso
           reason.empty() ? "nested-llm-result-incomplete" : reason};
 }
 
+SweepNestedCompletion classify_cpu_bandwidth_completion(const nlohmann::ordered_json& result_json) {
+  if (!result_json.is_object() || !result_json.contains("schema_version") ||
+      !result_json.contains("mode")) {
+    return {SweepAttemptStatus::Partial, "missing-cpu-bandwidth-schema-version"};
+  }
+  const nlohmann::ordered_json& schema_version = result_json["schema_version"];
+  if (!schema_version.is_number_integer() || schema_version.is_boolean() ||
+      schema_version != 1) {
+    return {SweepAttemptStatus::Partial, "unsupported-cpu-bandwidth-schema-version"};
+  }
+  const bool has_mode = result_json["mode"].is_string() &&
+                        result_json["mode"] == "cpu_bandwidth";
+  const bool has_status =
+      result_json.contains("status") && result_json["status"].is_string();
+  const bool has_results_complete =
+      result_json.contains("results_complete") &&
+      result_json["results_complete"].is_boolean();
+  const bool has_run_accepted = result_json.contains("run_accepted") &&
+                                result_json["run_accepted"].is_boolean();
+  if (!has_mode || !has_status || !has_results_complete || !has_run_accepted) {
+    return {SweepAttemptStatus::Partial, "invalid-cpu-bandwidth-schema-contract"};
+  }
+
+  const std::string status = optional_string(result_json, "status");
+  const std::string reason = optional_string(result_json, "reason_code");
+  if (status == "complete" &&
+      result_json["results_complete"].get<bool>() &&
+      result_json["run_accepted"].get<bool>()) {
+    if (!result_json.contains("measurements") ||
+        !result_json["measurements"].is_array() ||
+        result_json["measurements"].empty()) {
+      return {SweepAttemptStatus::Partial, "invalid-cpu-bandwidth-schema-contract"};
+    }
+    for (const auto& measurement : result_json["measurements"]) {
+      if (!measurement.is_object() || !measurement.contains("status") ||
+          !measurement["status"].is_string() ||
+          measurement["status"] != "measured") {
+        return {SweepAttemptStatus::Partial, "invalid-cpu-bandwidth-schema-contract"};
+      }
+    }
+    return {SweepAttemptStatus::Complete, ""};
+  }
+  if (status == "interrupted") {
+    return {SweepAttemptStatus::Interrupted,
+            reason.empty() ? "nested-cpu-bandwidth-run-interrupted" : reason};
+  }
+  if (status == "unsupported") {
+    return {SweepAttemptStatus::Failed,
+            reason.empty() ? "nested-cpu-bandwidth-run-unsupported" : reason};
+  }
+  if (status == "failed") {
+    return {SweepAttemptStatus::Failed,
+            reason.empty() ? "nested-cpu-bandwidth-run-failed" : reason};
+  }
+  return {SweepAttemptStatus::Partial,
+          reason.empty() ? "nested-cpu-bandwidth-result-incomplete" : reason};
+}
+
+SweepNestedCompletion classify_cpu_latency_completion(const nlohmann::ordered_json& result_json) {
+  if (!result_json.is_object() || !result_json.contains("schema_version") ||
+      !result_json.contains("mode")) {
+    return {SweepAttemptStatus::Partial, "missing-cpu-latency-schema-version"};
+  }
+  const nlohmann::ordered_json& schema_version = result_json["schema_version"];
+  if (!schema_version.is_number_integer() || schema_version.is_boolean() ||
+      schema_version != 1) {
+    return {SweepAttemptStatus::Partial, "unsupported-cpu-latency-schema-version"};
+  }
+  const bool has_mode = result_json["mode"].is_string() &&
+                        result_json["mode"] == "cpu_latency";
+  const bool has_status =
+      result_json.contains("status") && result_json["status"].is_string();
+  const bool has_results_complete =
+      result_json.contains("results_complete") &&
+      result_json["results_complete"].is_boolean();
+  const bool has_run_accepted = result_json.contains("run_accepted") &&
+                                result_json["run_accepted"].is_boolean();
+  if (!has_mode || !has_status || !has_results_complete || !has_run_accepted) {
+    return {SweepAttemptStatus::Partial, "invalid-cpu-latency-schema-contract"};
+  }
+
+  const std::string status = optional_string(result_json, "status");
+  const std::string reason = optional_string(result_json, "reason_code");
+  if (status == "complete" &&
+      result_json["results_complete"].get<bool>() &&
+      result_json["run_accepted"].get<bool>()) {
+    if (!result_json.contains("measurements") ||
+        !result_json["measurements"].is_array() ||
+        result_json["measurements"].empty()) {
+      return {SweepAttemptStatus::Partial, "invalid-cpu-latency-schema-contract"};
+    }
+    for (const auto& measurement : result_json["measurements"]) {
+      if (!measurement.is_object() || !measurement.contains("status") ||
+          !measurement["status"].is_string() ||
+          measurement["status"] != "measured") {
+        return {SweepAttemptStatus::Partial, "invalid-cpu-latency-schema-contract"};
+      }
+    }
+    return {SweepAttemptStatus::Complete, ""};
+  }
+  if (status == "interrupted") {
+    return {SweepAttemptStatus::Interrupted,
+            reason.empty() ? "nested-cpu-latency-run-interrupted" : reason};
+  }
+  if (status == "unsupported") {
+    return {SweepAttemptStatus::Failed,
+            reason.empty() ? "nested-cpu-latency-run-unsupported" : reason};
+  }
+  if (status == "failed") {
+    return {SweepAttemptStatus::Failed,
+            reason.empty() ? "nested-cpu-latency-run-failed" : reason};
+  }
+  return {SweepAttemptStatus::Partial,
+          reason.empty() ? "nested-cpu-latency-result-incomplete" : reason};
+}
+
 const char* sweep_attempt_status_to_string(SweepAttemptStatus status) {
   switch (status) {
     case SweepAttemptStatus::Complete:
@@ -554,8 +557,6 @@ const char* sweep_attempt_status_to_string(SweepAttemptStatus status) {
 SweepNestedCompletion classify_sweep_nested_completion(SweepNestedMode mode,
                                                        const nlohmann::ordered_json& result_json) {
   switch (mode) {
-    case SweepNestedMode::Standard:
-      return classify_standard_completion(result_json);
     case SweepNestedMode::Patterns:
       return classify_pattern_completion(result_json);
     case SweepNestedMode::TlbAnalysis:
@@ -564,6 +565,10 @@ SweepNestedCompletion classify_sweep_nested_completion(SweepNestedMode mode,
       return classify_core_to_core_completion(result_json);
     case SweepNestedMode::LlmMemory:
       return classify_llm_memory_completion(result_json);
+    case SweepNestedMode::CpuBandwidth:
+      return classify_cpu_bandwidth_completion(result_json);
+    case SweepNestedMode::CpuLatency:
+      return classify_cpu_latency_completion(result_json);
   }
   return {SweepAttemptStatus::Failed, "unknown-sweep-nested-mode"};
 }

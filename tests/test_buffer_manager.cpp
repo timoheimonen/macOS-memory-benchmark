@@ -34,8 +34,6 @@ namespace {
 BenchmarkConfig make_pattern_config() {
   BenchmarkConfig config;
   config.buffer_size = 512;
-  config.only_bandwidth = true;
-  config.only_latency = false;
   config.run_patterns = true;
   config.max_total_allowed_mb = 0;
   return config;
@@ -148,27 +146,18 @@ TEST_F(BufferManagerTest, InvalidPatternAllocationRequestsFailBeforeSystemCalls)
   }
 }
 
-TEST_F(BufferManagerTest, PeakAccountingUsesModeSpecificLiveBuffers) {
+TEST_F(BufferManagerTest, PeakAccountingUsesPatternSourceAndDestinationPair) {
   struct AllocationCase {
     const char* name;
     size_t main_mb;
-    bool only_latency;
-    bool patterns;
-    bool custom_cache;
     size_t expected_mb;
   };
-  for (const AllocationCase& entry : {AllocationCase{"cache peak", 1, false, false, false, 6},
-                                      AllocationCase{"latency custom cache", 0, true, false, true, 43},
-                                      AllocationCase{"patterns", 1, false, true, true, 2}}) {
+  for (const AllocationCase& entry : {AllocationCase{"patterns 1 MiB", 1, 2},
+                                      AllocationCase{"patterns 4 MiB", 4, 8}}) {
     SCOPED_TRACE(entry.name);
     BenchmarkConfig config;
     config.buffer_size = entry.main_mb * Constants::BYTES_PER_MB;
-    config.l1_buffer_size = Constants::BYTES_PER_MB;
-    config.l2_buffer_size = 2 * Constants::BYTES_PER_MB;
-    config.only_latency = entry.only_latency;
-    config.run_patterns = entry.patterns;
-    config.use_custom_cache_size = entry.custom_cache;
-    config.custom_buffer_size = 43 * Constants::BYTES_PER_MB;
+    config.run_patterns = true;
     config.max_total_allowed_mb = 0;
     size_t total_memory_bytes = 0;
     ASSERT_EQ(calculate_total_allocation_bytes(config, total_memory_bytes), EXIT_SUCCESS);

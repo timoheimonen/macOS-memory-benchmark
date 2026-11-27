@@ -108,18 +108,6 @@ namespace Constants {
   constexpr size_t BANDWIDTH_CALIBRATION_MAX_CORRECTIONS = 2;
   constexpr size_t BANDWIDTH_CALIBRATION_MIN_PILOT_BYTES = 8 * BYTES_PER_MB;
   constexpr size_t BANDWIDTH_CALIBRATION_MAX_PASSES = 1000000000;
-  constexpr double BENCHMARK_CALIBRATION_TARGET_SECONDS =
-      BANDWIDTH_CALIBRATION_TARGET_SECONDS;
-  constexpr double BENCHMARK_CALIBRATION_MIN_SECONDS =
-      BANDWIDTH_CALIBRATION_MIN_SECONDS;
-  constexpr double BENCHMARK_CALIBRATION_MAX_SECONDS =
-      BANDWIDTH_CALIBRATION_MAX_SECONDS;
-  constexpr size_t BENCHMARK_CALIBRATION_MAX_CORRECTIONS =
-      BANDWIDTH_CALIBRATION_MAX_CORRECTIONS;
-  constexpr size_t BENCHMARK_CALIBRATION_MIN_PILOT_BYTES =
-      BANDWIDTH_CALIBRATION_MIN_PILOT_BYTES;
-  constexpr size_t BENCHMARK_CALIBRATION_MAX_PASSES =
-      BANDWIDTH_CALIBRATION_MAX_PASSES;
 
   // Standalone GPU memory-bandwidth mode. The calibration values are aliases
   // of the shared bandwidth policy; the dispatch, payload, and grid limits are
@@ -290,9 +278,6 @@ namespace Constants {
   constexpr size_t BENCHMARK_LATENCY_MIN_COMPLETE_CYCLES = 16;
   constexpr size_t BENCHMARK_LATENCY_MAX_ACCESSES = 4000000000ULL;
   constexpr double BENCHMARK_CV_WARNING_PCT = 7.5;
-  constexpr int BENCHMARK_JSON_SCHEMA_VERSION = 3;
-  constexpr const char* BENCHMARK_METHODOLOGY_VERSION =
-      "benchmark-v2-calibrated-seeded-balanced";
   constexpr size_t DEFAULT_SWEEP_MAX_RUNS = 256;  // Default guardrail for generated sweep combinations
   constexpr size_t DEFAULT_ANALYZE_TLB_SWEEP_MAX_RUNS = 16;  // Safer standalone TLB Cartesian sweep limit
   constexpr int SWEEP_JSON_SCHEMA_VERSION = 1;  // Shared general/core-to-core/LLM sweep envelope schema
@@ -328,7 +313,6 @@ namespace Constants {
   constexpr const char CORE_TO_CORE_SCENARIO_NO_AFFINITY[] = "no_affinity_hint";  // Scenario name for no affinity policy hints
   constexpr const char CORE_TO_CORE_SCENARIO_SAME_AFFINITY[] = "same_affinity_tag";  // Scenario name for matching affinity tags
   constexpr const char CORE_TO_CORE_SCENARIO_DIFFERENT_AFFINITY[] = "different_affinity_tags";  // Scenario name for different affinity tags
-  constexpr const char BENCHMARK_JSON_MODE_NAME[] = "benchmark";  // Serialized mode identifier for standard benchmark JSON output
   constexpr const char PATTERNS_JSON_MODE_NAME[] = "patterns";  // Serialized mode identifier for pattern benchmark JSON output
   constexpr const char TLB_ANALYSIS_JSON_MODE_NAME[] = "analyze_tlb";  // Serialized mode identifier for standalone TLB analysis JSON output
   constexpr const char CORE_TO_CORE_JSON_MODE_NAME[] = "analyze_core2core";  // Serialized mode identifier in JSON output

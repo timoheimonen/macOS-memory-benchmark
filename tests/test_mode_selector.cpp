@@ -21,8 +21,9 @@ struct ModeCase {
   const char* long_option;
 };
 
-constexpr std::array<ModeCase, 6> kModeCases{{
-    {PrimaryBenchmarkMode::Standard, "-B", "--benchmark"},
+constexpr std::array<ModeCase, 7> kModeCases{{
+    {PrimaryBenchmarkMode::CpuBandwidth, "-B", "--cpu-bandwidth"},
+    {PrimaryBenchmarkMode::CpuLatency, "-L", "--cpu-latency"},
     {PrimaryBenchmarkMode::Patterns, "-P", "--patterns"},
     {PrimaryBenchmarkMode::AnalyzeTlb, "-T", "--analyze-tlb"},
     {PrimaryBenchmarkMode::AnalyzeCoreToCore, "-C", "--analyze-core2core"},
@@ -122,28 +123,28 @@ TEST(ModeSelectorTest, MissingOutputValueRemainsOwnedByTheParser) {
     const PrimaryModeSelection no_selected_mode =
         select({"program", output_option});
     const PrimaryModeSelection selected_mode =
-        select({"program", "--benchmark", output_option});
+        select({"program", "--cpu-bandwidth", output_option});
 
     EXPECT_EQ(no_selected_mode.mode, PrimaryBenchmarkMode::None);
     EXPECT_TRUE(no_selected_mode.selected_options.empty());
-    EXPECT_EQ(selected_mode.mode, PrimaryBenchmarkMode::Standard);
+    EXPECT_EQ(selected_mode.mode, PrimaryBenchmarkMode::CpuBandwidth);
     ASSERT_EQ(selected_mode.selected_options.size(), 1u);
-    EXPECT_EQ(selected_mode.selected_options.front(), "--benchmark");
+    EXPECT_EQ(selected_mode.selected_options.front(), "--cpu-bandwidth");
   }
 }
 
 TEST(ModeSelectorTest, KnownValueOptionsSkipFlagShapedValuesWithoutModeConflict) {
   const PrimaryModeSelection buffer_size_value =
-      select({"program", "--benchmark", "--buffer-size", "-G"});
-  EXPECT_EQ(buffer_size_value.mode, PrimaryBenchmarkMode::Standard);
+      select({"program", "--cpu-bandwidth", "--buffer-size", "-G"});
+  EXPECT_EQ(buffer_size_value.mode, PrimaryBenchmarkMode::CpuBandwidth);
   ASSERT_EQ(buffer_size_value.selected_options.size(), 1u);
-  EXPECT_EQ(buffer_size_value.selected_options.front(), "--benchmark");
+  EXPECT_EQ(buffer_size_value.selected_options.front(), "--cpu-bandwidth");
 
   const PrimaryModeSelection sweep_value =
-      select({"program", "--benchmark", "--sweep", "-T"});
-  EXPECT_EQ(sweep_value.mode, PrimaryBenchmarkMode::Standard);
+      select({"program", "--cpu-latency", "--sweep", "-T"});
+  EXPECT_EQ(sweep_value.mode, PrimaryBenchmarkMode::CpuLatency);
   ASSERT_EQ(sweep_value.selected_options.size(), 1u);
-  EXPECT_EQ(sweep_value.selected_options.front(), "--benchmark");
+  EXPECT_EQ(sweep_value.selected_options.front(), "--cpu-latency");
 
   const PrimaryModeSelection llm_value =
       select({"program", "--llm-memory", "--layers", "-B", "--output", "-C"});
@@ -152,15 +153,22 @@ TEST(ModeSelectorTest, KnownValueOptionsSkipFlagShapedValuesWithoutModeConflict)
   EXPECT_EQ(llm_value.selected_options.front(), "--llm-memory");
 
   const PrimaryModeSelection inline_output =
-      select({"program", "--output=-G", "--benchmark"});
-  EXPECT_EQ(inline_output.mode, PrimaryBenchmarkMode::Standard);
+      select({"program", "--output=-G", "--cpu-bandwidth"});
+  EXPECT_EQ(inline_output.mode, PrimaryBenchmarkMode::CpuBandwidth);
   ASSERT_EQ(inline_output.selected_options.size(), 1u);
-  EXPECT_EQ(inline_output.selected_options.front(), "--benchmark");
+  EXPECT_EQ(inline_output.selected_options.front(), "--cpu-bandwidth");
 
   const PrimaryModeSelection inline_output_only =
       select({"program", "--output=-G"});
   EXPECT_EQ(inline_output_only.mode, PrimaryBenchmarkMode::None);
   EXPECT_TRUE(inline_output_only.selected_options.empty());
+
+  for (const char* legacy_flag : {"--benchmark", "-W", "--only-bandwidth", "--only-latency"}) {
+    SCOPED_TRACE(legacy_flag);
+    const PrimaryModeSelection legacy = select({"program", legacy_flag});
+    EXPECT_EQ(legacy.mode, PrimaryBenchmarkMode::None);
+    EXPECT_TRUE(legacy.selected_options.empty());
+  }
 }
 
 TEST(ModeSelectorTest, LongModeWithInlineValueRoutesToOwningMode) {

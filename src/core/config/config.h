@@ -157,7 +157,6 @@ struct BenchmarkConfig {
   TlbSweepDensity tlb_sweep_density = TlbSweepDensity::Medium;  ///< Standard profile for standalone --analyze-tlb
   uint64_t tlb_seed = 0;  ///< Reproducible standalone TLB planner/chain seed
   uint64_t pattern_seed = 0;  ///< Reproducible random workload seed for --patterns
-  uint64_t benchmark_seed = 0;  ///< Reproducible workload/schedule seed for --benchmark
   
   // Calculated sizes
   size_t buffer_size = 0;        ///< Final buffer size in bytes (calculated from buffer_size_mb)
@@ -184,12 +183,9 @@ struct BenchmarkConfig {
   
   // Flags
   bool use_custom_cache_size = false;  ///< Whether to use custom cache size
-  bool run_benchmark = false;          ///< Whether to run standard benchmarks
   bool run_patterns = false;           ///< Whether to run pattern benchmarks
   bool use_non_cacheable = false;      ///< Use cache-discouraging hints (best-effort, not true non-cacheable)
   bool user_specified_threads = false; ///< Whether user explicitly set --threads parameter
-  bool only_bandwidth = false;         ///< When true, run only bandwidth tests
-  bool only_latency = false;           ///< When true, run only latency tests
   bool analyze_tlb = false;            ///< When true, run standalone TLB analysis mode
   bool run_sweep = false;              ///< Whether to execute a multi-configuration sweep
   bool help_printed = false;           ///< Whether -h/--help was invoked (usage already printed)
@@ -210,7 +206,6 @@ struct BenchmarkConfig {
   bool user_specified_tlb_density = false;         ///< Whether user explicitly set --tlb-density
   bool user_specified_tlb_seed = false;  ///< Whether user explicitly set --seed
   bool user_specified_pattern_seed = false;  ///< Whether user explicitly set --seed for --patterns
-  bool user_specified_benchmark_seed = false;  ///< Whether user explicitly set --seed for --benchmark
   
   /**
    * Raw command-level JSON output target. Empty disables JSON for a direct

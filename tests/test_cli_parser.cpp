@@ -35,7 +35,7 @@
 namespace {
 
 enum TestOptionId {
-  OPT_BENCHMARK = 1,
+  OPT_CPU_BANDWIDTH = 1,
   OPT_BUFFER_SIZE,
   OPT_OUTPUT,
   OPT_SWEEP,
@@ -43,7 +43,7 @@ enum TestOptionId {
 };
 
 constexpr std::array<CliOptionSpec, 5> kTestSpecs{{
-    {OPT_BENCHMARK, "-B", "--benchmark", CliOptionValueKind::None, CliOptionArity::Single},
+    {OPT_CPU_BANDWIDTH, "-B", "--cpu-bandwidth", CliOptionValueKind::None, CliOptionArity::Single},
     {OPT_BUFFER_SIZE, "-b", "--buffer-size", CliOptionValueKind::RequiredValue, CliOptionArity::Single},
     {OPT_OUTPUT, "-o", "--output", CliOptionValueKind::RequiredValue, CliOptionArity::Single},
     {OPT_SWEEP, "-S", "--sweep", CliOptionValueKind::RequiredValue, CliOptionArity::Repeatable},
@@ -89,9 +89,9 @@ TEST(CliParserTest, ParsesShortLongInlineOpaqueAndRepeatableOptions) {
   EXPECT_EQ(result.error_kind, CliParseErrorKind::None);
   ASSERT_EQ(result.options.size(), 5u);
 
-  EXPECT_EQ(result.options[0].id, OPT_BENCHMARK);
+  EXPECT_EQ(result.options[0].id, OPT_CPU_BANDWIDTH);
   EXPECT_EQ(result.options[0].matched_name, "-B");
-  EXPECT_STREQ(result.options[0].canonical_name, "--benchmark");
+  EXPECT_STREQ(result.options[0].canonical_name, "--cpu-bandwidth");
   EXPECT_FALSE(result.options[0].has_value);
   EXPECT_TRUE(result.options[0].value.empty());
 
@@ -147,7 +147,7 @@ TEST(CliParserTest, PreservesEmptyAndFlagShapedInlineAndSpaceValues) {
 
 TEST(CliParserTest, ReportsDuplicateSingleOptionsAcrossSpellingsAndInlineForms) {
   const std::vector<std::vector<std::string>> duplicate_cases = {
-      {"program", "-B", "--benchmark"},
+      {"program", "-B", "--cpu-bandwidth"},
       {"program", "-b", "128", "--buffer-size", "256"},
       {"program", "--buffer-size=128", "-b", "256"},
       {"program", "-b", "128", "--buffer-size=256"},
@@ -159,7 +159,7 @@ TEST(CliParserTest, ReportsDuplicateSingleOptionsAcrossSpellingsAndInlineForms) 
     const CliParseResult result = parse_with_specs(args, kTestSpecs);
     EXPECT_FALSE(result.ok);
     EXPECT_EQ(result.error_kind, CliParseErrorKind::DuplicateOption);
-    EXPECT_EQ(result.canonical_option, args[1] == "-B" ? "--benchmark" : "--buffer-size");
+    EXPECT_EQ(result.canonical_option, args[1] == "-B" ? "--cpu-bandwidth" : "--buffer-size");
   }
 }
 
@@ -182,13 +182,13 @@ TEST(CliParserTest, ReportsMissingValueForTrailingOrNullArgument) {
 }
 
 TEST(CliParserTest, ReportsUnexpectedValueOnFlagsWithInlineEquals) {
-  for (const std::string& token : {"--benchmark=1", "--benchmark=", "--help=true"}) {
+  for (const std::string& token : {"--cpu-bandwidth=1", "--cpu-bandwidth=", "--help=true"}) {
     SCOPED_TRACE(token);
     const CliParseResult result = parse_with_specs({"program", token}, kTestSpecs);
     EXPECT_FALSE(result.ok);
     EXPECT_EQ(result.error_kind, CliParseErrorKind::UnexpectedValue);
     EXPECT_EQ(result.offending_token, token);
-    EXPECT_EQ(result.canonical_option, token.rfind("--help", 0) == 0 ? "--help" : "--benchmark");
+    EXPECT_EQ(result.canonical_option, token.rfind("--help", 0) == 0 ? "--help" : "--cpu-bandwidth");
   }
 }
 
@@ -240,8 +240,8 @@ TEST(CliParserTest, FormatsAllParseErrorKindsWithAndWithoutModeHint) {
   const CliParseResult duplicate = parse_with_specs({"program", "-b", "1", "--buffer-size", "2"}, kTestSpecs);
   EXPECT_EQ(format_cli_parse_error(duplicate), Messages::error_duplicate_option("--buffer-size"));
 
-  const CliParseResult unexpected = parse_with_specs({"program", "--benchmark=1"}, kTestSpecs);
-  EXPECT_EQ(format_cli_parse_error(unexpected), Messages::error_option_does_not_take_value("--benchmark"));
+  const CliParseResult unexpected = parse_with_specs({"program", "--cpu-bandwidth=1"}, kTestSpecs);
+  EXPECT_EQ(format_cli_parse_error(unexpected), Messages::error_option_does_not_take_value("--cpu-bandwidth"));
 
   const CliParseResult unknown = parse_with_specs({"program", "--threads"}, kTestSpecs);
   EXPECT_EQ(format_cli_parse_error(unknown), Messages::error_unknown_option("--threads"));
@@ -259,7 +259,7 @@ TEST(CliParserTest, ExtractsLongOptionNameOnlyFromDoubleDashTokens) {
   EXPECT_EQ(extract_long_option_name("--sweep=buffer-size=16,32"), "--sweep");
   EXPECT_EQ(extract_long_option_name("--output="), "--output");
   EXPECT_EQ(extract_long_option_name("--gpu-bandwidth=1"), "--gpu-bandwidth");
-  EXPECT_EQ(extract_long_option_name("--benchmark"), "--benchmark");
+  EXPECT_EQ(extract_long_option_name("--cpu-bandwidth"), "--cpu-bandwidth");
   EXPECT_EQ(extract_long_option_name("-b=512"), "-b=512");
   EXPECT_EQ(extract_long_option_name("-B"), "-B");
   EXPECT_EQ(extract_long_option_name("--=value"), "--");
@@ -316,9 +316,11 @@ TEST(CliParserTest, RecognizesAllKnownValueOptionsAcrossAllModes) {
     EXPECT_TRUE(is_known_cli_value_option(option));
   }
 
-  const std::array<std::string_view, 18> non_value_tokens{{
+  const std::array<std::string_view, 17> non_value_tokens{{
       "-B",
-      "--benchmark",
+      "--cpu-bandwidth",
+      "-L",
+      "--cpu-latency",
       "-P",
       "--patterns",
       "-T",
@@ -329,10 +331,7 @@ TEST(CliParserTest, RecognizesAllKnownValueOptionsAcrossAllModes) {
       "--gpu-bandwidth",
       "-M",
       "--llm-memory",
-      "-W",
-      "--only-bandwidth",
-      "-L",
-      "--only-latency",
+      "--compare-locality",
       "--buffer-size=512",
       "--output=-G",
   }};

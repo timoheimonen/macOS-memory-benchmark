@@ -1,0 +1,949 @@
+{
+  "schema_version": 1,
+  "mode": "cpu_latency",
+  "methodology_version": "cpu-latency-v1-arm64-calibrated-seeded-balanced",
+  "software": {
+    "version": "0.65.0",
+    "timestamp": "2026-11-27T07:00:00Z"
+  },
+  "build_manifest": {
+    "manifest_version": 1,
+    "status": "available",
+    "reason_code": "valid",
+    "binary_sha256": "290477ca268c1c2a4527475ffce32373d537d9419cf2c90edfadcb8aacb6805d",
+    "git_commit": "870b175927d747fb1d90fadefebe8728da38407a",
+    "git_dirty": false,
+    "compiler": "Apple clang version 21.0.0",
+    "compile_flags": {
+      "asflags": "-arch arm64",
+      "cxxflags": "-Wall -O3 -std=c++17 -arch arm64",
+      "test_cxxflags": "-Wall -g -std=c++17 -arch arm64"
+    },
+    "link_flags": "-pthread -framework Metal -framework Foundation",
+    "target_arch": "arm64-apple-darwin25.6.0",
+    "sdk": "26.5",
+    "min_os": "26.0"
+  },
+  "configuration": {
+    "buffer_size_mb": 1,
+    "custom_cache_size_kb": 16,
+    "iterations": 4,
+    "work_policy": "explicit_fixed_work",
+    "loop_count": 2,
+    "latency_samples": 4,
+    "latency_stride_bytes": 256,
+    "latency_chain_mode": "auto",
+    "latency_tlb_locality_kb": 1024,
+    "compare_locality": false,
+    "non_cacheable": false,
+    "base_seed_uint64_decimal": "424242",
+    "seed_source": "user",
+    "output_file": "tests/fixtures/cpu-latency-schema-v1-complete-current.json",
+    "argv": [
+      "./memory_benchmark",
+      "--cpu-latency",
+      "-b",
+      "1",
+      "-k",
+      "16",
+      "-i",
+      "4",
+      "-r",
+      "2",
+      "-n",
+      "4",
+      "--seed",
+      "424242"
+    ],
+    "resolved_sources": {
+      "buffer_size": "explicit",
+      "cache_size": "explicit",
+      "iterations": "explicit",
+      "latency_samples": "explicit",
+      "latency_stride_bytes": "default",
+      "latency_chain_mode": "default",
+      "latency_tlb_locality_kb": "default",
+      "seed": "explicit"
+    }
+  },
+  "resolved_plan": {
+    "valid": true,
+    "reason_code": "valid",
+    "plan_identity": "cpu-latency-work-plan-v1|buffer_size_mb=1|custom_cache_size_kb=16|stride=256|mode=random-box",
+    "component_identities": {
+      "version": "cpu-latency-components-v1",
+      "work_plan_version": "cpu-latency-work-plan-v1",
+      "chain_generator_version": "splitmix64-fisher-yates-rejection-v1",
+      "chain_version": "cpu-latency-chain-v1",
+      "run_policy_version": "bounded-loop-snapshots-v1"
+    },
+    "targets": {
+      "custom": {
+        "enabled": true,
+        "bytes": "16384"
+      },
+      "main_memory": {
+        "enabled": true,
+        "bytes": "1048576"
+      }
+    },
+    "resources": {
+      "custom": {
+        "buffer": {
+          "requested_bytes": "16384",
+          "mapped_bytes": "16384",
+          "non_cacheable_requested": false,
+          "madvise_advice": 3,
+          "madvise_applied": true,
+          "madvise_errno": 0,
+          "read_only_protected": true,
+          "mprotect_errno": 0
+        }
+      },
+      "main_memory": {
+        "buffer": {
+          "requested_bytes": "1048576",
+          "mapped_bytes": "1048576",
+          "non_cacheable_requested": false,
+          "madvise_advice": 3,
+          "madvise_applied": true,
+          "madvise_errno": 0,
+          "read_only_protected": true,
+          "mprotect_errno": 0
+        }
+      }
+    },
+    "chain_identities": {
+      "custom": {
+        "node_count": 64,
+        "stride_bytes": 256,
+        "chain_mode": "random-box",
+        "tlb_locality_kb": 1024,
+        "chain_seed_uint64_decimal": "7436701275638583618",
+        "chain_permutation_sha256": "968dc7e052a2c3f576982910159bcde7225ba76697bc3eb7a5cbb999ee159ea9"
+      },
+      "main_memory": {
+        "node_count": 4096,
+        "stride_bytes": 256,
+        "chain_mode": "random-box",
+        "tlb_locality_kb": 1024,
+        "chain_seed_uint64_decimal": "5661157505406129473",
+        "chain_permutation_sha256": "7b2c27666a8b73e9af9989fd5e860feed9cd4943296534ea095ed25ed0eafb94"
+      }
+    },
+    "target_plans": [
+      {
+        "plan_ref": 0,
+        "target": "custom",
+        "complete_chain_cycles": 4,
+        "access_count": 256,
+        "explicit_iterations": true
+      },
+      {
+        "plan_ref": 1,
+        "target": "main_memory",
+        "complete_chain_cycles": 4,
+        "access_count": 16384,
+        "explicit_iterations": true
+      }
+    ],
+    "frozen_plan_refs": {
+      "custom": 0,
+      "main_memory": 1
+    }
+  },
+  "memory_budget": {
+    "resource_rounding_bytes": "0",
+    "transient_peak_bytes": "65536",
+    "setup_peak_bytes": "4096",
+    "runtime_peak_bytes": "1130496",
+    "known_owned_peak_bytes": "1130496",
+    "admitted_budget_bytes": "9270250700",
+    "available_memory_bytes": "11587813376",
+    "allowed_memory_bytes": "9270250700",
+    "used_fallback": false,
+    "valid": true,
+    "reason_code": "within-memory-budget"
+  },
+  "calibration": {
+    "excluded_from_results": true,
+    "attempts": {
+      "custom": [
+        {
+          "attempt_index": 0,
+          "target": "custom",
+          "plan_ref": 0,
+          "purpose": "frozen_measurement_warmup",
+          "duration_quality": "below-target-window",
+          "terminal": true,
+          "valid": true,
+          "reason_code": "valid",
+          "execution": {
+            "status": "valid",
+            "reason_code": "valid",
+            "valid": true,
+            "elapsed_seconds": 1.6666666666666667e-06,
+            "timing": {
+              "cpu_raw": {
+                "start_ticks": "2000000",
+                "stop_ticks": "2000040",
+                "delta_ticks": "40",
+                "timebase_numer": 125,
+                "timebase_denom": 3
+              }
+            },
+            "validation": {
+              "checks": [
+                {
+                  "kind": "post-validation-structure",
+                  "applicable": true,
+                  "evaluated": true,
+                  "valid": true,
+                  "reason_code": "valid"
+                },
+                {
+                  "kind": "chain-hamiltonian-prevalidation",
+                  "applicable": true,
+                  "evaluated": true,
+                  "valid": true,
+                  "reason_code": "valid"
+                },
+                {
+                  "kind": "chain-readonly-protection",
+                  "applicable": true,
+                  "evaluated": true,
+                  "valid": true,
+                  "reason_code": "valid"
+                },
+                {
+                  "kind": "main-final-pointer",
+                  "applicable": true,
+                  "evaluated": true,
+                  "valid": true,
+                  "reason_code": "valid"
+                },
+                {
+                  "kind": "sample-window-end-pointers",
+                  "applicable": false,
+                  "evaluated": null,
+                  "valid": null,
+                  "reason_code": "not-applicable"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "main_memory": [
+        {
+          "attempt_index": 0,
+          "target": "main_memory",
+          "plan_ref": 1,
+          "purpose": "frozen_measurement_warmup",
+          "duration_quality": "below-target-window",
+          "terminal": true,
+          "valid": true,
+          "reason_code": "valid",
+          "execution": {
+            "status": "valid",
+            "reason_code": "valid",
+            "valid": true,
+            "elapsed_seconds": 3.3333333333333335e-05,
+            "timing": {
+              "cpu_raw": {
+                "start_ticks": "2000340",
+                "stop_ticks": "2001140",
+                "delta_ticks": "800",
+                "timebase_numer": 125,
+                "timebase_denom": 3
+              }
+            },
+            "validation": {
+              "checks": [
+                {
+                  "kind": "post-validation-structure",
+                  "applicable": true,
+                  "evaluated": true,
+                  "valid": true,
+                  "reason_code": "valid"
+                },
+                {
+                  "kind": "chain-hamiltonian-prevalidation",
+                  "applicable": true,
+                  "evaluated": true,
+                  "valid": true,
+                  "reason_code": "valid"
+                },
+                {
+                  "kind": "chain-readonly-protection",
+                  "applicable": true,
+                  "evaluated": true,
+                  "valid": true,
+                  "reason_code": "valid"
+                },
+                {
+                  "kind": "main-final-pointer",
+                  "applicable": true,
+                  "evaluated": true,
+                  "valid": true,
+                  "reason_code": "valid"
+                },
+                {
+                  "kind": "sample-window-end-pointers",
+                  "applicable": false,
+                  "evaluated": null,
+                  "valid": null,
+                  "reason_code": "not-applicable"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "measurements": [
+    {
+      "measurement_id": 0,
+      "plan_ref": 0,
+      "target": "custom",
+      "loop_index": 0,
+      "target_order_position": 0,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_accesses": 256,
+      "completed_chain_cycles": 4,
+      "latency_ns": 7.8125,
+      "final_pointer_verification": {
+        "expected_node": 0,
+        "actual_node": 0,
+        "valid": true
+      },
+      "sample_windows": {
+        "timebase": {
+          "timebase_numer": 125,
+          "timebase_denom": 3
+        },
+        "sample_count": 4,
+        "sample_delta_ticks": [
+          "12",
+          "13",
+          "12",
+          "13"
+        ],
+        "samples_ns": [
+          7.8125,
+          8.463541666666666,
+          7.8125,
+          8.463541666666666
+        ],
+        "validation": {
+          "valid": true,
+          "all_end_pointers_valid": true,
+          "end_node_indices": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      },
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 2e-06,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "2001440",
+            "stop_ticks": "2001488",
+            "delta_ticks": "48",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "chain-hamiltonian-prevalidation",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "chain-readonly-protection",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "main-final-pointer",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "sample-window-end-pointers",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "measurement_id": 1,
+      "plan_ref": 1,
+      "target": "main_memory",
+      "loop_index": 0,
+      "target_order_position": 1,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_accesses": 16384,
+      "completed_chain_cycles": 4,
+      "latency_ns": 2.44140625,
+      "final_pointer_verification": {
+        "expected_node": 0,
+        "actual_node": 0,
+        "valid": true
+      },
+      "sample_windows": {
+        "timebase": {
+          "timebase_numer": 125,
+          "timebase_denom": 3
+        },
+        "sample_count": 4,
+        "sample_delta_ticks": [
+          "240",
+          "241",
+          "242",
+          "243"
+        ],
+        "samples_ns": [
+          2.44140625,
+          2.4515787760416665,
+          2.4617513020833335,
+          2.471923828125
+        ],
+        "validation": {
+          "valid": true,
+          "all_end_pointers_valid": true,
+          "end_node_indices": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      },
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 4e-05,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "2001988",
+            "stop_ticks": "2002948",
+            "delta_ticks": "960",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "chain-hamiltonian-prevalidation",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "chain-readonly-protection",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "main-final-pointer",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "sample-window-end-pointers",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "measurement_id": 2,
+      "plan_ref": 1,
+      "target": "main_memory",
+      "loop_index": 1,
+      "target_order_position": 0,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_accesses": 16384,
+      "completed_chain_cycles": 4,
+      "latency_ns": 2.50244140625,
+      "final_pointer_verification": {
+        "expected_node": 0,
+        "actual_node": 0,
+        "valid": true
+      },
+      "sample_windows": {
+        "timebase": {
+          "timebase_numer": 125,
+          "timebase_denom": 3
+        },
+        "sample_count": 4,
+        "sample_delta_ticks": [
+          "246",
+          "247",
+          "248",
+          "249"
+        ],
+        "samples_ns": [
+          2.50244140625,
+          2.5126139322916665,
+          2.5227864583333335,
+          2.532958984375
+        ],
+        "validation": {
+          "valid": true,
+          "all_end_pointers_valid": true,
+          "end_node_indices": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      },
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 4.1e-05,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "2003448",
+            "stop_ticks": "2004432",
+            "delta_ticks": "984",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "chain-hamiltonian-prevalidation",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "chain-readonly-protection",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "main-final-pointer",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "sample-window-end-pointers",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "measurement_id": 3,
+      "plan_ref": 0,
+      "target": "custom",
+      "loop_index": 1,
+      "target_order_position": 1,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_accesses": 256,
+      "completed_chain_cycles": 4,
+      "latency_ns": 8.463541666666666,
+      "final_pointer_verification": {
+        "expected_node": 0,
+        "actual_node": 0,
+        "valid": true
+      },
+      "sample_windows": {
+        "timebase": {
+          "timebase_numer": 125,
+          "timebase_denom": 3
+        },
+        "sample_count": 4,
+        "sample_delta_ticks": [
+          "13",
+          "14",
+          "13",
+          "14"
+        ],
+        "samples_ns": [
+          8.463541666666666,
+          9.114583333333334,
+          8.463541666666666,
+          9.114583333333334
+        ],
+        "validation": {
+          "valid": true,
+          "all_end_pointers_valid": true,
+          "end_node_indices": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      },
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 2.1666666666666665e-06,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "2004932",
+            "stop_ticks": "2004984",
+            "delta_ticks": "52",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "chain-hamiltonian-prevalidation",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "chain-readonly-protection",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "main-final-pointer",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "sample-window-end-pointers",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "locality_comparison": null,
+  "aggregates": {
+    "targets": {
+      "custom": {
+        "accepted_measurement_ids": [
+          0,
+          3
+        ],
+        "value": 8.138020833333332,
+        "statistics": {
+          "sample_count": 2,
+          "average": 8.138020833333332,
+          "min": 7.8125,
+          "max": 8.463541666666666,
+          "median": 8.138020833333332,
+          "p90": 8.3984375,
+          "p95": 8.430989583333332,
+          "p99": 8.45703125,
+          "stddev": 0.4603559773349915,
+          "coefficient_of_variation_pct": 5.656854249492376,
+          "median_absolute_deviation": 0.32552083333333304
+        },
+        "quality": {
+          "repeatability_assessment_available": true,
+          "run_complete": true,
+          "cv_warning_threshold_pct": 7.5,
+          "cv_warning": false
+        },
+        "pooled_sample_distribution": {
+          "semantics": "pooled-separate-sample-window-distribution",
+          "values_ns": [
+            7.8125,
+            8.463541666666666,
+            7.8125,
+            8.463541666666666,
+            8.463541666666666,
+            9.114583333333334,
+            8.463541666666666,
+            9.114583333333334
+          ],
+          "statistics": {
+            "sample_count": 8,
+            "average": 8.463541666666666,
+            "min": 7.8125,
+            "max": 9.114583333333334,
+            "median": 8.463541666666666,
+            "p90": 9.114583333333334,
+            "p95": 9.114583333333334,
+            "p99": 9.114583333333334,
+            "stddev": 0.4921412408974315,
+            "coefficient_of_variation_pct": 5.814838046295807,
+            "median_absolute_deviation": 0.32552083333333304
+          }
+        }
+      },
+      "main_memory": {
+        "accepted_measurement_ids": [
+          1,
+          2
+        ],
+        "value": 2.471923828125,
+        "statistics": {
+          "sample_count": 2,
+          "average": 2.471923828125,
+          "min": 2.44140625,
+          "max": 2.50244140625,
+          "median": 2.471923828125,
+          "p90": 2.496337890625,
+          "p95": 2.4993896484375,
+          "p99": 2.5018310546875,
+          "stddev": 0.04315837287515549,
+          "coefficient_of_variation_pct": 1.7459426695964138,
+          "median_absolute_deviation": 0.030517578125
+        },
+        "quality": {
+          "repeatability_assessment_available": true,
+          "run_complete": true,
+          "cv_warning_threshold_pct": 7.5,
+          "cv_warning": false
+        },
+        "pooled_sample_distribution": {
+          "semantics": "pooled-separate-sample-window-distribution",
+          "values_ns": [
+            2.44140625,
+            2.4515787760416665,
+            2.4617513020833335,
+            2.471923828125,
+            2.50244140625,
+            2.5126139322916665,
+            2.5227864583333335,
+            2.532958984375
+          ],
+          "statistics": {
+            "sample_count": 8,
+            "average": 2.4871826171875,
+            "min": 2.44140625,
+            "max": 2.532958984375,
+            "median": 2.4871826171875,
+            "p90": 2.5258382161458335,
+            "p95": 2.529398600260417,
+            "p99": 2.532246907552083,
+            "stddev": 0.034816628739743026,
+            "coefficient_of_variation_pct": 1.3998420742869933,
+            "median_absolute_deviation": 0.030517578125
+          }
+        }
+      }
+    },
+    "locality_comparison": null
+  },
+  "status": "complete",
+  "reason_code": "complete",
+  "results_complete": true,
+  "run_accepted": true,
+  "interpretation": {
+    "dram_residency": "unverified",
+    "cache_residency": "unverified",
+    "non_cacheable_requested": false,
+    "non_cacheable_is_best_effort_madvise": true,
+    "sample_windows_run_as_separate_pass_after_main_measurement": true,
+    "comparability_requires": [
+      "same-methodology-version",
+      "same-frozen-work-plan-and-targets",
+      "same-software-version",
+      "sufficiently-similar-hardware",
+      "sufficiently-similar-thermal-and-power-state"
+    ]
+  },
+  "diagnostic": null,
+  "interruption_requested": false,
+  "target_order_balance_complete": true,
+  "seeds": {
+    "base_seed_uint64_decimal": "424242",
+    "source": "user",
+    "target_domain_seeds": {
+      "custom": "7436701275638583618",
+      "main_memory": "5661157505406129473"
+    }
+  },
+  "counters": {
+    "planned_loops": 2,
+    "attempted_loops": 2,
+    "completed_loops": 2,
+    "planned_measurements": 4,
+    "attempted_measurements": 4,
+    "terminal_measurements": 4,
+    "measured_measurements": 4,
+    "planned_accesses": "33280",
+    "completed_accesses": "33280"
+  },
+  "checkpoint_lifecycle": {
+    "checkpoint_failed": false,
+    "observation_point": "before-current-snapshot-preparation",
+    "prior_file_writer_attempts": 2,
+    "prior_successful_file_writes": 2,
+    "current_request": "terminal",
+    "current_persistence_success": null,
+    "snapshot_interval_loops": 1,
+    "checkpoint_policy": "bounded-loop-snapshots",
+    "file_checkpoint_failure_is_terminal_and_not_retried": true,
+    "stdout_intermediate_checkpoints_are_lazy": true
+  },
+  "loop_records": [
+    {
+      "loop_index": 0,
+      "planned_order": [
+        "custom",
+        "main_memory"
+      ],
+      "realized_order": [
+        "custom",
+        "main_memory"
+      ],
+      "realized_order_count": 2,
+      "measurement_indexes": [
+        0,
+        1
+      ]
+    },
+    {
+      "loop_index": 1,
+      "planned_order": [
+        "main_memory",
+        "custom"
+      ],
+      "realized_order": [
+        "main_memory",
+        "custom"
+      ],
+      "realized_order_count": 2,
+      "measurement_indexes": [
+        2,
+        3
+      ]
+    }
+  ],
+  "environment": {
+    "processor_name": "Apple M4",
+    "macos_version": "26.6.2",
+    "performance_core_count": 4,
+    "efficiency_core_count": 6,
+    "logical_core_count": 10,
+    "page_size_bytes": "16384",
+    "l1_data_cache_bytes": "131072",
+    "l2_data_cache_bytes": "16777216",
+    "available_memory_bytes": "11587813376",
+    "available_memory_source": "mach-free-plus-inactive-rounded-mib",
+    "main_thread_qos": {
+      "requested": true,
+      "applied": true,
+      "code": 0
+    },
+    "start": {
+      "thermal_state": "nominal",
+      "low_power_mode_available": true,
+      "low_power_mode_enabled": false,
+      "physical_memory_bytes": "25769803776"
+    },
+    "end": {
+      "thermal_state": "nominal",
+      "low_power_mode_available": true,
+      "low_power_mode_enabled": false,
+      "physical_memory_bytes": "25769803776"
+    }
+  },
+  "quality_warnings": []
+}

@@ -25,8 +25,9 @@ struct ModeOption {
   const char* long_option;
 };
 
-constexpr std::array<ModeOption, 6> kModeOptions{{
-    {PrimaryBenchmarkMode::Standard, "-B", "--benchmark"},
+constexpr std::array<ModeOption, 7> kModeOptions{{
+    {PrimaryBenchmarkMode::CpuBandwidth, "-B", "--cpu-bandwidth"},
+    {PrimaryBenchmarkMode::CpuLatency, "-L", "--cpu-latency"},
     {PrimaryBenchmarkMode::Patterns, "-P", "--patterns"},
     {PrimaryBenchmarkMode::AnalyzeTlb, "-T", "--analyze-tlb"},
     {PrimaryBenchmarkMode::AnalyzeCoreToCore, "-C", "--analyze-core2core"},

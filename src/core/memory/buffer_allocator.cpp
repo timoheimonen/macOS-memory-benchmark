@@ -33,15 +33,6 @@
 
 namespace {
 
-int validate_main_buffer_size_for_bandwidth(const BenchmarkConfig& config) {
-  if (config.buffer_size == 0 && !config.only_latency) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_main_buffer_size_zero() << std::endl;
-    return EXIT_FAILURE;
-  }
-  return EXIT_SUCCESS;
-}
-
 int validate_memory_limit(const BenchmarkConfig& config,
                           size_t bytes_required) {
   if (config.max_total_allowed_mb == 0) {
@@ -85,94 +76,15 @@ int calculate_pattern_allocation_bytes(const BenchmarkConfig& config,
   return validate_memory_limit(config, allocation_bytes);
 }
 
-int add_to_phase_bytes(size_t value, size_t& phase_bytes) {
-  if (!NumericUtils::checked_add(phase_bytes, value, phase_bytes)) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_total_memory_overflow() << std::endl;
-    return EXIT_FAILURE;
-  }
-  return EXIT_SUCCESS;
-}
-
-int add_doubled_to_phase_bytes(size_t value, size_t& phase_bytes) {
-  size_t doubled_bytes = 0;
-  if (calculate_doubled_bytes(value, doubled_bytes) != EXIT_SUCCESS) {
-    return EXIT_FAILURE;
-  }
-  return add_to_phase_bytes(doubled_bytes, phase_bytes);
-}
-
-void update_peak(size_t candidate, size_t& peak_memory_bytes) {
-  if (candidate > peak_memory_bytes) {
-    peak_memory_bytes = candidate;
-  }
-}
-
 /**
  * @brief Calculate the largest concurrent phase allocation.
  *
- * Standard execution allocates per phase; pattern execution holds one main
- * source/destination pair for the full command. Every sum and product is
- * checked through NumericUtils before it participates in the peak.
+ * Pattern execution holds one main source/destination pair for the full command.
+ * Every product is checked through NumericUtils before it participates in the peak.
  */
 int calculate_peak_allocation_bytes(const BenchmarkConfig& config,
                                     size_t& peak_memory_bytes) {
-  peak_memory_bytes = 0;
-  if (validate_main_buffer_size_for_bandwidth(config) != EXIT_SUCCESS) {
-    return EXIT_FAILURE;
-  }
-
-  if (!config.only_latency && config.buffer_size > 0) {
-    size_t main_bandwidth_bytes = 0;
-    if (calculate_doubled_bytes(config.buffer_size, main_bandwidth_bytes) !=
-        EXIT_SUCCESS) {
-      return EXIT_FAILURE;
-    }
-    update_peak(main_bandwidth_bytes, peak_memory_bytes);
-  }
-
-  if (!config.only_bandwidth && !config.run_patterns &&
-      config.buffer_size > 0) {
-    update_peak(config.buffer_size, peak_memory_bytes);
-  }
-
-  if (!config.run_patterns && config.use_custom_cache_size) {
-    if (!config.only_latency && config.custom_buffer_size > 0) {
-      size_t custom_bandwidth_bytes = 0;
-      if (calculate_doubled_bytes(config.custom_buffer_size,
-                                  custom_bandwidth_bytes) != EXIT_SUCCESS) {
-        return EXIT_FAILURE;
-      }
-      update_peak(custom_bandwidth_bytes, peak_memory_bytes);
-    }
-    if (!config.only_bandwidth) {
-      update_peak(config.custom_buffer_size, peak_memory_bytes);
-    }
-  } else if (!config.run_patterns) {
-    if (!config.only_latency) {
-      size_t cache_bandwidth_bytes = 0;
-      if (add_doubled_to_phase_bytes(config.l1_buffer_size,
-                                     cache_bandwidth_bytes) != EXIT_SUCCESS ||
-          add_doubled_to_phase_bytes(config.l2_buffer_size,
-                                     cache_bandwidth_bytes) != EXIT_SUCCESS) {
-        return EXIT_FAILURE;
-      }
-      update_peak(cache_bandwidth_bytes, peak_memory_bytes);
-    }
-
-    if (!config.only_bandwidth) {
-      size_t cache_latency_bytes = 0;
-      if (add_to_phase_bytes(config.l1_buffer_size, cache_latency_bytes) !=
-              EXIT_SUCCESS ||
-          add_to_phase_bytes(config.l2_buffer_size, cache_latency_bytes) !=
-              EXIT_SUCCESS) {
-        return EXIT_FAILURE;
-      }
-      update_peak(cache_latency_bytes, peak_memory_bytes);
-    }
-  }
-
-  return validate_memory_limit(config, peak_memory_bytes);
+  return calculate_pattern_allocation_bytes(config, peak_memory_bytes);
 }
 
 MmapPtr allocate_pattern_mapping(const BenchmarkConfig& config,

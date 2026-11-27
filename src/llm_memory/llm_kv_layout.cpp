@@ -31,6 +31,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "core/audit/deterministic_rng.h"
 #include "core/config/constants.h"
 #include "utils/hash_utils.h"
 #include "utils/numeric_utils.h"
@@ -170,14 +171,6 @@ bool match_permutation_identity_noalloc(
          identity.complete();
 }
 
-uint64_t splitmix64_next(uint64_t& state) noexcept {
-  state += 0x9E3779B97F4A7C15ULL;
-  uint64_t value = state;
-  value = (value ^ (value >> 30U)) * 0xBF58476D1CE4E5B9ULL;
-  value = (value ^ (value >> 27U)) * 0x94D049BB133111EBULL;
-  return value ^ (value >> 31U);
-}
-
 bool should_poll(size_t processed) {
   return processed != 0 &&
          processed % Constants::LLM_KV_PREPARATION_POLL_INTERVAL_ENTRIES ==
@@ -226,13 +219,8 @@ bool shuffle_block_table_entries(
   uint64_t stream_state = resolved_seed;
   size_t permutation_iterations = 0;
   for (size_t index = entry_count; index > 1; --index) {
-    const uint64_t bound = static_cast<uint64_t>(index);
-    const uint64_t threshold = (uint64_t{0} - bound) % bound;
-    uint64_t draw = 0;
-    do {
-      draw = splitmix64_next(stream_state);
-    } while (draw < threshold);
-    const size_t swap_index = static_cast<size_t>(draw % bound);
+    const size_t swap_index = static_cast<size_t>(
+        splitmix64_bounded_draw(stream_state, static_cast<uint64_t>(index)));
     std::swap(entries[index - 1], entries[swap_index]);
     ++permutation_iterations;
     if (should_poll(permutation_iterations) &&

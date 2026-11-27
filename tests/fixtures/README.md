@@ -1,23 +1,11 @@
-# Script-example fixtures
+# Test fixtures
 
-## Supported schema-3 fixtures
+## CPU Bandwidth & CPU Latency schema-1 verifier fixtures
 
-`standard-schema-v3-complete-current.json` and `standard-schema-v3-custom-complete-current.json` are captured complete
-results for the bundled standard-memory script examples. They cover the supported schema and methodology,
-configuration, work metadata, completion fields, metric blocks, and raw output targets consumed by those examples.
+`cpu-bandwidth-schema-v1-complete-current.json` and `cpu-latency-schema-v1-complete-current.json` are schema-1 fixtures for the standalone `-B`/`--cpu-bandwidth` (`mode: "cpu_bandwidth"`) and `-L`/`--cpu-latency` (`mode: "cpu_latency"`) modes, exercised by `tests/test_cpu_bandwidth_verifier.py` and `tests/test_cpu_latency_verifier.py` (`make test-cpu-verifiers`) as well as `tests/test_script_examples.py` (`make test-script-examples`).
 
-To refresh the fixtures, build `memory_benchmark` and run:
-
-```bash
-./memory_benchmark --benchmark --iterations 1 --buffer-size 1 --count 1 --latency-samples 1 --output /tmp/standard-schema-v3-complete-current.capture.json
-./memory_benchmark --benchmark --only-latency --buffer-size 0 --cache-size 16 --count 1 --latency-samples 1 --latency-tlb-locality-kb 16 --latency-stride-bytes 256 --output /tmp/standard-schema-v3-custom-complete-current.capture.json
-```
-
-Replace the corresponding fixture files with the captured outputs. The full run supplies the bandwidth, L1/L2 headline
-latency, and automatic-locality paths used by both plotters. The custom-cache run supplies the pooled sample distribution
-and work metadata used by the shell examples. Refresh the fixtures, examples, and entry-path assertions together when
-the consumed schema, methodology, or result shape changes. A `SOFTVERSION`-only change does not require a fixture
-refresh. Run `make test-script-examples` after updating them.
+- `cpu-bandwidth-schema-v1-complete-current.json`: complete `-B` fixture covering main memory + custom cache bandwidth measurements, GF(2) oracle / write-pattern post-validation checks, and raw Mach timing evidence.
+- `cpu-latency-schema-v1-complete-current.json`: complete `-L` fixture covering custom cache + main memory latency measurements, canonical pointer-chain permutation hashes, final-pointer verification, and `pooled_sample_distribution` sample-window evidence.
 
 ## LLM schema 2 verifier fixtures
 

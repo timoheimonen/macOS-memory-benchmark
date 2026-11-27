@@ -47,10 +47,11 @@ def main():
     payload = json.dumps(manifest, sort_keys=True)
     if len(payload) > 16384:
         raise SystemExit("build provenance exceeds 16 KiB budget")
+    encoded_payload = json.dumps(payload)
     header = (
-        "// Generated build inputs; do not edit.\n#define LLM_BUILD_MANIFEST_JSON "
-        + json.dumps(payload)
-        + "\n"
+        "// Generated build inputs; do not edit.\n"
+        "#define BUILD_MANIFEST_JSON " + encoded_payload + "\n"
+        "#define LLM_BUILD_MANIFEST_JSON " + encoded_payload + "\n"
     )
     path = Path(sys.argv[1])
     if not path.exists() or path.read_text() != header:

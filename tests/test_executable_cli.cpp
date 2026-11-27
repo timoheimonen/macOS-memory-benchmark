@@ -549,11 +549,12 @@ TEST(ExecutableCliIntegrationTest, HelpRemainsHumanAcrossModesAndOutputOrderingI
     const char* detail;
   };
   std::vector<HelpCase> cases = {
-      {{}, "Usage:", "--benchmark"},
-      {{"--help"}, "Usage:", "--benchmark"},
+      {{}, "Usage:", "--cpu-bandwidth"},
+      {{"--help"}, "Usage:", "--cpu-bandwidth"},
   };
   const HelpCase modes[] = {
-      {{"--benchmark"}, "Usage:", "--benchmark"},
+      {{"--cpu-bandwidth"}, "Usage:", "--cpu-bandwidth"},
+      {{"--cpu-latency"}, "Usage:", "--cpu-latency"},
       {{"--patterns"}, "Usage:", "--patterns"},
       {{"--analyze-tlb"}, "Usage:", "--analyze-tlb"},
       {{"--gpu-bandwidth"}, "Usage: ./memory_benchmark --gpu-bandwidth [options]", "minimum: 64 MB"},
@@ -611,25 +612,25 @@ TEST(ExecutableCliIntegrationTest, InvalidCommandsFailBeforeOutputAcrossModesInt
         "--count", "1", "--output", "-"},
        Messages::error_llm_memory_config_invalid("json-integer-out-of-range"),
        true},
-      {{"--benchmark", "--only-bandwidth", "--latency-samples", "1", "--output", "-"},
-       Messages::error_only_bandwidth_with_latency_samples(),
+      {{"--cpu-bandwidth", "--cpu-latency"},
+       Messages::error_mutually_exclusive_modes("--cpu-bandwidth", "--cpu-latency"),
        true},
-      {{"--benchmark", "--only-latency", "--threads=2", "--output=-"},
-       Messages::error_only_latency_with_threads(),
-       true},
+      {{"--benchmark"}, Messages::error_unknown_option("--benchmark"), true},
+      {{"-W"}, Messages::error_unknown_option("-W"), true},
+      {{"--only-bandwidth"}, Messages::error_unknown_option("--only-bandwidth"), true},
+      {{"--only-latency"}, Messages::error_unknown_option("--only-latency"), true},
       {{"--patterns", "--cache-size=256", "--output=-"},
        Messages::error_patterns_incompatible_option("--cache-size"),
        true},
-      {{"--benchmark", "--buffer-size=128", "--sweep=buffer-size=128,256", "--output=-"},
+      {{"--patterns", "--buffer-size=128", "--sweep=buffer-size=128,256", "--output=-"},
        Messages::error_sweep_option_conflict("--buffer-size", "buffer-size"),
        true},
-      {{"--benchmark", "--buffer-size", "-G"},
+      {{"--patterns", "--buffer-size", "-G"},
        Messages::error_invalid_value("--buffer-size", "-G", Messages::reason_signed_integer_invalid()),
        true},
-      {{"--benchmark=1"}, Messages::error_option_does_not_take_value("--benchmark"), true},
-      {{"--benchmark", "--benchmark"}, Messages::error_duplicate_option("--benchmark"), true},
+      {{"--patterns=1"}, Messages::error_option_does_not_take_value("--patterns"), true},
+      {{"--patterns", "--patterns"}, Messages::error_duplicate_option("--patterns"), true},
       {{"--threads", "1"}, Messages::error_missing_primary_mode(), true},
-      {{"--only-bandwidth"}, Messages::error_only_flags_require_benchmark(), true},
       {{"--seed", "42"}, Messages::error_seed_requires_supported_mode(), true},
       {{"--llm-memory", "--weight-size-mb", "1", "--output", "-"},
        Messages::error_llm_memory_missing_required_option("--layers"),
@@ -637,7 +638,7 @@ TEST(ExecutableCliIntegrationTest, InvalidCommandsFailBeforeOutputAcrossModesInt
       {{"--gpu-bandwidth", "--buffer-size", "63", "--output", "-"},
        Messages::error_gpu_buffer_size_below_minimum(63, Constants::GPU_MIN_BUFFER_SIZE_MB),
        true},
-      {{"--benchmark", "--output", "-", "--not-a-real-option"},
+      {{"--patterns", "--output", "-", "--not-a-real-option"},
        Messages::error_unknown_option("--not-a-real-option"),
        true},
       {{"--analyze-core2core", "--output", "-", "--buffer-size", "256"},
@@ -670,63 +671,77 @@ TEST(ExecutableCliIntegrationTest, InvalidCommandsFailBeforeOutputAcrossModesInt
   }
 }
 
-TEST(ExecutableCliIntegrationTest, StandardBenchmarkFileStdoutAndFlagShapedTargetIntegration) {
-  const TemporaryJsonFile file_output("standard output with spaces");
+TEST(ExecutableCliIntegrationTest, CpuBandwidthAndLatencyFileStdoutAndFlagShapedTargetIntegration) {
+  const TemporaryJsonFile bw_file_output("cpu bw output with spaces");
+  const TemporaryJsonFile lat_file_output("cpu lat output with spaces");
   struct TargetCase {
     const char* name;
+    std::vector<std::string> base_args;
+    const char* expected_mode;
+    const char* stderr_marker;
     std::string target;
-    size_t count;
     bool is_stdout;
     bool is_flag_shaped;
   };
   const TargetCase cases[] = {
-      {"file_with_spaces", file_output.path(), 3u, false, false},
-      {"stdout", "-", 1u, true, false},
-      {"flag_shaped_target", "-T", 1u, false, true},
+      {"bw_file_with_spaces",
+       {"--cpu-bandwidth", "--buffer-size", "1", "--cache-size", "0", "--iterations", "1", "--count", "2", "--threads",
+        "1"},
+       "cpu_bandwidth", "CPU Bandwidth Mode", bw_file_output.path(), false, false},
+      {"bw_stdout",
+       {"--cpu-bandwidth", "--buffer-size", "1", "--cache-size", "0", "--iterations", "1", "--count", "1", "--threads",
+        "1"},
+       "cpu_bandwidth", "CPU Bandwidth Mode", "-", true, false},
+      {"bw_flag_shaped_target",
+       {"--cpu-bandwidth", "--buffer-size", "1", "--cache-size", "0", "--iterations", "1", "--count", "1", "--threads",
+        "1"},
+       "cpu_bandwidth", "CPU Bandwidth Mode", "-T", false, true},
+      {"lat_file_with_spaces",
+       {"--cpu-latency", "--buffer-size", "1", "--cache-size", "0", "--iterations", "1", "--count", "2",
+        "--latency-samples", "0"},
+       "cpu_latency", "CPU Latency Mode", lat_file_output.path(), false, false},
+      {"lat_stdout",
+       {"--cpu-latency", "--buffer-size", "1", "--cache-size", "0", "--iterations", "1", "--count", "1",
+        "--latency-samples", "0"},
+       "cpu_latency", "CPU Latency Mode", "-", true, false},
   };
   for (const TargetCase& test_case : cases) {
     SCOPED_TRACE(test_case.name);
-    const CliResult result = run_memory_benchmark(
-        {"--benchmark", "--only-bandwidth", "--buffer-size", "1", "--iterations", "1", "--count",
-         std::to_string(test_case.count), "--threads", "1", "--output", test_case.target},
-        std::chrono::minutes(2));
+    std::vector<std::string> args = test_case.base_args;
+    args.push_back("--output");
+    args.push_back(test_case.target);
+    const CliResult result = run_memory_benchmark(args, std::chrono::minutes(2));
     expect_process_completed(result);
     ASSERT_EQ(result.exit_code, EXIT_SUCCESS) << result.output;
 
     nlohmann::json json;
     if (test_case.is_stdout) {
-      json = expect_stdout_json_transport(result, Messages::msg_running_benchmarks());
+      json = expect_stdout_json_transport(result, test_case.stderr_marker);
     } else if (test_case.is_flag_shaped) {
       ASSERT_NE(result.directory, nullptr);
       json = expect_atomic_file_json(result, result.directory->path() / test_case.target, false);
       EXPECT_EQ(result.output.find(Messages::error_analyze_tlb_must_be_used_alone()), std::string::npos);
       EXPECT_EQ(result.output.find("mutually exclusive"), std::string::npos);
-      EXPECT_NE(result.stdout_output.find(Messages::msg_running_benchmarks()), std::string::npos);
+      EXPECT_NE(result.stdout_output.find(test_case.stderr_marker), std::string::npos);
       EXPECT_FALSE(nlohmann::json::accept(result.stdout_output));
       EXPECT_EQ(count_occurrences(result.output, Messages::msg_results_saved_to("")), 1u) << result.output;
     } else {
-      EXPECT_NE(result.stdout_output.find(Messages::msg_running_benchmarks()), std::string::npos);
+      EXPECT_NE(result.stdout_output.find(test_case.stderr_marker), std::string::npos);
       EXPECT_EQ(result.output.find('\r'), std::string::npos);
-      json = expect_atomic_file_json(result, file_output.path());
+      json = expect_atomic_file_json(result, test_case.target);
     }
 
-    EXPECT_EQ(json["configuration"]["mode"], Constants::BENCHMARK_JSON_MODE_NAME);
-    EXPECT_EQ(json["configuration"]["benchmark_schema_version"], Constants::BENCHMARK_JSON_SCHEMA_VERSION);
+    EXPECT_EQ(json["schema_version"], 1);
+    EXPECT_EQ(json["mode"], test_case.expected_mode);
     EXPECT_EQ(json["configuration"]["output_file"], test_case.target);
     EXPECT_EQ(json["status"], "complete");
     EXPECT_TRUE(json["results_complete"].get<bool>());
-    EXPECT_TRUE(json["conclusions_valid"].get<bool>());
-    EXPECT_EQ(json["planned_loops"], test_case.count);
-    EXPECT_EQ(json["completed_loops"], test_case.count);
-    if (!test_case.is_stdout && !test_case.is_flag_shaped) {
-      EXPECT_EQ(json["loops"].size(), test_case.count);
-      EXPECT_TRUE(json.contains("main_memory") && json["main_memory"].contains("bandwidth"));
-    }
+    EXPECT_TRUE(json["run_accepted"].get<bool>());
   }
 }
 
-TEST(ExecutableCliIntegrationTest, StandardAndPatternSweepFileAndStdoutIntegration) {
-  const TemporaryJsonFile standard_file("standard_sweep_status");
+TEST(ExecutableCliIntegrationTest, PatternAndCpuSweepFileAndStdoutIntegration) {
+  const TemporaryJsonFile cpu_bw_file("cpu_bw_sweep_status");
   const TemporaryJsonFile pattern_file("pattern_sweep_banner");
   struct SweepCase {
     const char* name;
@@ -736,20 +751,21 @@ TEST(ExecutableCliIntegrationTest, StandardAndPatternSweepFileAndStdoutIntegrati
     size_t runs;
     size_t loops;
     bool is_stdout;
+    bool is_pattern;
   };
   const SweepCase cases[] = {
-      {"standard_file",
-       {"--benchmark", "--only-bandwidth", "--iterations", "1", "--count", "1", "--threads", "1", "--sweep",
-        "buffer-size=1,2,3", "--sweep-max-runs", "3", "--output", standard_file.path()},
-       standard_file.path(), Constants::BENCHMARK_JSON_MODE_NAME, 3u, 1u, false},
-      {"standard_stdout",
-       {"--benchmark", "--only-bandwidth", "--iterations", "1", "--count", "1", "--threads", "1", "--sweep",
+      {"cpu_bw_file",
+       {"--cpu-bandwidth", "--cache-size", "0", "--iterations", "1", "--count", "1", "--threads", "1", "--sweep",
+        "buffer-size=1,2", "--sweep-max-runs", "2", "--output", cpu_bw_file.path()},
+       cpu_bw_file.path(), "cpu_bandwidth", 2u, 1u, false, false},
+      {"cpu_lat_stdout",
+       {"--cpu-latency", "--cache-size", "0", "--iterations", "1", "--count", "1", "--latency-samples", "0", "--sweep",
         "buffer-size=1,2", "--sweep-max-runs", "2", "--output", "-"},
-       "-", Constants::BENCHMARK_JSON_MODE_NAME, 2u, 1u, true},
+       "-", "cpu_latency", 2u, 1u, true, false},
       {"pattern_file_nested_loops",
        {"--patterns", "--iterations", "1", "--count", "2", "--threads", "1", "--seed", "42", "--sweep",
         "buffer-size=1,2,3", "--sweep-max-runs", "3", "--output", pattern_file.path()},
-       pattern_file.path(), Constants::PATTERNS_JSON_MODE_NAME, 3u, 2u, false},
+       pattern_file.path(), Constants::PATTERNS_JSON_MODE_NAME, 3u, 2u, false, true},
   };
   for (const SweepCase& test_case : cases) {
     SCOPED_TRACE(test_case.name);
@@ -765,21 +781,21 @@ TEST(ExecutableCliIntegrationTest, StandardAndPatternSweepFileAndStdoutIntegrati
           << result.stderr_output;
     }
     expect_complete_sweep_envelope(json, test_case.base_mode, test_case.runs);
-    const bool is_standard = std::string_view(test_case.base_mode) == Constants::BENCHMARK_JSON_MODE_NAME;
     for (const nlohmann::json& run : json["runs"]) {
       EXPECT_EQ(run["status"], "complete");
       const nlohmann::json& nested = run["result"];
-      EXPECT_EQ(nested["configuration"]["mode"], test_case.base_mode);
       EXPECT_EQ(nested["status"], "complete");
       EXPECT_TRUE(nested["results_complete"].get<bool>());
-      EXPECT_EQ(nested["planned_loops"], test_case.loops);
-      EXPECT_EQ(nested["completed_loops"], test_case.loops);
-      if (is_standard) {
-        EXPECT_EQ(nested["configuration"]["benchmark_schema_version"], Constants::BENCHMARK_JSON_SCHEMA_VERSION);
-        EXPECT_EQ(nested["configuration"]["output_file"], "");
-        EXPECT_TRUE(nested["conclusions_valid"].get<bool>());
-      } else {
+      if (test_case.is_pattern) {
+        EXPECT_EQ(nested["configuration"]["mode"], test_case.base_mode);
         EXPECT_EQ(nested["configuration"]["pattern_schema_version"], Constants::PATTERN_JSON_SCHEMA_VERSION);
+        EXPECT_EQ(nested["planned_loops"], test_case.loops);
+        EXPECT_EQ(nested["completed_loops"], test_case.loops);
+      } else {
+        EXPECT_EQ(nested["schema_version"], 1);
+        EXPECT_EQ(nested["mode"], test_case.base_mode);
+        EXPECT_EQ(nested["configuration"]["output_file"], "");
+        EXPECT_TRUE(nested["run_accepted"].get<bool>());
       }
     }
   }

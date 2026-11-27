@@ -44,10 +44,6 @@ std::string statistics_header(int requested_loop_count, size_t measured_loop_cou
   return oss.str();
 }
 
-std::string statistics_metric_name(const std::string& metric_name) {
-  return metric_name + ":";
-}
-
 std::string statistics_average(double value, int precision) {
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(precision);
@@ -104,12 +100,6 @@ std::string statistics_max(double value, int precision) {
   return oss.str();
 }
 
-std::string statistics_cache_bandwidth_header(const std::string& cache_name) {
-  std::ostringstream oss;
-  oss << "\n" << cache_name << " Cache Bandwidth (GB/s):";
-  return oss.str();
-}
-
 std::string statistics_pattern_bandwidth_header(const std::string& pattern_name) {
   return "\n" + pattern_name + " Pattern Bandwidth (GB/s):";
 }
@@ -140,42 +130,11 @@ std::string statistics_cache_copy() {
   return "  Copy:";
 }
 
-std::string statistics_cache_latency_header() {
-  return "\nCache Latency (ns):";
-}
-
-std::string statistics_cache_latency_name(const std::string& cache_name) {
-  return "  " + cache_name + " Cache:";
-}
-
 std::string statistics_median_p50_from_samples(double value, size_t sample_count, int precision) {
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(precision);
   oss << "    Median (P50): " << value << " (from " << sample_count << " samples)";
   return oss.str();
-}
-
-std::string statistics_pooled_sample_distribution(size_t sample_count) {
-  std::ostringstream oss;
-  oss << "    Pooled Separate Sample-Window Distribution (" << sample_count
-      << " samples):";
-  return oss.str();
-}
-
-std::string statistics_main_memory_latency_header() {
-  return "\nMain Memory Latency (ns):";
-}
-
-std::string statistics_tlb_hit_latency_metric_name() {
-  return "16 KiB Locality Latency (ns)";
-}
-
-std::string statistics_tlb_miss_latency_metric_name() {
-  return "Global-Random Latency (ns)";
-}
-
-std::string statistics_page_walk_penalty_metric_name() {
-  return "Locality Latency Delta, Global - 16 KiB (ns)";
 }
 
 std::string statistics_footer() {

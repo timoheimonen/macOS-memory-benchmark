@@ -30,6 +30,7 @@
 #include <tuple>
 #include "llm_memory/llm_metal_backend.h"
 
+#include "core/audit/checkpoint_policy.h"
 #include "core/config/constants.h"
 #include "core/signal/signal_handler.h"
 #include "utils/numeric_utils.h"
@@ -1070,7 +1071,8 @@ bool initialize_result(const LlmMemoryConfig& config, const LlmMemoryWorkPlan& m
   result.snapshot_plan_order.reserve(result.scenario_plans.capacity());
   result.snapshot_plan_refs.reserve(result.scenario_plans.capacity());
   result.statistics_workspace.extracted_values.reserve(config.loop_count);
-  result.snapshot_interval_loops = std::max<size_t>(1, config.loop_count / 8 + (config.loop_count % 8 != 0));
+  result.snapshot_interval_loops =
+      calculate_bounded_snapshot_interval_loops(config.loop_count);
   result.loops.reserve(config.loop_count);
   result.measurements.reserve(result.counters.planned_measurements);
   const LlmCpuExecutionPlan* cpu_plan =

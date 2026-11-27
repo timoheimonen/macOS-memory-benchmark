@@ -46,6 +46,7 @@
 #include <iostream>              // For std::cout
 #include <limits>                // For std::numeric_limits
 #include <mutex>                 // For std::mutex
+#include <optional>              // For std::optional
 #include <thread>                // For std::thread
 #include <string>                // For std::string
 #include <system_error>          // For std::system_error
@@ -68,6 +69,7 @@ struct ParallelExecutionMetadata {
   size_t qos_successful_workers = 0;
   size_t qos_failed_workers = 0;
   bool worker_startup_failed = false;
+  std::optional<MachTimingSnapshot> timing_snapshot;
 };
 
 /** @brief Deterministic test-only fault seam for worker creation handling. */
@@ -288,6 +290,8 @@ double run_parallel_test_common(void* alignment_base, size_t size, int iteration
     execution_metadata->qos_failed_workers =
         qos_failed_workers.load(std::memory_order_relaxed);
     execution_metadata->worker_startup_failed = worker_startup_failed;
+    execution_metadata->timing_snapshot =
+        worker_startup_failed ? std::nullopt : timer.last_snapshot;
   }
   return worker_startup_failed ? 0.0 : measured_duration;
 }
@@ -304,6 +308,9 @@ double run_parallel_test_indexed_with_boundaries(void* buffer, size_t size, int 
                                                  const char* thread_name,
                                                  ParallelExecutionMetadata* execution_metadata = nullptr) {
   if (boundaries.size() < 2 || boundaries.size() - 1 > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    if (execution_metadata != nullptr) {
+      *execution_metadata = {};
+    }
     return 0.0;
   }
   char* buffer_start = static_cast<char*>(buffer);
@@ -325,6 +332,9 @@ double run_parallel_test_copy_indexed_with_boundaries(void* dst, void* src, size
                                                       WorkFunction work_function, const char* thread_name,
                                                       ParallelExecutionMetadata* execution_metadata = nullptr) {
   if (boundaries.size() < 2 || boundaries.size() - 1 > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    if (execution_metadata != nullptr) {
+      *execution_metadata = {};
+    }
     return 0.0;
   }
   char* dst_start = static_cast<char*>(dst);

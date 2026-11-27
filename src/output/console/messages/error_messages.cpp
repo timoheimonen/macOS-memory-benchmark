@@ -62,25 +62,15 @@ std::string error_option_not_allowed_in_mode(const std::string& option,
 
 const std::string& error_missing_primary_mode() {
   static const std::string msg =
-      "A primary mode option is required (--benchmark, --patterns, --analyze-tlb, "
-      "--analyze-core2core, --gpu-bandwidth, or --llm-memory)";
+      "A primary mode option is required (--cpu-bandwidth, --cpu-latency, "
+      "--patterns, --analyze-tlb, --analyze-core2core, --gpu-bandwidth, or "
+      "--llm-memory)";
   return msg;
 }
 
 std::string error_patterns_incompatible_option(const std::string& option) {
   return "--patterns cannot be used with " + option +
          " (pattern benchmarks do not run cache or latency tests)";
-}
-
-std::string error_only_bandwidth_incompatible_option(const std::string& option) {
-  return "--only-bandwidth cannot be used with " + option +
-         " (option is only relevant for latency tests)";
-}
-
-const std::string& error_only_latency_with_threads() {
-  static const std::string msg =
-      "--only-latency cannot be used with --threads (latency tests are single-threaded)";
-  return msg;
 }
 
 const std::string& reason_signed_integer_invalid() {
@@ -263,8 +253,8 @@ const std::string& error_analyze_tlb_must_be_used_alone() {
 
 const std::string& error_seed_requires_supported_mode() {
   static const std::string msg =
-      "--seed requires --benchmark, --patterns, --analyze-tlb, "
-      "--gpu-bandwidth, or --llm-memory";
+      "--seed requires --cpu-bandwidth, --cpu-latency, --patterns, "
+      "--analyze-tlb, --gpu-bandwidth, or --llm-memory";
   return msg;
 }
 
@@ -324,10 +314,6 @@ std::string error_sysctlbyname_failed(const std::string& operation, const std::s
 
 std::string error_mach_timebase_info_failed(const std::string& error_details) {
   return "mach_timebase_info failed: " + error_details;
-}
-
-std::string error_benchmark_tests(const std::string& error) {
-  return "Error during benchmark tests: " + error;
 }
 
 std::string error_benchmark_loop(int loop, const std::string& error) {
@@ -531,53 +517,8 @@ const std::string& error_latency_access_count_negative() {
   return msg;
 }
 
-const std::string& error_incompatible_flags() {
-  static const std::string msg = "--only-bandwidth and --only-latency are mutually exclusive (cannot use both together)";
-  return msg;
-}
-
-const std::string& error_only_flags_with_patterns() {
-  static const std::string msg = "--only-bandwidth and --only-latency cannot be used with --patterns (pattern benchmarks are a separate execution mode)";
-  return msg;
-}
-
-const std::string& error_only_bandwidth_with_cache_size() {
-  static const std::string msg = "--only-bandwidth cannot be used with --cache-size (cache-size is only relevant for latency tests)";
-  return msg;
-}
-
-const std::string& error_only_bandwidth_with_latency_samples() {
-  static const std::string msg = "--only-bandwidth cannot be used with --latency-samples (latency-samples is only relevant for latency tests)";
-  return msg;
-}
-
-const std::string& error_buffersize_zero_requires_only_latency() {
-  static const std::string msg = "--buffer-size 0 is only allowed with --only-latency";
-  return msg;
-}
-
-const std::string& error_cache_size_zero_requires_only_latency() {
-  static const std::string msg = "--cache-size 0 is only allowed with --only-latency";
-  return msg;
-}
-
-const std::string& error_only_latency_requires_latency_target() {
-  static const std::string msg = "--only-latency requires at least one target enabled: main memory (--buffer-size > 0) or cache (--cache-size > 0 or omit --cache-size)";
-  return msg;
-}
-
-const std::string& error_only_latency_with_iterations() {
-  static const std::string msg = "--only-latency cannot be used with --iterations (iterations is only relevant for bandwidth tests)";
-  return msg;
-}
-
 std::string error_mutually_exclusive_modes(const std::string& mode1, const std::string& mode2) {
   return mode1 + " and " + mode2 + " are mutually exclusive (cannot use both together)";
-}
-
-const std::string& error_only_flags_require_benchmark() {
-  static const std::string msg = "--only-bandwidth and --only-latency require --benchmark flag";
-  return msg;
 }
 
 const std::string& error_sweep_requires_parameter() {

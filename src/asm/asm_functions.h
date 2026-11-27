@@ -81,6 +81,22 @@ extern "C" {
      * @param byteCount Number of bytes to write
      */
     void memory_write_cache_loop_asm(void* dst, size_t byteCount);
+
+    /**
+     * @brief Optimized 64-bit pattern memory write loop (assembly, non-temporal)
+     * @param dst Destination buffer pointer
+     * @param byteCount Number of bytes to write
+     * @param pattern64 64-bit little-endian repeating pattern
+     */
+    void memory_write_pattern_loop_asm(void* dst, size_t byteCount, uint64_t pattern64);
+
+    /**
+     * @brief Optimized 64-bit pattern cache-focused memory write loop (assembly)
+     * @param dst Destination buffer pointer
+     * @param byteCount Number of bytes to write
+     * @param pattern64 64-bit little-endian repeating pattern
+     */
+    void memory_write_cache_pattern_loop_asm(void* dst, size_t byteCount, uint64_t pattern64);
     
     /**
      * @brief Pointer chasing loop for latency measurement (assembly)
