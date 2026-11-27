@@ -33,12 +33,14 @@
 
 Target platform is **macOS on Apple Silicon**.
 
-This manual focuses on practical usage and interpretation. For implementation details and latency methodology internals, see:
+This manual focuses on practical usage and interpretation. For implementation details and methodology internals, see:
 
 - [README.md](../README.md)
 - [CAPABILITIES.md](CAPABILITIES.md)
 - [TECHNICAL_SPECIFICATION.md](TECHNICAL_SPECIFICATION.md)
+- [CPU_BANDWIDTH_WHITEPAPER.md](CPU_BANDWIDTH_WHITEPAPER.md)
 - [LATENCY_WHITEPAPER.md](LATENCY_WHITEPAPER.md)
+- [PATTERNS_WHITEPAPER.md](PATTERNS_WHITEPAPER.md)
 - [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md)
 - [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md)
 - [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md)
@@ -86,11 +88,13 @@ make
 Test and coverage targets:
 
 ```bash
-make test                 # deterministic unit suite
-make test-script-examples # current script-example JSON entry paths
+make test                  # deterministic unit suite
+make test-script-examples  # current script-example JSON entry paths
+make test-patterns-verifier # independent patterns artifact & mutation tests
+make test-cpu-verifiers    # independent CPU bandwidth, CPU latency & patterns verifier tests
 make test-llm-verifier     # independent LLM artifact contract and mutation tests
-make test-integration     # real Apple Silicon/CLI workflows
-make test-all             # all GTest cases, then script-example and LLM verifier tests
+make test-integration      # real Apple Silicon/CLI workflows
+make test-all              # all GTest cases, then script-example, LLM verifier, and CPU verifier tests
 make coverage-unit        # isolated LLVM report under /tmp
 make coverage-all
 ```
@@ -100,7 +104,7 @@ production C++ and Objective-C++ only and excludes tests, GoogleTest, the bundle
 assembly. The macOS 26.0 build links the system Metal and Foundation frameworks. GPU kernels are embedded MSL 2.3
 source compiled at runtime; the optional offline Metal Toolchain is not required.
 
-`make test-all` requires Python 3 for its script-example and LLM verifier tests. It does not require `jq`.
+`make test-all` requires Python 3 for its script-example, LLM verifier, and CPU verifier tests. It does not require `jq`.
 
 ### First run
 
@@ -111,10 +115,16 @@ error instead of falling back to help):
 memory_benchmark
 ```
 
-To run the standard memory benchmark:
+To run the standalone audited CPU bandwidth benchmark:
 
 ```bash
-memory_benchmark --benchmark
+memory_benchmark --cpu-bandwidth
+```
+
+To run the standalone audited CPU pointer-chasing latency benchmark:
+
+```bash
+memory_benchmark --cpu-latency
 ```
 
 To run the standalone GPU bandwidth suite:
@@ -156,7 +166,7 @@ If running from an uninstalled local source build, prefix commands with `./`.
 For longer runs, prevent sleep:
 
 ```bash
-caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024
+caffeinate -i -d memory_benchmark --cpu-bandwidth --count 10 --buffer-size 1024
 ```
 
 If running a local build, use `./memory_benchmark` instead of `memory_benchmark` (see note in "[First run](#first-run)").
@@ -371,128 +381,78 @@ larger stride increases page turnover pressure.
 Use `0` when you explicitly want a global-random chain. It can increase page turnover, but it does not isolate
 translation effects.
 
-When `--latency-tlb-locality-kb` is omitted in regular benchmark mode, main-memory latency output also runs an
-automatic comparison and prints:
+In `--cpu-latency` mode, explicitly passing `--compare-locality` (which requires `--buffer-size > 0` and
+`--latency-stride-bytes <= 8192`) runs `3` paired comparison rounds per loop before target measurements comparing a
+16 KiB `random-box` chain against a `global-random` chain, and reports:
 
-- 16 KiB locality latency
-- Global-random latency
-- Locality latency delta (`global - 16 KiB`)
+- `16KB P50` (`aggregates.locality_comparison.locality_16k_latency_ns`)
+- `Global P50` (`aggregates.locality_comparison.global_random_latency_ns`)
+- `Delta` (`aggregates.locality_comparison.locality_latency_delta_ns = median(global) - median(16k)`)
 
-The comparison uses three paired rounds. Each round rebuilds both layouts from recorded derived seeds, alternates which
-layout is measured first, and retains the same-round delta. The reported delta is the median of those paired deltas, not
-the difference of independently grouped medians. It combines locality, cache, and translation effects and is not an
-isolated page-walk cost; use `--analyze-tlb` for controlled translation-boundary conclusions.
-
-If you explicitly set `--latency-tlb-locality-kb` (including `16` or `0`), this auto comparison is skipped.
+Each round rebuilds both layouts from recorded derived seeds and uses the frozen main-memory `complete_chain_cycles`.
+The delta combines locality, cache, and translation effects and is not an isolated page-walk cost; use `--analyze-tlb`
+for controlled translation-boundary conclusions. Without `--compare-locality`, `locality_comparison` is `null`.
 
 ### Pattern benchmarks
 
-Pattern mode (`--patterns`) measures bandwidth sensitivity across:
+Standalone patterns mode (`-P`/`--patterns`, schema 1, `mode: "patterns"`, `methodology_version: "patterns-v1-arm64-phase-calibrated-seeded-balanced"`) measures audited effective `read`, `write`, and `copy` bandwidth across seven canonical access geometries:
 
-- Sequential Forward
-- Sequential Reverse
-- Strided (64-byte stride)
-- Strided (4096-byte stride)
-- Strided (16 KiB stride)
-- Strided (2 MiB stride)
-- Random Uniform
+- `sequential_forward`
+- `sequential_reverse`
+- `strided_64` (64-byte stride)
+- `strided_4096` (4096-byte stride)
+- `strided_16384` (16 KiB stride)
+- `strided_2mb` (2 MiB virtual stride)
+- `random` (32-byte-aligned per-worker unique permutation)
 
-Pattern bandwidth is effective payload bandwidth, not inferred physical DRAM or cache-bus traffic. Each valid access
-contributes the 32-byte payload actually processed by the pattern kernel; this is half of a 64-byte cache line, not a
-complete cache-line payload. Copy counts both the read and write sides, for 64 payload bytes per logical copy access.
-The bandwidth numerator is the exact planned payload completed by every worker and pass.
+Pattern bandwidth is effective payload bandwidth, not inferred physical DRAM or cache-bus traffic. Each valid access processes a 32-byte payload (half of a 64-byte cache line, not a complete cache-line payload). Copy counts both the read and write sides, for 64 payload bytes per logical copy access (`exact_payload_bytes = 2 * total_accesses * 32`). Reported `bandwidth_gb_s` uses exact completed payload divided by Mach `cpu_raw` elapsed seconds (`10^9` bytes/s).
 
-Strided results use a deterministic per-worker work plan. A worker's last candidate address is included when the complete
-32-byte access fits within its cache-line-aligned chunk. Reported read/write bandwidth is calculated from the exact sum
-of these worker payloads, while copy bandwidth counts both the read and write sides. The executor receives the finalized
-worker ranges directly and does not repartition them. On every pass,
-the ARM64 kernel advances the starting phase by 32 bytes modulo the stride, so sparse tests do not repeatedly touch
-only the phase-zero addresses. All passes for one worker execute inside one assembly call, and the bandwidth numerator
-uses the exact phase-aware access count. Strided warmup executes one complete phase cycle (`stride / 32` passes).
-Stride labels are byte distances, not page-size claims. For example, 4096 bytes is not one native page on a macOS
-system with 16 KiB pages; JSON records the native page size and whether the configured stride equals it.
+Before timing begins, persistent `src` and `dst` `mmap` buffers are allocated with `AllocatedBufferEvidence` (`madvise` `MADV_RANDOM` under `-u`, else `MADV_WILLNEED`). `src` is populated with the slot-tagged O(1) GF(2) pattern `patterns-buffer-pattern-v1` and protected read-only via `mprotect(PROT_READ)`. Before `copy` attempts (and `write` attempts where `has_untouched_dst_bytes` is true), `dst` is filled outside the timer with a unique odd `pre_op_sentinel`. Timed `read` passes compute non-cancelling per-worker and folded `patterns-read-checksum-v1` accumulators checked against O(1) sequential and 2D partial-cycle strided oracles; `write` (using `memory_write_pattern_loop_asm`, `memory_write_reverse_pattern_loop_asm`, `memory_write_strided_phased_pattern_loop_asm`, and `memory_write_random_pattern_loop_asm`) and `copy` attempts use unique odd `write_pattern` values and undergo parallel cold post-validation over 100% of touched bytes and 100% of untouched sentinel bytes (`execution.validation.checks[]` with 6 checks).
 
-Phase rotation means a strided pass can contain a different number of valid accesses than the preceding pass. In JSON,
-`accesses_per_pass` deliberately retains the phase-zero count and `accesses_per_pass_semantics` identifies it as
-`"phase-zero-count"`; `min_accesses_per_pass`, `max_accesses_per_pass`, and `phase_period_passes` describe the variation.
-Use `total_accesses` and `total_payload_bytes` as the authoritative exact totals. Do not calculate either total as
-`accesses_per_pass * passes`. Non-strided measurements use `"constant-count"` semantics and equal minimum/maximum counts.
+Strided plans use deterministic 64-byte-partitioned worker spans (`partition_patterns_64b`). On every pass, the ARM64 strided kernel advances the starting phase by 32 bytes modulo `stride_bytes`, so sparse tests do not repeatedly hit only phase-zero slots. Because pass-to-pass phase rotation varies per-pass access counts when `span_bytes` is not a full stride multiple, JSON `resolved_plan.operation_plans[]` records `accesses_per_pass` (phase 0), `min_accesses_per_pass`, `max_accesses_per_pass`, `completed_phase_cycles`, `total_accesses`, and `exact_payload_bytes` (while each `measurements[]` row records `completed_passes` and `completed_exact_payload_bytes`). Do not compute exact totals by multiplying `accesses_per_pass * passes`; use `total_accesses` and `exact_payload_bytes`. Stride labels are virtual byte distances, not page-size claims: `native_page_size_bytes` and `stride_equals_native_page_size` record whether a stride matches the OS page size (`16384` on Apple Silicon), and `strided_2mb` reports `large_page_backing_verified: false` / `large_page_backing_status: "not-verified"`.
 
-Every active strided worker must have at least two valid addresses and therefore make at least one genuine stride
-transition. If the requested thread count cannot satisfy that rule, the benchmark automatically uses fewer workers for
-that strided pattern. Sequential and random patterns continue to use the configured thread count. This distinction is
-especially important for large strides and small buffers.
+Every active strided worker must perform at least two 32-byte accesses (one stride transition). If requested workers cannot satisfy that rule, `effective_workers` is reduced for that strided pattern. When `buffer_bytes < stride_bytes + 32` (for `strided_2mb`, `buffer_bytes < 2 MiB + 32 B`, such as 1 MiB or 2 MiB buffers), the pattern is published as `status: "skipped"` (`reason_code: "buffer-too-small-for-stride-transition"`) in `resolved_plan` and `aggregates` rather than failing the run, and omitted from `calibration`, `measurements[]`, and `loop_records[]`.
 
-Parallel pattern timing begins only after every actual worker has completed its best-effort QoS setup attempt and
-reached the ready gate. It stops when the last worker finishes its measured work; worker teardown and thread joining
-remain outside the measured interval. Work planning, random-list creation and partitioning, thread creation, QoS setup,
-and ready-gate waiting are also excluded. For the random pattern, the global access list is partitioned into per-worker
-local index lists and finalized worker boundaries before any timed call. The timed callback uses those lists directly;
-worker lookup, index filtering, and list allocation are not included in reported bandwidth.
-QoS is a best-effort macOS scheduler hint; workers are not pinned to cores, and effective placement can still vary.
+For `random`, selected accesses per pass are `min(total_slots, clamp(total_slots, 1000, 1_000_000))` where `total_slots = buffer_bytes / 32`, distributed proportionally across 64-byte worker spans. Each worker generates its own 32-byte-aligned offsets via `splitmix64-coprime-fisher-yates-v1` from `random_domain_seed` (with canonical `random_indices_sha256` and a `<= 8 MiB` sorted copy for untouched-sentinel checks) before calibration or timing starts.
 
-Unless `--iterations` is supplied explicitly, each sequential, strided, and random read/write/copy sample first runs an
-excluded pilot and scales the measured pass count toward 150 ms; 100–250 ms is the intended measurement window. The
-pilot uses the same operation, access pattern, and worker shape as the measured sample, so it also provides
-preconditioning. If `--iterations` is explicit, that value is the measured pass count and the calibration pilot is not
-run. In both modes, an operation-specific same-shape warmup runs before the measured operation: read warms read, write
-warms write, copy warms copy, random warmup traverses the complete measured list, and strided warmup completes a phase
-cycle.
+Timing starts only after every worker completes best-effort `QOS_CLASS_USER_INTERACTIVE` setup and reaches the synchronized start gate, and stops after the last worker issues `dsb ish` and `HighResTimer::stop()` (`dsb ish; isb` + `mach_absolute_time()`). Unless `--iterations` is supplied, excluded auto-calibration runs once before loop `0` (`calibration_shape_warmup`, `pilot`, up to `2` `correction` steps targeting `0.150 s` in `[0.100 s, 0.250 s]`, plus optional `single_unit_confirmation_warmup`/`single_unit_confirmation`), freezes `frozen_plan_refs` atomically, and runs one `frozen_measurement_warmup` per active `(pattern, op)` before loop `0` (there are no per-loop warmups inside timed loops).
 
-Random offsets are the unique, no-replacement prefix of a deterministic seeded permutation of valid 32-byte-aligned
-slots. `--seed` selects that permutation. If omitted, one seed is generated once for the command; regenerating the list
-from the same resolved seed means every `--count` loop uses the same random workload. Random read, write, and copy
-warmups traverse the full measured address list rather than a prefix.
-
-Pattern results therefore describe steady-state, warm-memory bandwidth. They do not measure cold allocation, first
-touch, or a cold-cache/cold-TLB start; warmup and, in automatic mode, the excluded pilot intentionally prepare the tested
-access shape.
-
-Across repeated `--count` loops, the seven pattern groups rotate in deterministic cyclic Latin-square order. This spreads
-first/last-position and thermal-drift effects while preserving reproducibility. Operations inside each group remain in
-fixed read, write, copy order, with operation-specific warmup before each one. The resolved random seed and workload are
-identical across the repeated loops.
-
-For `--count > 1`, the console headline is the median (P50), not the last loop or arithmetic mean. Pattern statistics
-also report coefficient of variation (CV). The console warns when CV exceeds 5% for sequential or 64-byte-stride
-operations and 10% for 4096-byte, 16 KiB, 2 MiB, or random operations. These thresholds flag a noisy measurement; they
-are not correctness limits. If a workload cannot produce a valid measurement, console output shows `N/A` plus an
-explicit status/reason, and JSON stores `value_gb_s: null` plus status metadata. Never interpret an unavailable value as
-zero bandwidth.
+Across repeated `--count` loops (default `3`), both active patterns (`loop % active_patterns.size()`) and operations (`loop % 3`) rotate in a 2-axis cyclic Latin-square schedule (`pattern_order_balance_complete` and `operation_order_balance_complete`). Headline `aggregates.patterns.<kind>.<op>.value` is the P50 median of `measured` loops (alongside `relative_to_forward_pct` and full `statistics`); CV warnings trigger at `n >= 3` above `5.0%` for streaming patterns (`sequential_forward`, `sequential_reverse`, `strided_64`) and above `10.0%` for sparse patterns (`strided_4096`, `strided_16384`, `strided_2mb`, `random`). Unavailable or skipped metrics store `null` plus explicit `status`/`reason_code`, never `0`. See [PATTERNS_WHITEPAPER.md](PATTERNS_WHITEPAPER.md) for the complete specification.
 
 ---
 
 ## Command-Line Options
 
-All six primary modes share one descriptor-driven CLI option parser. Every single-occurrence option — including primary
-mode selectors (`-B`, `-P`, `-T`, `-C`, `-G`, `-M`), boolean flags (`-W`, `-L`, `-u`, `-h`), and single-value options
-such as `--buffer-size`, `--cache-size`, `--threads`, `--latency-samples`, and `--output` — must be specified at most
-once per command across all six modes. `-S`/`--sweep` is the sole repeatable option: repeat it once per swept parameter,
-while using each parameter key at most once.
+All seven primary modes share one descriptor-driven CLI option parser. Every single-occurrence option — including primary
+mode selectors (`-B`, `-L`, `-P`, `-T`, `-C`, `-G`, `-M`), boolean flags (`--compare-locality`, `-u`, `-h`), and
+single-value options such as `--buffer-size`, `--cache-size`, `--threads`, `--latency-samples`, and `--output` — must be
+specified at most once per command across all seven modes. `-S`/`--sweep` is the sole repeatable option: repeat it once
+per swept parameter, while using each parameter key at most once.
 
 Long options require a double dash (`--`), and long value-taking options accept both space-separated (`--buffer-size 512`,
 `--output -`) and inline (`--buffer-size=512`, `--output=-`, `--output=`, `--sweep=buffer-size=128,256`) syntax. Passing
-an inline value to a boolean or primary-mode flag (such as `--benchmark=1` or `--help=1`) is rejected
-(`Option --... does not take a value`). A single dash is reserved for space-separated one-character short options, so
-legacy single-dash long forms (`-buffersize`, `-benchmark`) and single-dash inline forms (`-b=512`) are invalid.
+an inline value to a boolean or primary-mode flag (such as `--cpu-bandwidth=1`, `--cpu-latency=1`,
+`--compare-locality=1`, or `--help=1`) is rejected (`Option --... does not take a value`). A single dash is reserved for
+space-separated one-character short options, so legacy single-dash long forms (`-buffersize`) and single-dash inline forms
+(`-b=512`) are invalid.
 
-All six mode parsers emit concise single-line `Error: ...` diagnostics on `stderr` without dumping the full usage text
-on parse errors, and standalone whitelist modes (`--analyze-tlb`, `--analyze-core2core`, `--gpu-bandwidth`,
-`--llm-memory`) explicitly name the offending option (`Unsupported option '<token>': ...`). Running `memory_benchmark`
-with no arguments prints help to stdout and exits `0`; running with modifier options but no primary mode flag fails with
-`EXIT_FAILURE`, empty stdout, and a centralized error on `stderr`.
+All seven mode parsers emit concise single-line `Error: ...` diagnostics on `stderr` without dumping the full usage text
+on parse errors, and standalone whitelist modes (`--cpu-bandwidth`, `--cpu-latency`, `--patterns`, `--analyze-tlb`,
+`--analyze-core2core`, `--gpu-bandwidth`, `--llm-memory`) explicitly name the offending option
+(`Unsupported option '<token>': ...`). Running `memory_benchmark` with no arguments prints help to stdout and exits `0`;
+running with modifier options but no primary mode flag fails with `EXIT_FAILURE`, empty stdout, and a centralized error
+on `stderr`.
 
 Numeric values must be complete decimal tokens. Leading/trailing whitespace,
-leading `+`, trailing characters, and overflow are rejected; unsigned seeds
-also reject either sign. Comma-separated sweep lists reject empty leading,
-middle, and trailing items.
+leading `+`, trailing characters, and overflow are rejected; unsigned seeds and standalone `--cpu-bandwidth`,
+`--cpu-latency`, `--patterns`, and `--llm-memory` numeric options also reject either sign. Comma-separated sweep lists reject empty
+leading, middle, and trailing items.
 
 | Short | Long |
 |---|---|
-| `-B` | `--benchmark` |
+| `-B` | `--cpu-bandwidth` |
+| `-L` | `--cpu-latency` |
 | `-P` | `--patterns` |
-| `-W` | `--only-bandwidth` |
-| `-L` | `--only-latency` |
 | `-T` | `--analyze-tlb` |
 | `-C` | `--analyze-core2core` |
 | `-G` | `--gpu-bandwidth` |
@@ -521,6 +481,7 @@ middle, and trailing items.
 | `-s` | `--latency-stride-bytes` |
 | `-m` | `--latency-chain-mode` |
 | `-l` | `--latency-tlb-locality-kb` |
+| — | `--compare-locality` |
 | `-D` | `--tlb-density` |
 | `-u` | `--non-cacheable` |
 | `-o` | `--output` |
@@ -534,21 +495,24 @@ middle, and trailing items.
 
 - Main buffer size in MB (per main buffer)
 - Default: `512`
-- Standard/pattern paths apply their documented memory safety size rules
-- `--buffer-size 0` is valid only with `--only-latency` and disables main-memory latency path
+- In `--cpu-bandwidth` and `--cpu-latency`, `--buffer-size 0` (`0..2^53 - 1`) omits `main_memory` (provided at least one
+  cache target remains active). Oversized requests are rejected at strict `memory_budget` preflight without silent truncation
+- `--patterns` requires a positive value (`1..2^53 - 1`, `0` rejected) and enforces strict `memory_budget` preflight
+  (`memory-budget-exceeded`) without silent truncation or capping
 - In GPU mode, this is the exact size of each of two private buffers, the hard minimum is `64` MB, and the requested
   value is rejected rather than silently reduced if it exceeds the Metal or suite memory budget
 
 #### `--iterations <count>`
 
-- Exact measured bandwidth pass/dispatch count, or exact LLM scenario work-unit count, when explicitly supplied
-- Positive integer (`1..INT_MAX` for `--benchmark` and `--patterns`)
-- Not allowed with `--only-latency`
-- In `--benchmark`, `--patterns`, `--gpu-bandwidth`, and `--llm-memory`, omission enables excluded
+- Exact measured R/W/Copy pass count (`--cpu-bandwidth`, `--patterns`, `--gpu-bandwidth`), complete pointer-chain cycles
+  (`--cpu-latency`), or LLM scenario work-unit count when explicitly supplied
+- Range: `1..1,000,000,000` in `--cpu-bandwidth`, `--cpu-latency`, and `--patterns`
+- In `--cpu-bandwidth`, `--patterns`, `--gpu-bandwidth`, and `--llm-memory`, omission enables excluded
   operation- or scenario-specific work and automatic calibration toward 150 ms (100–250 ms intended window, at most
-  two corrections)
-- Standard calibration is target- and operation-specific and its resolved pass count is reused across `--count` loops
-- An explicit value bypasses pilot/corrections but not the operation-specific warmup
+  two corrections). In `--cpu-latency`, omission calibrates complete chain cycles toward 250 ms (100–300 ms intended
+  window, at most two corrections, floored at 16 complete cycles when guardrails permit)
+- Resolved per-target/per-operation work is frozen once and reused across `--count` loops
+- An explicit value bypasses pilot/corrections but not the frozen-plan warmup
 - In GPU mode, the value is an exact full-buffer dispatch count. It must fit both the 16,384-dispatch limit and the
   64 GiB exact-payload limit; copy's 2× numerator defines the strict shared CLI ceiling
 - In LLM mode, the value is an exact decode-step or full-prompt prefill-operation count per scenario. CPU caps one
@@ -560,64 +524,96 @@ middle, and trailing items.
 #### `--count <count>`
 
 - Full benchmark loop count
-- General default: `1`
-- Core-to-core default: `3`; this mode-specific default does not change standard or pattern execution
-- GPU-bandwidth default: `3`; its operation order rotates so one complete three-loop block gives read/write/copy one
-  first, middle, and last position each
-- LLM-memory default: `3`; its planned weights-only/KV-only/mixed order rotates across one complete three-loop block
-- Positive integer: up to `INT_MAX` (`2,147,483,647`) for general, core-to-core, and GPU modes, and up to
-  `floor((2^53 - 1) / 3)` (`3,002,399,751,580,330`) for `--llm-memory` so `planned_measurements = 3 * count` remains
-  within the exact IEEE-754 JSON safe integer range
+- `--cpu-bandwidth`, `--cpu-latency`, `--patterns`, `--analyze-core2core`, `--gpu-bandwidth`, and `--llm-memory` default:
+  `3` (so repeated runs emit median P50 and repeatability metrics out of the box)
+- In `--cpu-bandwidth`, cyclic Latin-square scheduling rotates active targets and `read`/`write`/`copy` operations
+  (balancing both when `count % num_targets == 0` and `count % 3 == 0`). In `--patterns`, 2-axis cyclic Latin-square
+  scheduling rotates active patterns (`loop % active_patterns.size()`) and operations (`loop % 3`). In `--cpu-latency`,
+  cyclic scheduling rotates active targets (`target_order_balance_complete` when `count % num_targets == 0`)
+- Positive integer: up to `2^53 - 1` (`9,007,199,254,740,991`) in `--cpu-bandwidth`, `--cpu-latency`, and `--patterns`,
+  `INT_MAX` (`2,147,483,647`) for core-to-core and GPU modes, and `floor((2^53 - 1) / 3)` (`3,002,399,751,580,330`)
+  for `--llm-memory`
 - Use `5` to `10` for stable statistics
 
 #### `--threads <count>`
 
-- Thread count for bandwidth tests
-- Main-memory bandwidth and `--patterns` default to the count of all detected CPU cores
-- Standard cache bandwidth defaults to one worker when `--threads` is omitted; an explicit `--threads` value applies
-  to both main-memory and cache bandwidth
-- If above available cores, it is capped
+- Thread count for bandwidth tests (`1..UINT32_MAX` in `--cpu-bandwidth` and `--patterns`)
+- `--cpu-bandwidth` and `--patterns` default `main_memory` to the count of all detected logical CPU cores; `--cpu-bandwidth`
+  defaults cache targets (`l1`/`l2`/`custom`) to `1` worker when `--threads` is omitted, while an explicit `--threads`
+  value applies to every active target (capped per target to `min(desired, available_workers, max(1, target_bytes / 64))`)
 - To reproduce a worker-count profile matching the detected P-core count, set that count explicitly with `--threads`;
   this does not pin those workers to P-cores
-- In pattern mode this is a requested count; sparse strided work may use fewer effective workers so each worker performs
-  at least one genuine stride transition
-- Pattern workers request best-effort macOS QoS but are not pinned to specific cores
+- In `--patterns`, `requested_workers` is preserved in `configuration` and `effective_workers` is clamped per pattern
+  (`min(requested, available, max_aligned)` plus `>= 2` strided accesses per worker for strided patterns)
+- Workers request best-effort macOS QoS (`QOS_CLASS_USER_INTERACTIVE`) but are not pinned to specific cores
 - LLM-memory defaults its requested count to detected CPU workers. An explicit request remains distinct from detected
   availability; its immutable work plan records requested, available, and effective counts, reducing effective workers
   only when detected availability or executable span size requires it
 - Metal LLM-memory does not detect CPU workers and rejects explicit `--threads`; its worker and worker-QoS JSON fields
   are null with applicability false
-- Latency tests remain single-threaded; `--threads` is rejected with `--benchmark --only-latency`
+- Latency tests remain single-threaded; `--cpu-latency` rejects `--threads` (`Unsupported option ...`)
 
 ### Mode selection
 
-#### `--benchmark`
+#### `--cpu-bandwidth`
 
-- **Required** to run standard memory benchmark (bandwidth + latency)
-- Mutually exclusive with `--patterns` and all other primary modes
-- Can be combined with `--only-bandwidth`, `--only-latency`, `--cache-size`, `--threads`, and other modifier flags
-- Rotates enabled phase groups and read/write/copy order in deterministic cyclic schedules across `--count` loops
-- Uses continuous latency headlines calibrated toward 250 ms, accepted in a 100–300 ms window, and rounded to at least
-  16 complete pointer-chain cycles. If the cycle minimum itself exceeds 300 ms, metadata reports
-  `minimum-complete-cycles-exceed-window` instead of treating it as an ordinary calibration miss
-- Reuses calibrated work and seeded logical chains so repeated loops vary runtime conditions rather than workload shape
-- A direct command accepts `--output -` as a final machine-readable stdout target. After parsing, the banner,
-  configuration, progress, results, warnings, and errors are routed to stderr; stdout contains one JSON document
-- Running with no arguments (`memory_benchmark`) shows help and exits `0`; passing modifier options without any primary
-  mode flag fails with a non-zero exit code and a centralized error on stderr
+- Runs the standalone audited CPU memory bandwidth benchmark (`-B`/`--cpu-bandwidth`, schema 1, `mode: "cpu_bandwidth"`,
+  methodology `cpu-bandwidth-v1-arm64-calibrated-seeded-balanced`)
+- Exact 12-option whitelist: `-B/--cpu-bandwidth`, `-b/--buffer-size`, `-k/--cache-size`, `-t/--threads`, `-i/--iterations`,
+  `-r/--count` (default `3`), `--seed`, `-u/--non-cacheable`, `-o/--output`, `-S/--sweep` (`buffer-size`, `cache-size`,
+  `threads`), `-X/--sweep-max-runs` (default `256`), and `-h/--help`
+- Measures `main_memory` + auto-detected `l1`/`l2` (or `--cache-size` `custom`), supporting `--buffer-size 0` or
+  `--cache-size 0` selective omission (requiring at least one active target)
+- Seeds persistent `src` once via O(1) GF(2) pattern (`cpu-bw-buffer-pattern-v1`) and protects it with `mprotect(PROT_READ)`;
+  verifies read passes via non-cancelling checksum (`cpu-bw-read-checksum-v1`) and verifies all bytes of `dst` cold after
+  `write` (`memory_write{_cache}_pattern_loop_asm`) and `copy` (`pre_copy_sentinel`)
+- Rotates active targets and `read`/`write`/`copy` in a cyclic Latin-square schedule, captures `cpu_raw` Mach ticks, and
+  writes bounded atomic file checkpoints every `K=max(1,ceil(count/8))` completed loops (stdout `--output -` writes one
+  final JSON document and routes human output to stderr)
+- Detailed methodology and schema contract: [CPU_BANDWIDTH_WHITEPAPER.md](CPU_BANDWIDTH_WHITEPAPER.md)
+
+#### `--cpu-latency`
+
+- Runs the standalone audited CPU pointer-chasing latency benchmark (`-L`/`--cpu-latency`, schema 1, `mode: "cpu_latency"`,
+  methodology `cpu-latency-v1-arm64-calibrated-seeded-balanced`)
+- Exact 16-option whitelist: `-L/--cpu-latency`, `-b/--buffer-size`, `-k/--cache-size`, `-i/--iterations`, `-r/--count`
+  (default `3`), `-n/--latency-samples` (default `1000`, `0` to disable), `-s/--latency-stride-bytes` (default `256`),
+  `-m/--latency-chain-mode` (`auto` default), `-l/--latency-tlb-locality-kb` (default `1024`), `--compare-locality`,
+  `--seed`, `-u/--non-cacheable`, `-o/--output`, `-S/--sweep` (`buffer-size`, `cache-size`, `latency-tlb-locality-kb`,
+  `latency-stride-bytes`, `latency-chain-mode`), `-X/--sweep-max-runs` (default `256`), and `-h/--help`
+- Measures auto-detected `l1`/`l2` (or `--cache-size` `custom`) + `main_memory`, supporting `--buffer-size 0` or
+  `--cache-size 0` selective omission (requiring at least one active target)
+- Builds chains via `splitmix64-fisher-yates-rejection-v1`, cyclically rotates `indices` so `indices[0] == 0`, computes
+  `chain_permutation_sha256`, prevalidates a single Hamiltonian cycle, and applies `mprotect(PROT_READ)`
+- Uses continuous pointer-chase headlines calibrated toward 250 ms (`[100 ms, 300 ms]`, minimum 16 complete chain cycles
+  when guardrails allow) returning to node `0` (`main-final-pointer`), optional continuous sample windows verifying every
+  window end node (`sample-window-end-pointers`), and explicit opt-in `--compare-locality`
+- Writes bounded atomic file checkpoints every `K=max(1,ceil(count/8))` completed loops (stdout `--output -` writes one
+  final JSON document and routes human output to stderr)
+- Detailed methodology and schema contract: [LATENCY_WHITEPAPER.md](LATENCY_WHITEPAPER.md)
 
 #### `--patterns`
 
-- Runs only access-pattern benchmarks
-- Skips standard bandwidth/latency sections and rejects unused cache/latency modifiers (`--cache-size`,
-  `--latency-samples`, `--latency-stride-bytes`, `--latency-chain-mode`, and `--latency-tlb-locality-kb`)
-- Automatically calibrates each read/write/copy sample toward 150 ms (intended window 100–250 ms) unless
-  `--iterations` is explicitly supplied
-- Uses the historical all-detected-CPU-core default for comparison compatibility; a matching explicit worker-count
-  profile can use `--threads <detected P-core count>`, but placement remains unpinned
-- Rotates pattern groups across repeated loops; read/write/copy order within each group stays fixed
-- A direct command accepts `--output -` with the same one-document stdout and human-stderr stream contract as direct
-  standard mode
+- Runs the standalone audited CPU access-pattern benchmark (`-P`/`--patterns`, schema 1, `mode: "patterns"`,
+  methodology `patterns-v1-arm64-phase-calibrated-seeded-balanced`)
+- Exact 11-option whitelist: `-P/--patterns`, `-b/--buffer-size` (`1..2^53 - 1`, `0` rejected), `-t/--threads`
+  (`1..UINT32_MAX`), `-i/--iterations` (`1..1,000,000,000`), `-r/--count` (default `3`), `--seed` (long-only),
+  `-u/--non-cacheable`, `-o/--output`, `-S/--sweep` (`buffer-size`, `threads`), `-X/--sweep-max-runs` (default `256`),
+  and `-h/--help`
+- Evaluates `sequential_forward`, `sequential_reverse`, `strided_64`, `strided_4096`, `strided_16384`, `strided_2mb`,
+  and `random` (`strided_2mb` is `status: "skipped"` with `buffer-too-small-for-stride-transition` when
+  `buffer_bytes < 2 MiB + 32 B`)
+- Seeds persistent `src` once via slot-tagged O(1) GF(2) pattern (`patterns-buffer-pattern-v1`) and protects it with
+  `mprotect(PROT_READ)`; verifies timed reads via `patterns-read-checksum-v1` (O(1) sequential & 2D partial-cycle
+  strided), builds per-worker random indices via `splitmix64-coprime-fisher-yates-v1` (`random_indices_sha256`), and
+  validates 100% of touched bytes and 100% of untouched `pre_op_sentinel` bytes cold after `write` and `copy`
+  (`execution.validation.checks[]`)
+- Automatically calibrates each active `(pattern, op)` toward 150 ms (`[0.100 s, 0.250 s]`, max `2` corrections) unless
+  `--iterations` is supplied, freezes plans atomically, runs `frozen_measurement_warmup` before loop `0`, and rotates
+  both active patterns and `read`/`write`/`copy` in a 2-axis cyclic Latin-square schedule
+- Writes bounded atomic file checkpoints every `K=max(1,ceil(count/8))` completed loops (stdout `--output -` writes one
+  final JSON document and routes human output to stderr)
+- Detailed methodology and schema contract: [PATTERNS_WHITEPAPER.md](PATTERNS_WHITEPAPER.md)
 
 #### `--gpu-bandwidth`
 
@@ -785,23 +781,6 @@ middle, and trailing items.
   included in effective-model-payload GB/s. See
   [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md)
 
-#### `--only-bandwidth`
-
-- Runs bandwidth paths only
-- **Requires `--benchmark`**
-- Incompatible with: `--patterns`, `--cache-size` (any value including `0`), `--latency-samples`,
-  `--latency-stride-bytes`, `--latency-chain-mode`, `--latency-tlb-locality-kb`
-
-#### `--only-latency`
-
-- Runs latency paths only
-- **Requires `--benchmark`**
-- Incompatible with: `--patterns`, `--iterations`, `--threads`
-- Supports selective target disabling:
-  - `--buffer-size 0` disables main-memory latency
-  - `--cache-size 0` disables cache latency
-  - both zero is invalid
-
 #### `--analyze-tlb`
 
 - Runs standalone TLB analysis mode only
@@ -845,13 +824,17 @@ middle, and trailing items.
 
 #### `--seed <uint64>`
 
-- Applies to `--benchmark`, `--patterns`, `--analyze-tlb`, `--gpu-bandwidth`, or `--llm-memory`
-- In `--benchmark`, derives domain-separated seeds for main, L1, L2, custom, sampling, and both automatic-locality
-  layouts; repeated loops rebuild equivalent logical chains and schedules
-- A standard seed reproduces workload/schedule metadata, not performance values or macOS thread placement
-- In `--patterns`, selects the deterministic unique/no-replacement permutation prefix of valid 32-byte-aligned random
-  offsets; the same resolved seed reproduces the workload, and every `--count` loop repeats it
-- In `--patterns`, one unsigned 64-bit seed is generated once for the command when omitted
+- Applies to `--cpu-bandwidth`, `--cpu-latency`, `--patterns`, `--analyze-tlb`, `--gpu-bandwidth`, or `--llm-memory`
+  (`0..UINT64_MAX`, `0` allowed)
+- In `--cpu-bandwidth`, derives domain-separated target seeds (`main_memory`, `l1`, `l2`, `custom`, `pre_copy_sentinel`),
+  operation seeds, write patterns, and per-worker checksum initial states; shared across all runs in a sweep
+- In `--cpu-latency`, derives domain-separated chain seeds (`l1`, `l2`, `custom`, `main_memory`, `locality_16k`,
+  `locality_global`); shared across all runs in a sweep
+- A seed reproduces workload/schedule/chain identity, not performance values or macOS thread placement
+- In `--patterns`, derives the `SplitMix64` domain seed hierarchy (`src_seed`, `random_domain_seed`, `pre_op_sentinel_seed`),
+  per-op seeds, unique odd `write_pattern`/`pre_op_sentinel` sequences, and per-worker `splitmix64-coprime-fisher-yates-v1`
+  random offsets; the same resolved seed reproduces all workloads across `--count` loops and sweeps
+- In `--patterns`, one unsigned 64-bit nonzero seed is generated once for the command when omitted
 - In `--analyze-tlb`, controls base/refinement/validation/large-locality round order, pointer-chain construction, and
   deterministic bootstrap resampling
 - In `--analyze-tlb`, the same seed reproduces planner order, derived task seeds, and chain permutations
@@ -904,12 +887,12 @@ middle, and trailing items.
 
 #### `--latency-samples <count>`
 
-- Sample count per latency test
+- Sample count per latency test (`0..INT_MAX` in `--cpu-latency`, `1..INT_MAX` in `--analyze-core2core`)
 - Default: `1000`
-- Positive integer
-- In standard pointer-chase latency, samples are collected in a separate pass whose windows continue from the preceding window's terminal pointer
-- In standard pointer-chase latency, the effective sample count is capped to that measurement's access count so every
-  sample window contains at least one access
+- In `--cpu-latency`, `0` disables sample windows; positive values run a separate pass whose windows continue from the
+  preceding window's terminal pointer and verify each window's end pointer (`sample-window-end-pointers`)
+- In `--cpu-latency`, the effective sample count is capped to that measurement's access count (`min(requested, access_count)`)
+  so every sample window contains at least one access
 - In core-to-core mode, each sample is a separately timed handoff window calibrated toward 1 ms with a 2,000-round-trip minimum
 - In both modes, sample count/granularity does not define or change the separate continuous headline calculation
 
@@ -917,14 +900,12 @@ middle, and trailing items.
 
 - Pointer-chain stride for latency tests
 - Default: `256`
-- Must be `> 0`
+- Must be `> 0` (`8..UINT32_MAX` in `--cpu-latency`)
 - Must be a multiple of 8 bytes (pointer size on Apple Silicon)
-- In standard latency mode, every enabled main-memory, detected-cache, or custom-cache chain and the configured locality
-  window must retain at least two pointer nodes after applying the stride; the effective upper bound therefore depends
-  on the smallest enabled target or configured window
-- When locality is omitted, the extra automatic 16 KiB comparison needs a stride of at most `8192` bytes to form two
-  nodes. A larger otherwise-valid stride makes that comparison unavailable but does not invalidate the configured target
-  chains
+- In `--cpu-latency`, every enabled `l1`, `l2`, `custom`, or `main_memory` chain and the configured locality window must
+  retain at least two pointer nodes after applying the stride
+- When `--compare-locality` is passed, stride must be `<= 8192` bytes so a 16 KiB locality window retains at least two
+  nodes (checked at preflight)
 - With `--analyze-tlb`, must not exceed the system page size. The page-native spread builder rounds effective spacing up to a cache-line multiple, while the packed control uses one node per cache line; exact page-size divisibility is not required
 - Use smaller values (for example `64`) to increase same-page cache-line activity and reduce TLB sensitivity
 
@@ -940,27 +921,35 @@ middle, and trailing items.
 
 #### `--latency-tlb-locality-kb <size_kb>`
 
-- Pointer-chain locality window for latency path
+- Pointer-chain locality window for `--cpu-latency` (`0..2^53 - 1`)
 - Default: `1024`
-- `0` disables locality mode (global random chain)
+- `0` disables locality mode (resolves `auto` to `global-random`)
 - When the effective chain mode uses locality, non-zero values must be exact multiples of system page size. Explicit
   `global-random` ignores the locality window and does not apply this page-multiple constraint
 - For a chain mode that uses locality windows, a non-zero window must contain at least two stride-spaced pointer nodes
-- In regular benchmark mode, explicitly setting this option disables the automatic paired locality comparison
-- When omitted, the paired comparison uses conservative locality terminology and does not claim an isolated page walk
+
+#### `--compare-locality`
+
+- Explicit opt-in flag for `--cpu-latency` (not enabled automatically)
+- Runs `3` paired comparison rounds per loop before target measurements comparing a `16 KiB` `random-box` chain
+  (`locality_16k`) against a `global-random` chain (`locality_global`) using the frozen `main_memory` `complete_chain_cycles`
+- Requires `--buffer-size > 0` and `--latency-stride-bytes <= 8192`
+- Publishes `locality_comparison.rounds[]` and `aggregates.locality_comparison`
+  (`locality_latency_delta_ns = median(global) - median(16k)`). Combines cache, locality, and translation effects; not
+  an isolated page-walk cost
 
 ### Cache and memory hint controls
 
 #### `--cache-size <KB>`
 
-- Enables custom cache test size
+- Enables custom cache test size (`-B` and `-L`)
 - Non-zero range: `16` to `1048576` KB (1 GB)
-- `0` is accepted only with `--only-latency` and disables cache latency target
-- When set to non-zero, auto L1/L2 detection is replaced by custom cache target
+- `0` is accepted in `--cpu-bandwidth` and `--cpu-latency` to omit cache targets (requires `--buffer-size > 0`)
+- When set to non-zero, auto L1/L2 detection is replaced by the single `custom` cache target
 
 #### `--non-cacheable`
 
-- Applies cache-discouraging `madvise()` hints
+- Applies cache-discouraging `madvise(MADV_RANDOM)` hints (`-B`, `-L`, `-P`)
 - Best effort only; this does **not** create truly uncached memory
 
 ### Output
@@ -972,26 +961,26 @@ middle, and trailing items.
 - For every result-producing direct mode and supported sweep, an exact raw value of `-` selects
   machine-readable stdout. The sentinel is classified before path normalization
 - A supported stdout-target command emits exactly one two-space-indented UTF-8 JSON document followed by one newline
-  after orchestration reaches its terminal state. Intermediate standard, sweep and GPU checkpoint requests are
-  lazy no-ops; LLM skips intermediate snapshot preparation. Neither emits intermediate documents
+  after orchestration reaches its terminal state. Intermediate sweep and GPU checkpoint requests are
+  lazy no-ops; CPU bandwidth, CPU latency, and LLM skip intermediate snapshot preparation. None emits intermediate
+  documents
 - Post-parse human output is routed to stderr while the stdout target is active. Parse, preflight, and other pre-result
-  failures leave stdout empty; `--help` remains a human-facing stdout command across all six primary modes (including
+  failures leave stdout empty; `--help` remains a human-facing stdout command across all seven primary modes (including
   `--analyze-tlb --help`, `--output - --help`, and `--output=- --help`)
 - For result-producing modes, every other non-empty value is a file target, including `./-` and flag-shaped names such
   as `-G`. Thus `--output ./-` writes an ordinary file named `-`. Relative paths write under the current working
-  directory, and parent directories are created automatically. LLM-memory accepts and retains the same raw target
-  syntax in `configuration.output_file`
-- Standard and sweep file targets retain atomic intermediate checkpoints. Pattern, TLB, and core-to-core direct file
-  targets each receive one final atomic write. GPU file output retains its terminal-measurement/failure checkpoints and
-  post-release replacement. Direct LLM files snapshot every `K=max(1,ceil(count/8))` completed loops plus command
-  terminal. At most eight progress writes occur; abrupt loss is bounded by `3K` completed attempts, including during
-  replacement. No file is promised before the first successful snapshot. Failed LLM persistence is terminal without
-  final-write retry. `--llm-memory --sweep` file targets instead follow the sweep checkpoint rule (one atomic envelope
-  checkpoint after each attempted run, with no intra-run loop snapshots)
+  directory, and parent directories are created automatically. CPU bandwidth, CPU latency, patterns, GPU, and LLM-memory retain
+  the raw target spelling in `configuration.output_file`
+- Sweep file targets retain atomic per-attempt checkpoints (without intra-run loop snapshots). TLB and
+  core-to-core direct file targets each receive one final atomic write. GPU file output retains its
+  terminal-measurement/failure checkpoints and post-release replacement. Direct CPU bandwidth, CPU latency, patterns, and LLM files
+  snapshot every `K=max(1,ceil(count/8))` completed loops plus command terminal (`checkpoint_lifecycle`, max 8 progress
+  writes, abrupt loss bound `3K`—or `K * active_patterns.size() * 3` for `-P`—completed attempts). No file is promised before the first successful snapshot, and
+  failed persistence is terminal without retry
 - With GPU `--output -`, every logical checkpoint transition and post-checkpoint stop observation still runs, but its
   lazy payload builder is not invoked and no intermediate document is serialized. The command boundary writes one
-  terminal GPU schema 1 document. LLM retains task stop observations and emits one terminal schema 2 document, with
-  no intermediate DOM. `configuration.output_file` remains the raw string `"-"`, and captured `argv` is not
+  terminal GPU schema 1 document. CPU bandwidth, CPU latency, patterns, and LLM retain task stop observations and emit one
+  terminal document with no intermediate DOM. `configuration.output_file` remains `"-"`, and captured `argv` is not
   rewritten
 - GPU syntax/config errors, including a buffer below 64 MB, fail before result JSON is created. A backend-factory failure
   also precedes result initialization. Initialized capability, compilation, allocation, or work-plan failures remain
@@ -1001,8 +990,8 @@ middle, and trailing items.
   (`timer-unavailable`) failures occur before runner-result initialization and therefore leave stdout empty (and write no
   direct JSON file). Once the work plan is finalized, backend capability/initialization (other than `timer-unavailable`),
   plan resolution, resource preparation (weight/K/V mapping, initialization, descriptor preparation, and Metal
-  compilation/pipeline/allocation/upload/validation), post-plan setup exceptions, and runner/backend-task/checksum/
-  interruption/checkpoint states emit terminal schema-2 evidence through the selected non-empty output target
+  compilation/pipeline/allocation/upload/validation), and post-plan setup exceptions emit terminal schema-2 evidence
+  through the selected non-empty output target
 - An observable terminal stdout serialization, write, or flush failure returns failure without changing the
   already-computed measurement state; any bytes from that failed transfer must be rejected
 
@@ -1015,63 +1004,61 @@ middle, and trailing items.
 - Can be repeated to sweep multiple parameters
 - Supported keys: `buffer-size`, `cache-size`, `threads`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`, `tlb-density`, `count`, `latency-samples`, `context-tokens`, `kv-block-tokens`, `prompt-tokens`, `attention-query-tile-tokens`
 - `tlb-density` applies only with `--analyze-tlb`
+- `--cpu-bandwidth` supports `buffer-size`, `cache-size`, and `threads`
+- `--cpu-latency` supports `buffer-size`, `cache-size`, `latency-tlb-locality-kb`, `latency-stride-bytes`, and `latency-chain-mode`
 - `--patterns` supports `buffer-size` and `threads`
 - In a `--patterns` thread sweep, each `threads` value is the requested count. A strided pattern may reduce its
   effective worker count to keep at least two valid strided addresses per active worker, so sparse-stride results must
   not be interpreted as requested-thread scaling when this reduction applies
-- `--benchmark --only-bandwidth` supports `buffer-size` and `threads`
-- `--benchmark --only-latency` supports `buffer-size`, `cache-size`, and latency chain/locality/stride keys
 - `--analyze-tlb` supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`
 - `--analyze-core2core` supports `count` and `latency-samples`
 - `--llm-memory` supports `context-tokens` (decode), `prompt-tokens` and `attention-query-tile-tokens` (prefill), and
   `kv-block-tokens` (paged KV), and preflight-validates every generated Cartesian configuration before execution
 - Combining a direct option and `--sweep` for the same parameter is rejected uniformly across all sweep-capable modes
-  (`--benchmark`, `--patterns`, `--analyze-tlb`, `--analyze-core2core`, and `--llm-memory`) via
+  (`--cpu-bandwidth`, `--cpu-latency`, `--patterns`, `--analyze-tlb`, `--analyze-core2core`, and `--llm-memory`) via
   `Cannot specify both --<opt> and --sweep <key>`
 - `--gpu-bandwidth` does not support `--sweep` or `--sweep-max-runs` (GPU schema 1)
 
 #### `--sweep-max-runs <count>`
 
 - Maximum number of generated sweep combinations
-- General default: `256`; default with `--analyze-tlb`: `16`
-- Mode-specific upper bounds: `1..LLONG_MAX` for general CPU and `--analyze-tlb`; `1..INT_MAX` for `--analyze-core2core`;
-  positive `size_t` for `--llm-memory`, additionally capped at the IEEE-754 exact JSON safe integer bound `2^53 - 1`
-  (`9,007,199,254,740,991`; `reason_code=json-integer-out-of-range`) when `--sweep` is active. Accepted without `--sweep`
-  (with no effect, and without enforcing the `2^53 - 1` bound in direct `--llm-memory`); rejected by `--gpu-bandwidth`
+- Default: `256` (`16` with `--analyze-tlb`)
+- Mode-specific upper bounds: `1..(2^53 - 1)` for `--cpu-bandwidth`, `--cpu-latency`, `--patterns`, and active `--llm-memory --sweep`
+  (`json-integer-out-of-range` for LLM); `1..LLONG_MAX` for `--analyze-tlb`; `1..INT_MAX` for
+  `--analyze-core2core`. Accepted without `--sweep` (with no effect, and without enforcing the `2^53 - 1` bound in direct
+  `--llm-memory`); rejected by `--gpu-bandwidth`
 - An explicit `--sweep-max-runs` value overrides the mode-specific default
 - Prevents accidental very large Cartesian sweeps
 - Every generated configuration is validated before the first run
-- General, core-to-core, and LLM-memory combined output use envelope schema
-  `configuration.sweep_schema_version: 1`; each `runs[].result` retains its own mode schema version
-- Standard, pattern, TLB, core-to-core, and LLM-memory sweep file output is atomically checkpointed after every
-  attempted run (without intra-run loop snapshots). An empty
-  run plan or a stop observed before a run also checkpoints a terminal envelope without adding a `runs[]` entry or
-  incrementing `attempted_runs`. Each envelope records `status`, `status_reason`, `planned_runs`, `attempted_runs`,
-  `completed_runs`, and `conclusions_valid`. Stdout runs retain the same logical checkpoint cadence without invoking the
-  persistence payload builder or serializing an intermediate document, and emit only the final envelope
-- For standard, pattern, TLB, and LLM-memory sweeps, every attempted run is retained with its own `status` and
-  `status_reason`.
-  `attempted_runs` counts stored entries, while `completed_runs` counts only mode-specific nested results that are
-  genuinely complete. Current standard schema 3 requires nested `configuration.mode: "benchmark"`,
-  `status: "complete"`, `results_complete: true`, and `conclusions_valid: true`, plus a string
-  `configuration.output_file`. Nested standard schema 2 and every other standard schema version are unsupported. Pattern
-  requires nested `status: "complete"` with `results_complete: true`; TLB requires nested
-  `tlb_analysis.status: "complete"` with
-  `tlb_analysis.conclusions_valid: true`; LLM-memory requires nested `mode: "llm_memory"`, `schema_version: 2`,
-  `status: "complete"`, `results_complete: true`, `run_accepted: true`, and every planned `measurements[]` entry having
-  `status: "measured"`. Partial, interrupted, unsupported, and failed nested results never increment `completed_runs`.
-  TLB's native `tlb_analysis.status: "error"` is mapped to
-  a failed sweep attempt, and the schema-4 payload is retained without adding a nested `tlb_analysis.status_reason`.
-  LLM-memory's native `status: "unsupported"` is mapped to a failed sweep attempt while retaining the schema-2 payload;
-  pre-initialization failures record `result: null` with the specific stable `status_reason`, and an interruption during
-  pre-runner or backend resource preparation records `result: null` and `status: "interrupted"` with
-  `status_reason: "preparation-interrupted"` and exit status `0`
+- Combined output uses envelope schema `configuration.sweep_schema_version: 1`; each `runs[].result` retains its own
+  mode schema version
+- CPU bandwidth, CPU latency, pattern, TLB, core-to-core, and LLM-memory sweep file output is atomically checkpointed
+  after every attempted run (without intra-run loop snapshots). An empty run plan or a stop observed before a run also
+  checkpoints a terminal envelope without adding a `runs[]` entry or incrementing `attempted_runs`. Each envelope
+  records `status`, `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`. Stdout
+  runs retain the same logical checkpoint cadence without invoking the persistence payload builder or serializing an
+  intermediate document, and emit only the final envelope
+- Every attempted run is retained with its own `status` and `status_reason`. `attempted_runs` counts stored entries,
+  while `completed_runs` counts only mode-specific nested results that are genuinely complete:
+  - CPU bandwidth requires nested `mode: "cpu_bandwidth"`, `schema_version: 1`, `status: "complete"`,
+    `results_complete: true`, `run_accepted: true`, `configuration.output_file: ""`, and every planned measurement `measured`
+  - CPU latency requires nested `mode: "cpu_latency"`, `schema_version: 1`, `status: "complete"`,
+    `results_complete: true`, `run_accepted: true`, `configuration.output_file: ""`, and every planned measurement `measured`
+  - Pattern requires nested `mode: "patterns"`, `schema_version: 1`, `status: "complete"`, `results_complete: true`,
+    `run_accepted: true`, `configuration.output_file: ""`, and a non-empty `measurements[]` array in which every scheduled
+    entry has `status: "measured"`
+  - TLB requires nested `tlb_analysis.status: "complete"` with `tlb_analysis.conclusions_valid: true`
+  - Core-to-core requires nested `core_to_core_latency.status: "complete"` with `measurements_complete: true`
+  - LLM-memory requires nested `mode: "llm_memory"`, `schema_version: 2`, `status: "complete"`, `results_complete: true`,
+    `run_accepted: true`, and every planned `measurements[]` entry having `status: "measured"`
+  Partial, interrupted, unsupported, and failed nested results never increment `completed_runs`.
+  TLB's native `tlb_analysis.status: "error"`, CPU's native `status: "unsupported"`, and LLM-memory's native
+  `status: "unsupported"` map to failed sweep attempts while retaining the nested payload; pre-initialization failures
+  record `result: null` with the specific stable `status_reason`, and an interruption during pre-runner or backend
+  resource preparation records `result: null` and `status: "interrupted"` with `status_reason: "preparation-interrupted"`
+  and exit status `0`
 - A parameter key may appear only once in one sweep command across all sweep-capable modes (duplicates fail with
   `sweep parameter specified more than once: <key>`)
-- Core-to-core sweeps also append and retain the latest attempted run when it is interrupted or fails; a file target
-  checkpoints that update. Each entry records `status` and `status_reason`; `attempted_runs` counts those entries, while
-  `completed_runs` counts only nested core-to-core results with `status: "complete"` and
-  `measurements_complete: true`. Therefore `runs` can contain more entries than `completed_runs`
 - Any partial, interrupted, or failed attempt stops further attempts; a pre-run interruption or checkpoint failure can
   also stop execution without adding or completing another run. The authoritative schema-1 sweep acceptance predicate
   is exactly top-level `status == "complete" && conclusions_valid == true`. Producers make
@@ -1080,8 +1067,8 @@ middle, and trailing items.
 
 #### `-h`, `--help`
 
-- Accepted standalone and across all six primary modes (`--benchmark`, `--patterns`, `--analyze-tlb`,
-  `--analyze-core2core`, `--gpu-bandwidth`, and `--llm-memory`)
+- Accepted standalone and across all seven primary modes (`--cpu-bandwidth`, `--cpu-latency`, `--patterns`,
+  `--analyze-tlb`, `--analyze-core2core`, `--gpu-bandwidth`, and `--llm-memory`)
 - Runs full syntactic, whitelist, duplicate, missing-value, and value-parse validation first (for example,
   `--help --unknown`, `-h --help`, and `--help --iterations` fail)
 - Once valid, prints human-facing help to stdout and exits `0` before required-option checks, semantic validation, OS
@@ -1095,29 +1082,32 @@ middle, and trailing items.
 ### Valid combinations
 
 ```bash
-# Full benchmark
-memory_benchmark --benchmark --count 10 --buffer-size 1024 --output full.json
+# Audited CPU bandwidth (default 3 loops, main memory + auto L1/L2)
+memory_benchmark --cpu-bandwidth --count 10 --buffer-size 1024 --output cpu_bw.json
+
+# Audited CPU bandwidth with custom cache target and explicit threads
+memory_benchmark --cpu-bandwidth --buffer-size 512 --cache-size 4096 --threads 4 --count 5 --output bw_custom.json
+
+# Direct CPU bandwidth automation: JSON stdout and human transcript stderr
+memory_benchmark --cpu-bandwidth --count 5 --buffer-size 512 --output - >cpu_bw.json 2>cpu_bw.log
+
+# Audited CPU latency (both auto caches + main memory, 5000 sample windows)
+memory_benchmark --cpu-latency --latency-samples 5000 --count 10 --output cpu_lat.json
+
+# Audited CPU latency with explicit paired 16 KiB vs global-random comparison
+memory_benchmark --cpu-latency --compare-locality --count 5 --output cpu_lat_locality.json
+
+# CPU latency (main memory only, sample windows disabled)
+memory_benchmark --cpu-latency --cache-size 0 --buffer-size 1024 --latency-samples 0
+
+# CPU latency (custom cache only)
+memory_benchmark --cpu-latency --buffer-size 0 --cache-size 2048
 
 # Pattern-only
 memory_benchmark --patterns --count 5 --buffer-size 512 --output patterns.json
 
-# Direct standard automation: JSON stdout and human transcript stderr
-memory_benchmark --benchmark --only-bandwidth --count 5 --buffer-size 512 --output - >benchmark.json 2>benchmark.log
-
 # Direct pattern automation
 memory_benchmark --patterns --count 5 --buffer-size 512 --output - >patterns.json 2>patterns.log
-
-# Bandwidth-only
-memory_benchmark --benchmark --only-bandwidth --threads 8 --count 5
-
-# Latency-only (both main + cache)
-memory_benchmark --benchmark --only-latency --latency-samples 5000 --count 10
-
-# Latency-only (main memory only)
-memory_benchmark --benchmark --only-latency --cache-size 0 --buffer-size 1024
-
-# Latency-only (cache only)
-memory_benchmark --benchmark --only-latency --buffer-size 0 --cache-size 2048
 
 # Standalone TLB analysis
 memory_benchmark --analyze-tlb
@@ -1215,53 +1205,59 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --k
   --sweep context-tokens=512,2048,8192 --sweep kv-block-tokens=16,64 \
   --iterations 1 --count 3 --seed 42 --output llm_paged_sweep.json
 
-# Benchmark latency sweep over 3 buffer sizes and 3 locality windows (9 runs)
-memory_benchmark --benchmark --only-latency --count 5 --sweep buffer-size=256,512,1024 --sweep latency-tlb-locality-kb=16,1024,0 --output latency_sweep.json
+# CPU latency sweep over 3 buffer sizes and 3 locality windows (9 runs)
+memory_benchmark --cpu-latency --count 5 --sweep buffer-size=256,512,1024 --sweep latency-tlb-locality-kb=16,1024,0 --output latency_sweep.json
 
-# Thread scaling sweep for bandwidth
-memory_benchmark --benchmark --only-bandwidth --count 5 --sweep buffer-size=512,1024 --sweep threads=1,4,8 --output bandwidth_thread_sweep.json
+# Thread scaling sweep for CPU bandwidth
+memory_benchmark --cpu-bandwidth --count 5 --sweep buffer-size=512,1024 --sweep threads=1,4,8 --output bandwidth_thread_sweep.json
 ```
 
 ### Invalid combinations
 
 ```bash
 # invalid: modifier option(s) without a primary mode flag (bare memory_benchmark prints help)
-memory_benchmark --only-bandwidth
 memory_benchmark --threads 4
 memory_benchmark --seed 42
+memory_benchmark --buffer-size 512
 
-# invalid: --benchmark with --patterns (mutually exclusive)
-memory_benchmark --benchmark --patterns
+# invalid: --cpu-bandwidth with --cpu-latency or --patterns (primary modes are mutually exclusive)
+memory_benchmark --cpu-bandwidth --cpu-latency
+memory_benchmark --cpu-bandwidth --patterns
 
-# invalid: pattern mode with only-bandwidth or only-latency
-memory_benchmark --patterns --only-bandwidth
-memory_benchmark --patterns --only-latency
+# invalid: unrecognized option or misplaced mode flag (removed pre-split combined/subset flags are rejected as unknown/unsupported)
+memory_benchmark --unknown-flag
+memory_benchmark --cpu-bandwidth --tlb-density 4096
 
 # invalid: pattern mode rejects unused cache and latency modifiers
 memory_benchmark --patterns --cache-size 64
 memory_benchmark --patterns --latency-stride-bytes 128
 
-# invalid: latency modifiers with only-bandwidth
-memory_benchmark --benchmark --only-bandwidth --latency-samples 5000
-memory_benchmark --benchmark --only-bandwidth --latency-stride-bytes 128
+# invalid: latency modifiers with --cpu-bandwidth (outside exact whitelist)
+memory_benchmark --cpu-bandwidth --latency-samples 5000
+memory_benchmark --cpu-bandwidth --latency-stride-bytes 128
 
-# invalid: iterations or threads with only-latency
-memory_benchmark --benchmark --only-latency --iterations 2000
-memory_benchmark --benchmark --only-latency --threads 4
+# invalid: --threads with --cpu-latency (latency tests are single-threaded)
+memory_benchmark --cpu-latency --threads 4
 
-# invalid: both latency targets disabled
-memory_benchmark --benchmark --only-latency --buffer-size 0 --cache-size 0
+# invalid: --compare-locality with --buffer-size 0 or --latency-stride-bytes > 8192
+memory_benchmark --cpu-latency --buffer-size 0 --compare-locality
+memory_benchmark --cpu-latency --latency-stride-bytes 16384 --compare-locality
+
+# invalid: all targets omitted in --cpu-bandwidth or --cpu-latency
+memory_benchmark --cpu-bandwidth --buffer-size 0 --cache-size 0
+memory_benchmark --cpu-latency --buffer-size 0 --cache-size 0
 
 # invalid: direct option combined with --sweep for the same parameter (all sweep-capable modes)
-memory_benchmark --benchmark --buffer-size 512 --sweep buffer-size=256,512 --output sweep.json
+memory_benchmark --cpu-bandwidth --buffer-size 512 --sweep buffer-size=256,512 --output sweep.json
+memory_benchmark --cpu-latency --latency-stride-bytes 256 --sweep latency-stride-bytes=64,256 --output lat_sweep.json
 memory_benchmark --analyze-core2core --count 3 --sweep count=1,3 --output core2core_sweep.json
 
 # invalid: inline value on a boolean/mode flag or single-dash inline value
-memory_benchmark --benchmark=1
-memory_benchmark --benchmark -b=512
+memory_benchmark --cpu-bandwidth=1
+memory_benchmark --cpu-bandwidth -b=512
 
 # invalid: duplicated single-occurrence mode or boolean flag
-memory_benchmark --benchmark --benchmark
+memory_benchmark --cpu-bandwidth --cpu-bandwidth
 memory_benchmark --analyze-tlb --help -h
 
 # invalid: analyze-tlb with unsupported extra option
@@ -1304,7 +1300,7 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 --query-heads 8 --k
   --head-dim 64 --phase prefill --context-tokens 512
 
 # invalid: multiple primary modes
-memory_benchmark --gpu-bandwidth --benchmark
+memory_benchmark --gpu-bandwidth --cpu-bandwidth
 ```
 
 ---
@@ -1314,15 +1310,17 @@ memory_benchmark --gpu-bandwidth --benchmark
 ### Quick baseline
 
 ```bash
-memory_benchmark --benchmark
+memory_benchmark --cpu-bandwidth
+memory_benchmark --cpu-latency
 ```
 
-Good for a fast health check.
+Good for a fast health check (both default to `--count 3`).
 
 ### Statistical baseline (recommended)
 
 ```bash
-caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024 --output baseline.json
+caffeinate -i -d memory_benchmark --cpu-bandwidth --count 10 --buffer-size 1024 --output bw_baseline.json
+caffeinate -i -d memory_benchmark --cpu-latency --count 10 --buffer-size 1024 --output lat_baseline.json
 ```
 
 Use this for comparisons across machines or software versions.
@@ -1457,9 +1455,9 @@ Record the environment before comparing files: hardware/CPU, macOS and benchmark
 state, active displays and notable background load, command, seed, and start time. Then record one row per
 pattern/operation using this template:
 
-| Pattern | Operation | Status | Median GB/s | CV % | Requested/effective threads | Median duration s | Phase-zero / min-max accesses | Phase period | Passes | Exact total accesses/payload bytes | Logical working set bytes | Notes |
+| Pattern | Operation | Status | Median GB/s | CV % | Requested/effective workers | Median duration s | Phase-zero / min-max accesses | Phase period | Passes | Exact `total_accesses` / `exact_payload_bytes` | `logical_working_set_bytes` | Notes |
 |---|---|---|---:|---:|---|---:|---|---:|---:|---|---:|---|
-| _example: strided_2mb_ | _read_ | _measured/skipped/..._ | _from JSON_ | _from JSON_ | _requested/effective_ | _from per-loop records_ | _from JSON_ | _from JSON_ | _from JSON_ | _from exact total fields_ | _from JSON_ | _noise/status reason_ |
+| _example: strided_2mb_ | _read_ | _measured/skipped/..._ | _from `aggregates.patterns`_ | _from `statistics`_ | _requested/effective_ | _from `measurements[]`_ | _from `operation_plans[]`_ | _from `resolved_plan`_ | _from `operation_plans[]`_ | _from `operation_plans[]`_ | _from `operation_plans[]`_ | _noise/status reason_ |
 
 Check that measured samples have positive duration and internally consistent exact payload accounting, sparse cases
 report their effective worker reduction, and unavailable cases use explicit status rather than zero. As a stability
@@ -1470,23 +1468,23 @@ the observed result and conditions even when a target is missed; do not rewrite 
 
 ```bash
 # default locality mode (1 MB window)
-memory_benchmark --benchmark --only-latency --buffer-size 1024 --latency-samples 5000 --count 10 --output lat_default_1mb.json
+memory_benchmark --cpu-latency --buffer-size 1024 --latency-samples 5000 --count 10 --output lat_default_1mb.json
 
 # global random chain
-memory_benchmark --benchmark --only-latency --buffer-size 1024 --latency-samples 5000 --latency-tlb-locality-kb 0 --count 10 --output lat_global.json
+memory_benchmark --cpu-latency --buffer-size 1024 --latency-samples 5000 --latency-tlb-locality-kb 0 --count 10 --output lat_global.json
 
 # same in-box random pattern (good for prefetch-vs-TLB comparisons)
-memory_benchmark --benchmark --only-latency --buffer-size 1024 --latency-samples 5000 --latency-tlb-locality-kb 16 --latency-chain-mode same-random-in-box --count 10 --output lat_same_box.json
+memory_benchmark --cpu-latency --buffer-size 1024 --latency-samples 5000 --latency-tlb-locality-kb 16 --latency-chain-mode same-random-in-box --count 10 --output lat_same_box.json
 ```
 
-### Regular benchmark with automatic locality comparison
+### Paired locality comparison (`--compare-locality`)
 
 ```bash
-memory_benchmark --benchmark --count 1
+memory_benchmark --cpu-latency --compare-locality --count 3 --output lat_compare.json
 ```
 
-This prints the continuous `Average latency` headline plus the paired `16 KiB locality latency`, `Global-random
-latency`, and `Locality latency delta (global - 16 KiB)` when `--latency-tlb-locality-kb` is not explicitly set.
+This prints the target `P50` latency headlines plus the paired `Locality Comparison: 16KB P50=..., Global P50=..., Delta=...`
+summary over `3` alternating-seed paired rounds per loop.
 
 ### Canonical standalone TLB analysis
 
@@ -1505,7 +1503,8 @@ Quick first checks in the output file:
 ### Custom cache target
 
 ```bash
-memory_benchmark --benchmark --cache-size 4096 --threads 1 --count 5 --output cache_4mb.json
+memory_benchmark --cpu-bandwidth --cache-size 4096 --threads 1 --count 5 --output bw_cache_4mb.json
+memory_benchmark --cpu-latency --cache-size 4096 --count 5 --output lat_cache_4mb.json
 ```
 
 ### Cache-size sweep + trend plotting
@@ -1518,11 +1517,12 @@ python3 script-examples/plot_cache_percentiles.py script-examples/final_output.t
 ### Built-in sweep JSON
 
 ```bash
-memory_benchmark --benchmark --only-latency --count 5 --sweep buffer-size=256,512,1024 --sweep latency-stride-bytes=64,256 --output latency_sweep.json
+memory_benchmark --cpu-latency --count 5 --sweep buffer-size=256,512,1024 --sweep latency-stride-bytes=64,256 --output latency_sweep.json
 ```
 
-The command above creates six runs and stores each run's normal benchmark JSON under `runs[].result`. TLB-analysis
-sweeps use the same envelope with `base_mode: "analyze_tlb"` and support `latency-stride-bytes`,
+The command above creates six runs (`base_mode: "cpu_latency"`) and stores each run's CPU latency schema-1 JSON under
+`runs[].result`. CPU bandwidth sweeps use `base_mode: "cpu_bandwidth"` and support `buffer-size`, `cache-size`, and
+`threads`. TLB-analysis sweeps use the same envelope with `base_mode: "analyze_tlb"` and support `latency-stride-bytes`,
 `latency-chain-mode`, and `tlb-density`. Core-to-core sweeps use the same envelope with
 `base_mode: "analyze_core2core"` and support only `count` and `latency-samples`. LLM-memory sweeps use the same
 schema-1 envelope with `base_mode: "llm_memory"`, embed each run's schema-2 result under `runs[].result`, and
@@ -1537,7 +1537,8 @@ banner before mode-specific configuration or status output. Nested runs within a
 retains the separate usage preamble; parse and preflight failures emit concise single-line `Error: ...` diagnostics on
 stderr without dumping full usage text or the runtime banner.
 
-The numbered result sections below describe result-producing modes, including the standalone LLM profile.
+The numbered result sections below describe result-producing modes, including the standalone CPU bandwidth, CPU latency,
+patterns, GPU, and LLM profiles.
 
 ### 1) Configuration section
 
@@ -1545,70 +1546,91 @@ Shows active settings and detected hardware.
 
 Important fields:
 
-- Buffer size and peak concurrent allocation estimate
-- Loop and iteration configuration; standalone modes print their own sample- or round-work estimates
-- Thread count
-- Latency chain mode
-- TLB locality setting
+- Buffer size and active targets (`Target [Main Memory]`, `Target [L1 Cache]`, `Target [L2 Cache]`, or `Target [Custom Cache]`)
+- Work policy (`automatic_calibration` or `explicit_fixed_work`), loop count, and sample/worker counts
+- Base seed (`user` or `generated`) and non-cacheable hint status
+- In `--cpu-latency`: page size, effective/requested chain mode, stride, TLB locality KB, and `compare_locality` (`enabled` or `disabled`)
 - Detected or custom cache sizes
 
-### 2) Main memory bandwidth
+### 2) CPU bandwidth (`-B` / `--cpu-bandwidth`)
 
-Displayed as read/write/copy GB/s. Higher is better.
+Prints `CPU Bandwidth Mode (schema v1)` followed by `--- CPU Bandwidth Results (<status>, <measured>/<planned> measured) ---`
+and per-target (`Main Memory`, `L1 Cache`, `L2 Cache`, `Custom Cache`) lines for `Read`, `Write`, and `Copy`:
 
-### 3) Main memory latency
+```text
+  Main Memory:
+    Read : P50=... GB/s (min=..., max=..., CV=..., MAD=..., n=...)
+    Write: P50=... GB/s (min=..., max=..., CV=..., MAD=..., n=...)
+    Copy : P50=... GB/s (min=..., max=..., CV=..., MAD=..., n=...)
+```
 
-Average latency in ns. Lower is better.
+Quality warning tokens (such as `environment-not-nominal`, `main-thread-qos-not-applied`, `worker-qos-not-applied`,
+`madvise-random-not-applied`, `<target>-<op>-duration-<quality>`, `<target>-<op>-high-cv` when CV > 5.0%) are emitted
+on stderr.
 
-When `--latency-tlb-locality-kb` is not explicitly provided, this section also prints:
+### 3) CPU latency (`-L` / `--cpu-latency`)
 
-- `16 KiB locality latency`
-- `Global-random latency`
-- `Locality latency delta (global - 16 KiB)`
+Prints `CPU Latency Mode (schema v1)` followed by `--- CPU Latency Results (<status>, <measured>/<planned> measured) ---`
+and one line per active target (`L1 Cache`, `L2 Cache`, `Custom Cache`, `Main Memory`) plus optional `PooledSamples`
+(when `--latency-samples > 0`) and optional `Locality Comparison` (when `--compare-locality` is passed):
 
-The locality values come from three alternating-order paired rounds and the delta is the median same-round difference.
-The main `Average latency` headline remains a separate continuous pointer-chase pass. Sampling is another separate pass.
+```text
+  L1 Cache    : P50=... ns (min=..., max=..., CV=..., MAD=..., n=...) | PooledSamples P50=... ns (P90=..., P99=..., n=...)
+  L2 Cache    : P50=... ns (min=..., max=..., CV=..., MAD=..., n=...) | PooledSamples P50=... ns (P90=..., P99=..., n=...)
+  Main Memory : P50=... ns (min=..., max=..., CV=..., MAD=..., n=...) | PooledSamples P50=... ns (P90=..., P99=..., n=...)
+  Locality Comparison: 16KB P50=... ns, Global P50=... ns, Delta=... ns
+```
 
-### 4) Cache bandwidth and latency
+The target `P50` headline comes from the continuous pointer-chase pass returning to node `0`. `PooledSamples` summarizes
+the separate continuous sample-window pass and does not weight the headline. `Locality Comparison` summarizes `3 * loop_count`
+paired rounds (`Delta = median(global) - median(16k)`), which is not an isolated page-table-walk penalty; use
+`--analyze-tlb` for controlled translation analysis.
 
-L1/L2 or custom cache section, depending on `--cache-size` use.
+### 4) Cache targets
 
-### 5) Pattern benchmark output
+L1/L2 or custom cache sections are included automatically unless `--cache-size 0` omits them.
 
-Shows effective payload bandwidth for read, write, and copy, plus the relative percentage against sequential forward
-when both values are measured. Copy includes its read and write payload. With `--count > 1`, the displayed headline is
-the median of measured loops. An unavailable operation is shown as `N/A [status: reason]`, not `0 GB/s`.
+### 5) Pattern benchmark output (`-P` / `--patterns`)
+
+Prints `Patterns Mode (schema v1)`, hardware/buffer/work-policy/seed/non-cacheable metadata, per-pattern active or
+`skipped (<reason>)` geometry lines, and `--- Patterns Benchmark Results (<status>, <measured>/<planned> measured) ---`
+with per-pattern `Read`, `Write`, and `Copy` lines:
+
+```text
+  Sequential Forward:
+    Read : P50=... GB/s (min=..., max=..., CV=..., MAD=..., n=...)
+    Write: P50=... GB/s (min=..., max=..., CV=..., MAD=..., n=...)
+    Copy : P50=... GB/s (min=..., max=..., CV=..., MAD=..., n=...)
+  Strided 2MiB:
+    Read : P50=... GB/s (...% vs forward) (min=..., max=..., CV=..., MAD=..., n=...)   # or: skipped (buffer-too-small-for-stride-transition)
+```
+
+Deduplicated quality warning tokens (`environment-not-nominal`, `main-thread-qos-not-applied`, `worker-qos-not-applied`,
+`madvise-random-not-applied`, `<pattern>-<op>-duration-<quality>`, `<pattern>-<op>-high-cv`) are emitted on `stderr`.
+Unavailable operations print `unavailable (<reason>)`, never `0 GB/s`.
 
 Do not treat a low strided or random result as proof of prefetch behavior, cache thrashing, or a TLB boundary. Pattern
 mode does not isolate those mechanisms, and the console intentionally does not emit those diagnoses. Use
-`--analyze-tlb` for the controlled paired TLB analysis, and use matched buffer/stride/thread experiments for broader
-cache or prefetch hypotheses.
+`--analyze-tlb` for controlled paired TLB analysis, and use matched buffer/stride/thread experiments for broader cache or
+prefetch hypotheses.
 
-### 6) Statistics (`--count > 1`)
+### 6) Statistics and CV thresholds (`--count > 1`)
 
-Includes values such as:
+JSON `aggregates` include:
 
-- Average
-- P50 (Median)
-- P90, P95, P99
-- Std Dev
-- Coefficient of variation (CV)
-- Min / Max
-
-When the automatic locality comparison is active (you did not explicitly set `--latency-tlb-locality-kb`),
-statistics also include dedicated sections for:
-
-- `16 KiB Locality Latency (ns)`
-- `Global-Random Latency (ns)`
-- `Locality Latency Delta, Global - 16 KiB (ns)`
-
-The locality delta is the median same-round difference from paired, alternating-order measurements. It is not an
-isolated page-table-walk penalty; use `--analyze-tlb` for controlled translation analysis.
+- `average`
+- `median` (P50)
+- `p90`, `p95`, `p99`
+- `stddev` (sample standard deviation, `n - 1`)
+- `coefficient_of_variation_pct` (CV)
+- `median_absolute_deviation` (MAD)
+- `min` / `max`
 
 For noisy systems, prioritize median and P95/P99 rather than single fastest/slowest values.
 
-Standard repeated-loop headline aggregates emit a warning when CV exceeds 7.5%. This hardware-validated threshold is
-diagnostic only: the benchmark does not filter outliers or automatically invalidate the aggregate.
+`--cpu-bandwidth` emits a `high-cv` warning when CV exceeds `5.0%`, while `--cpu-latency` emits a `high-cv` warning
+when CV exceeds `7.5%`. These thresholds are diagnostic only: the benchmark does not filter outliers or invalidate
+`run_accepted`.
 
 Pattern statistics emit noise warnings above a pattern-specific CV threshold: 5% for sequential and 64-byte stride,
 and 10% for 4096-byte, 16 KiB, 2 MiB, and random patterns. Treat a warning as a request to repeat under steadier
@@ -1675,12 +1697,11 @@ status, reason, and null observations remain in JSON, and command failure retain
 traffic classification uses version `llm-exact-weight-vs-kv-read-payload-v1`; `near_crossover` means exact equality
 between weight and KV-read payload. It is not a tolerance band or a measured bottleneck diagnosis.
 
-**Note:** Current standard schema-3 per-loop latency measurements record `chain_node_count` whether the stride was
-explicit or defaulted. Standalone TLB schema 4 records buffer-relative chain diagnostics such as
-requested/effective/actual
-virtual-page counts, `pointer_nodes`, `unique_cache_lines`, `spread_chain`, and `packed_chain`. These fields do not
-describe physical-page identities or prove physical placement. They are retained in JSON, not the compact console
-report.
+**Note:** CPU latency schema-1 `resolved_plan.chain_identities.<target>` records `node_count`, `stride_bytes`,
+`chain_mode`, `tlb_locality_kb`, `chain_seed_uint64_decimal`, and `chain_permutation_sha256`. Standalone TLB schema 4
+records buffer-relative chain diagnostics such as requested/effective/actual virtual-page counts, `pointer_nodes`,
+`unique_cache_lines`, `spread_chain`, and `packed_chain`. These fields do not describe physical-page identities or
+prove physical placement. They are retained in JSON, not the compact console report.
 
 ---
 
@@ -1688,172 +1709,291 @@ report.
 
 Every result-producing direct mode and supported sweep can serialize their payload either to a real file
 or, with the exact raw target `--output -`, once to stdout. The stdout transport does not wrap the result or change its
-measurement schema; sweep stdout is one final envelope rather than a checkpoint stream. Direct LLM files snapshot
-bounded completed-loop progress plus command terminal, LLM sweep files checkpoint the envelope after each attempted run
-without intra-run loop snapshots, and LLM stdout emits one final document or sweep envelope. See
-[API.md](API.md) for stream handling, process-status checks, current schema acceptance, and the transport support matrix.
+measurement schema; sweep stdout is one final envelope rather than a checkpoint stream. Direct CPU bandwidth, CPU latency, patterns,
+and LLM files snapshot bounded completed-loop progress (`K=max(1,ceil(count/8))`) plus command terminal; sweep files
+checkpoint the envelope after each attempted run without intra-run loop snapshots, and stdout emits one final document
+or sweep envelope. See [API.md](API.md) for stream handling, process-status checks, current schema acceptance, and the
+transport support matrix.
 
-### Standard benchmark JSON shape (schema 3)
-
-```json
-{
-  "configuration": {
-    "mode": "benchmark",
-    "benchmark_schema_version": 3,
-    "output_file": "results.json",
-    "methodology_version": "benchmark-v2-calibrated-seeded-balanced",
-    "benchmark_seed": "123456789",
-    "bandwidth_work_policy": "automatic-duration-calibration"
-  },
-  "execution_time_sec": 427.5,
-  "status": "complete",
-  "planned_loops": 5,
-  "completed_loops": 5,
-  "planned_measurements": 75,
-  "completed_measurements": 75,
-  "results_complete": true,
-  "conclusions_valid": true,
-  "loops": [ ... ],
-  "main_memory": { ... },
-  "cache": { ... },
-  "timestamp": "YYYY-MM-DDTHH:MM:SSZ",
-  "version": "<software-version>"
-}
-```
-
-Schema 3 stores exact uint64 seeds as decimal strings. Every per-loop measurement has status/reason, nullable value,
-exact passes/accesses/payload, requested/effective workers, seed, pilot/final duration, calibration quality, and schedule
-position. Only `measured` values enter aggregates. One measured loop is its own headline; multiple loop headlines use
-median P50. Statistics include average, P90/P95/P99, sample standard deviation, CV, MAD, min, and max. A standard file
-target is atomically checkpointed after completed loop-state changes. Schema 3 requires
-`configuration.output_file` to be a string. Direct payloads preserve the raw output token there, including `"-"`, `./-`,
-and flag-shaped file names; standard results nested in a sweep use an empty string because the envelope owns
-persistence. With `--output -`, logical checkpoint boundaries remain active but persistence is a no-op, and the command
-emits one final snapshot. Schema 3 also requires boolean `conclusions_valid`, which mirrors
-`results_complete`; consumers must require `status: "complete"` and both booleans when completeness is mandatory.
-Bandwidth QoS metadata includes created workers plus per-worker success/failure counts; latency carries the main-thread
-outcome. These fields describe a best-effort scheduler hint, never hard core pinning.
-
-The bundled standard-memory examples accept compatible producer releases. They require standard mode, schema 3,
-methodology `benchmark-v2-calibrated-seeded-balanced`, complete/valid result state, and the expected types for the
-fields they consume before reading schema-3 metric paths directly. They retain a non-empty top-level `version` string
-as provenance without requiring a particular software release. Released standard schema 2, unversioned historical
-standard JSON layouts, and other methodology identities are unsupported inputs and are not translated.
-
-### Pattern benchmark JSON shape
+### CPU bandwidth JSON shape (schema 1)
 
 ```json
 {
-  "configuration": {
-    "mode": "patterns",
-    "pattern_schema_version": 3,
-    "methodology_version": "pattern-v2-phase-calibrated-seeded",
-    "pattern_seed": "123456789",
-    "pattern_seed_source": "user",
-    "pattern_seed_encoding": "uint64-decimal-string",
-    "pattern_pass_policy": "automatic-duration-calibration",
-    "calibration_target_seconds": 0.15,
-    "calibration_window_min_seconds": 0.1,
-    "calibration_window_max_seconds": 0.25,
-    "calibration_max_corrections": 2,
-    "warmup_semantics": "steady-state-same-shape",
-    "pattern_execution_order_policy": "cyclic-latin-square-across-count-loops",
-    "operation_execution_order_policy": "fixed-read-write-copy-with-operation-specific-warmup",
-    "thread_selection_policy": "detected-core-count-default",
-    "qos_policy": "best-effort-scheduler-hint-no-core-pinning"
+  "schema_version": 1,
+  "mode": "cpu_bandwidth",
+  "methodology_version": "cpu-bandwidth-v1-arm64-calibrated-seeded-balanced",
+  "software": {
+    "version": "<software-version>",
+    "timestamp": "YYYY-MM-DDTHH:MM:SSZ"
   },
-  "execution_time_sec": 7.5,
-  "status": "complete",
-  "status_reason": "",
-  "planned_loops": 3,
-  "completed_loops": 3,
-  "planned_measurements": 63,
-  "completed_measurements": 63,
-  "results_complete": true,
-  "patterns": {
-    "strided_2mb": {
-      "methodology_version": "pattern-v2-phase-calibrated-seeded",
-      "access_size_bytes": 32,
-      "stride_bytes": 2097152,
-      "requested_threads": 4,
-      "effective_threads": 2,
-      "large_page_backing_verified": false,
-      "large_page_backing_status": "not-verified",
-      "bandwidth": {
-        "read_gb_s": {
-          "status": "measured",
-          "headline": "median_p50",
-          "value_gb_s": 0.222,
-          "values_gb_s": [0.218, 0.222, 0.226],
-          "statistics": {
-            "median_p50": 0.222,
-            "coefficient_of_variation_pct": 1.8
-          },
-          "measurements": [
-            {
-              "status": "measured",
-              "value_gb_s": 0.222,
-              "elapsed_seconds": 0.15,
-              "access_size_bytes": 32,
-              "requested_threads": 4,
-              "effective_threads": 2,
-              "accesses_per_pass": 256,
-              "accesses_per_pass_semantics": "phase-zero-count",
-              "min_accesses_per_pass": 252,
-              "max_accesses_per_pass": 256,
-              "passes": 4096,
-              "total_accesses": 1040384,
-              "total_payload_bytes": 33292288,
-              "phase_period_passes": 65536,
-              "benchmark_loop_index": 0,
-              "pattern_order_index": 5
-            }
-          ]
-        }
+  "build_manifest": { "...": "provenance + binary_sha256" },
+  "configuration": {
+    "buffer_size_mb": 512,
+    "custom_cache_size_kb": null,
+    "requested_workers": 10,
+    "available_workers": 10,
+    "worker_source": "auto",
+    "iterations": null,
+    "work_policy": "automatic_calibration",
+    "loop_count": 3,
+    "non_cacheable": false,
+    "base_seed_uint64_decimal": "424242",
+    "seed_source": "user",
+    "output_file": "cpu_bw.json",
+    "argv": [ "./memory_benchmark", "--cpu-bandwidth", "..." ],
+    "resolved_sources": { "...": "default|explicit" }
+  },
+  "resolved_plan": {
+    "component_identities": {
+      "version": "cpu-bandwidth-components-v1",
+      "work_plan_version": "cpu-bandwidth-work-plan-v1",
+      "buffer_pattern_version": "cpu-bw-buffer-pattern-v1",
+      "read_checksum_version": "cpu-bw-read-checksum-v1",
+      "run_policy_version": "bounded-loop-snapshots-v1"
+    },
+    "targets": { "main_memory": { "...": "..." } },
+    "operation_plans": [ "..." ]
+  },
+  "memory_budget": { "...": "strict peak admission" },
+  "calibration": { "excluded_from_results": true, "attempts": { "...": "..." } },
+  "measurements": [ "..." ],
+  "aggregates": {
+    "targets": {
+      "main_memory": {
+        "read": { "accepted_measurement_ids": [0, 1, 2], "value": 105.2, "statistics": { "...": "..." }, "quality": { "...": "..." } },
+        "write": { "...": "..." },
+        "copy": { "...": "..." }
       }
     }
   },
-  "timestamp": "...",
-  "version": "<software-version>"
+  "status": "complete",
+  "reason_code": "complete",
+  "results_complete": true,
+  "run_accepted": true,
+  "interpretation": { "dram_residency": "unverified", "cache_residency": "unverified" },
+  "operation_order_balance_complete": true,
+  "target_order_balance_complete": true,
+  "checkpoint_lifecycle": { "...": "..." }
 }
 ```
 
-This is a structure example, not a recorded performance result; omitted patterns and operations use the same shape.
-Schema 3 stores explicit measurement state. A skipped, invalid, or interrupted operation has `value_gb_s: null`, an empty
-or partial value set as applicable, and a `status`/`reason`; it is not serialized as zero. Aggregate `value_gb_s` is the
-single measurement for one loop or median P50 for multiple measured loops. Copy `total_payload_bytes` includes both read
-and write payload. Per-loop records retain pilot/final timing, exact access/pass/payload accounting, working-set and phase
-metadata, seed, requested/effective threads, native page comparison, and execution-order indexes.
+### CPU latency JSON shape (schema 1)
 
-Pattern schema 3 adds top-level `status`, `status_reason`, `planned_loops`, `completed_loops`, `planned_measurements`,
-`completed_measurements`, and `results_complete`. Every requested loop plans 21 measurements: seven patterns times the
-read, write, and copy operations. A `measured` record counts as complete only with a numeric value; an intentional
-`skipped` record is also terminal. Invalid evidence or executor failure makes the loop failed. A fully completed loop is
-not reclassified when interruption arrives after its final operation, but the command is interrupted if requested loops
-remain. Partial, interrupted, and failed commands retain all produced loop evidence; allocation or initialization failure
-can produce completion metadata without a `patterns` object. Consumers that require a complete pattern run must require
-both `status: "complete"` and `results_complete: true`. Aggregate `values_gb_s`, statistics, median headlines, and
-console summaries use only Complete loops. Measurements from partial, interrupted, and failed loops remain serialized
-as raw evidence but cannot bias the cyclic-balanced aggregate.
+```json
+{
+  "schema_version": 1,
+  "mode": "cpu_latency",
+  "methodology_version": "cpu-latency-v1-arm64-calibrated-seeded-balanced",
+  "software": {
+    "version": "<software-version>",
+    "timestamp": "YYYY-MM-DDTHH:MM:SSZ"
+  },
+  "build_manifest": { "...": "provenance + binary_sha256" },
+  "configuration": {
+    "buffer_size_mb": 512,
+    "custom_cache_size_kb": null,
+    "iterations": null,
+    "work_policy": "automatic_calibration",
+    "loop_count": 3,
+    "latency_samples": 1000,
+    "latency_stride_bytes": 256,
+    "latency_chain_mode": "auto",
+    "latency_tlb_locality_kb": 1024,
+    "compare_locality": false,
+    "non_cacheable": false,
+    "base_seed_uint64_decimal": "424242",
+    "seed_source": "user",
+    "output_file": "cpu_lat.json",
+    "argv": [ "./memory_benchmark", "--cpu-latency", "..." ]
+  },
+  "resolved_plan": {
+    "component_identities": {
+      "version": "cpu-latency-components-v1",
+      "work_plan_version": "cpu-latency-work-plan-v1",
+      "chain_generator_version": "splitmix64-fisher-yates-rejection-v1",
+      "chain_version": "cpu-latency-chain-v1",
+      "run_policy_version": "bounded-loop-snapshots-v1"
+    },
+    "chain_identities": { "l1": { "...": "..." }, "l2": { "...": "..." }, "main_memory": { "...": "..." } },
+    "target_plans": [ "..." ],
+    "frozen_plan_refs": { "...": "..." }
+  },
+  "locality_comparison": null,
+  "aggregates": {
+    "targets": {
+      "main_memory": {
+        "accepted_measurement_ids": [ "..." ],
+        "value": 84.2,
+        "statistics": { "...": "..." },
+        "quality": { "...": "..." },
+        "pooled_sample_distribution": {
+          "semantics": "pooled-separate-sample-window-distribution",
+          "values_ns": [ "..." ],
+          "statistics": { "...": "..." }
+        }
+      }
+    },
+    "locality_comparison": null
+  },
+  "status": "complete",
+  "reason_code": "complete",
+  "results_complete": true,
+  "run_accepted": true,
+  "interpretation": { "dram_residency": "unverified", "cache_residency": "unverified" },
+  "target_order_balance_complete": true,
+  "checkpoint_lifecycle": { "...": "..." }
+}
+```
 
-`thread_selection_policy: "detected-core-count-default"` means `--threads` was omitted and the historical default
-covering all detected CPU cores was used. An explicit request is recorded separately; use
-`--threads <detected P-core count>` to reproduce a matching worker-count profile, not guaranteed P-core placement.
-Compare pattern results only when thread-selection policy and requested/effective thread counts are compatible. In
-particular, older files that called a four-worker run the "P-core default" represent that explicit four-worker profile
-with unpinned placement, not the current detected-core default.
+Both schema-1 artifacts record canonical decimal-string `uint64` seeds, payloads, and `execution.timing.cpu_raw` Mach
+tick boundaries, nullable unavailable metrics (`null`, never `0`), bounded `K=max(1,ceil(count/8))` file checkpoints,
+raw `configuration.output_file` (`"-"` on stdout, `""` inside nested sweeps), and separate `results_complete` and
+`run_accepted` predicates. Consumers must require `schema_version == 1`, the expected `mode` and `methodology_version`,
+`status == "complete"`, `results_complete == true`, and `run_accepted == true`.
 
-For phase-rotated strided records, `accesses_per_pass` is the phase-zero count, not an average. The minimum/maximum and
-phase-period fields describe pass-to-pass variation, while `total_accesses` and `total_payload_bytes` are computed from
-the complete work plan. They can differ from `accesses_per_pass * passes` and must be consumed directly.
+The bundled `script-examples/` scripts accept compatible producer releases. Before reading CPU bandwidth or CPU latency
+metrics, they check `schema_version == 1`, `mode`, `methodology_version`, non-empty `software.version` (retained as
+provenance only), string `configuration.output_file`, `status == "complete"`, `results_complete == true`,
+`run_accepted == true`, and the expected types of consumed fields. Legacy standard schema-3/2 and unversioned historical
+JSON layouts are unsupported and are not translated.
 
-`strided_2mb` names a 2 MiB virtual address stride. It is not evidence that macOS supplied 2 MiB physical pages:
-`large_page_backing_status: "not-verified"` and `large_page_backing_verified: false` must be interpreted literally.
+### Pattern benchmark JSON shape (schema 1)
 
-Pattern file and stdout transports serialize this same schema-3 payload. A file target receives the normal terminal
-atomic write; `--output -` receives one terminal document after all representable complete, partial, interrupted, or
-failed evidence has been retained. Command acceptance requires `status: "complete"` and `results_complete: true`, while
-consuming one selected metric additionally requires that measurement's `status: "measured"` and a non-null value.
+```json
+{
+  "schema_version": 1,
+  "mode": "patterns",
+  "methodology_version": "patterns-v1-arm64-phase-calibrated-seeded-balanced",
+  "software": {
+    "version": "<software-version>",
+    "timestamp": "YYYY-MM-DDTHH:MM:SSZ"
+  },
+  "build_manifest": { "...": "provenance + binary_sha256" },
+  "configuration": {
+    "buffer_size_mb": 512,
+    "requested_workers": 10,
+    "available_workers": 10,
+    "worker_source": "auto",
+    "iterations": null,
+    "work_policy": "automatic_calibration",
+    "loop_count": 3,
+    "non_cacheable": false,
+    "base_seed_uint64_decimal": "424242",
+    "seed_source": "user",
+    "output_file": "patterns.json",
+    "argv": [ "./memory_benchmark", "--patterns", "..." ],
+    "resolved_sources": { "buffer_size": "default|explicit|sweep", "workers": "auto|explicit|sweep", "iterations": "auto|explicit", "seed": "generated|explicit" }
+  },
+  "resolved_plan": {
+    "valid": true,
+    "reason_code": "valid",
+    "plan_identity": "patterns-work-plan-v1|...",
+    "component_identities": {
+      "version": "patterns-components-v1",
+      "work_plan_version": "patterns-work-plan-v1",
+      "buffer_pattern_version": "patterns-buffer-pattern-v1",
+      "read_checksum_version": "patterns-read-checksum-v1",
+      "random_index_generator_version": "splitmix64-coprime-fisher-yates-v1",
+      "run_policy_version": "bounded-loop-snapshots-v1"
+    },
+    "patterns": {
+      "sequential_forward": { "...": "..." },
+      "sequential_reverse": { "...": "..." },
+      "strided_64": { "...": "..." },
+      "strided_4096": { "...": "..." },
+      "strided_16384": { "...": "..." },
+      "strided_2mb": {
+        "enabled": true,
+        "status": "active",
+        "reason_code": "active",
+        "access_size_bytes": 32,
+        "stride_bytes": 2097152,
+        "phase_period_passes": 65536,
+        "native_page_size_bytes": 16384,
+        "stride_equals_native_page_size": false,
+        "large_page_backing_verified": false,
+        "large_page_backing_status": "not-verified",
+        "effective_workers": 10,
+        "worker_spans": [ "..." ]
+      },
+      "random": { "...": "includes random_workload.random_indices_sha256" }
+    },
+    "resources": { "src": { "...": "read_only_protected: true" }, "dst": { "...": "..." }, "random_index_table_bytes": "...", "random_validation_index_bytes": "..." },
+    "operation_plans": [
+      {
+        "plan_ref": 0,
+        "pattern": "strided_2mb",
+        "operation": "read",
+        "passes": 64,
+        "explicit_iterations": false,
+        "total_accesses": "...",
+        "exact_payload_bytes": "...",
+        "accesses_per_pass": "...",
+        "min_accesses_per_pass": "...",
+        "max_accesses_per_pass": "...",
+        "distinct_address_count": "...",
+        "logical_working_set_bytes": "...",
+        "completed_phase_cycles": 0,
+        "has_untouched_dst_bytes": true,
+        "op_seed_uint64_decimal": "...",
+        "expected_checksum": { "status": "available", "expected_worker_checksums": [ "..." ], "expected_run_checksum": { "...": "..." } }
+      }
+    ],
+    "frozen_plan_refs": { "strided_2mb": { "read": 0, "write": 1, "copy": 2 } }
+  },
+  "memory_budget": { "...": "strict peak admission" },
+  "calibration": { "excluded_from_results": true, "attempts": { "...": "..." } },
+  "measurements": [
+    {
+      "measurement_id": 0,
+      "plan_ref": 0,
+      "pattern": "strided_2mb",
+      "operation": "read",
+      "loop_index": 0,
+      "pattern_order_position": 0,
+      "operation_order_position": 0,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 64,
+      "completed_exact_payload_bytes": "...",
+      "bandwidth_gb_s": 12.34,
+      "execution": { "timing": { "cpu_raw": { "...": "..." } }, "validation": { "checks": [ "6 ordered checks" ] } },
+      "checksum": { "status": "valid", "checksum_valid": true, "actual_worker_checksums": [ "..." ], "actual_run_checksum": { "...": "..." } }
+    }
+  ],
+  "aggregates": {
+    "patterns": {
+      "strided_2mb": {
+        "read": { "status": "measured", "reason_code": "measured", "accepted_measurement_ids": [ "..." ], "value": 12.34, "relative_to_forward_pct": 10.5, "statistics": { "...": "..." }, "quality": { "...": "..." } },
+        "write": { "...": "..." },
+        "copy": { "...": "..." }
+      }
+    }
+  },
+  "status": "complete",
+  "reason_code": "complete",
+  "results_complete": true,
+  "run_accepted": true,
+  "interpretation": { "dram_residency": "unverified", "cache_residency": "unverified", "large_page_backing_verified": false },
+  "diagnostic": null,
+  "interruption_requested": false,
+  "operation_order_balance_complete": true,
+  "pattern_order_balance_complete": false,
+  "seeds": { "base_seed_uint64_decimal": "424242", "source": "user", "domain_seeds": { "...": "..." } },
+  "counters": { "...": "..." },
+  "checkpoint_lifecycle": { "...": "..." },
+  "loop_records": [ "..." ],
+  "environment": { "...": "..." },
+  "quality_warnings": []
+}
+```
+
+This is a structure illustration, not a recorded hardware measurement. All 26 top-level keys match the sibling `cpu_bandwidth` schema-1 layout (with `pattern_order_balance_complete` in place of `target_order_balance_complete`). All seven canonical patterns always appear in `resolved_plan.patterns.<kind>` and `aggregates.patterns.<kind>.<op>`. When `buffer_bytes < 2 MiB + 32 B` (for example 1 MiB or 2 MiB buffers), `strided_2mb` is `status: "skipped"` (`reason_code: "buffer-too-small-for-stride-transition"`, `frozen_plan_refs.strided_2mb.{read,write,copy}: null`) and omitted from `calibration.attempts`, `measurements[]`, and `loop_records[]`.
+
+`requested_workers` preserves the CLI/default worker count (`worker_source: "auto"` or `"user"`), while `effective_workers` records the per-pattern clamped worker count. For phase-rotated strided records, `accesses_per_pass` is the phase-zero count while `total_accesses` and `exact_payload_bytes` (in `operation_plans[]`) and `completed_exact_payload_bytes` (in `measurements[]`) give exact totals. `strided_2mb` names a 2 MiB virtual-address stride (`large_page_backing_status: "not-verified"`, `large_page_backing_verified: false`).
+
+Both file and stdout transports emit this same schema-1 payload (`configuration.output_file` preserves `"-"` on stdout and `""` in nested sweeps). Command acceptance requires `schema_version == 1`, `mode == "patterns"`, `methodology_version == "patterns-v1-arm64-phase-calibrated-seeded-balanced"`, `status == "complete"`, `results_complete == true`, and `run_accepted == true`, while consuming one aggregate metric additionally requires `aggregates.patterns.<kind>.<op>.status == "measured"` and a non-null `value`.
 
 ### GPU bandwidth JSON shape
 
@@ -2280,7 +2420,7 @@ returns only, excludes QoS and pilot outcomes, and does not prove physical place
   "configuration": {
     "mode": "sweep",
     "sweep_schema_version": 1,
-    "base_mode": "benchmark",
+    "base_mode": "cpu_latency",
     "run_count": 6,
     "sweep_max_runs": 256,
     "sweep_parameters": {
@@ -2297,7 +2437,7 @@ returns only, excludes QoS and pilot outcomes, and does not prove physical place
         "buffer-size": 256,
         "latency-stride-bytes": 64
       },
-      "result": { "...": "normal benchmark, pattern, TLB, core-to-core, or LLM-memory JSON payload" }
+      "result": { "...": "CPU bandwidth, CPU latency, pattern, TLB, core-to-core, or LLM-memory JSON payload" }
     }
   ],
   "execution_time_sec": 123.4,
@@ -2306,54 +2446,38 @@ returns only, excludes QoS and pilot outcomes, and does not prove physical place
 }
 ```
 
-### Latency payload structure (current)
+### CPU latency sample-window & `--compare-locality` structure
 
-Current standard schema 3 separates per-loop continuous headlines, pooled sample-window distributions, and paired
-locality comparisons. The values below illustrate structure only.
+In `cpu_latency` schema 1, each measured entry in `measurements[]` preserves `final_pointer_verification`, optional
+`sample_windows` (`null` when `--latency-samples 0`), and `execution.validation.checks[]`. When `--compare-locality` is
+enabled, top-level `locality_comparison.rounds[]` records the `3 * loop_count` paired rounds and
+`aggregates.locality_comparison` summarizes the medians:
 
 ```json
-"latency": {
-  "headline_ns": {
-    "status": "measured",
-    "value": 84.2,
-    "headline_semantics": "median-p50-across-loop-headlines",
-    "values": [83.7, 84.2, 85.0],
-    "statistics": {
-      "median": 84.2,
-      "coefficient_of_variation_pct": 0.8,
-      "median_absolute_deviation": 0.5
-    },
-    "measurements": [
-      {
-        "status": "measured",
-        "value": 83.7,
-        "access_count": 33554432,
-        "chain_node_count": 2097152,
-        "complete_chain_cycles": 16,
-        "seed": "987654321",
-        "pilot_elapsed_seconds": 0.018,
-        "elapsed_seconds": 0.25,
-        "duration_quality": "within-target-window"
+"aggregates": {
+  "targets": {
+    "main_memory": {
+      "accepted_measurement_ids": [1, 3, 5],
+      "value": 84.2,
+      "statistics": { "median": 84.2, "coefficient_of_variation_pct": 0.8, "median_absolute_deviation": 0.5 },
+      "pooled_sample_distribution": {
+        "semantics": "pooled-separate-sample-window-distribution",
+        "values_ns": [83.1, 84.0, 85.2],
+        "statistics": { "median": 84.0, "p95": 85.08 }
       }
-    ],
-    "pooled_sample_distribution": {
-      "semantics": "pooled-separate-sample-window-distribution",
-      "values_ns": [83.1, 84.0, 85.2],
-      "loop_ranges": [
-        {"benchmark_loop_index": 0, "start_index": 0, "sample_count": 3}
-      ]
     }
   },
-  "automatic_locality_comparison": {
-    "locality_16k_latency_ns": {"value": 23.1, "measurements": []},
-    "global_random_latency_ns": {"value": 91.4, "measurements": []},
-    "locality_latency_delta_ns": {"value": 68.3, "measurements": []}
+  "locality_comparison": {
+    "locality_16k_latency_ns": 23.1,
+    "global_random_latency_ns": 91.4,
+    "locality_latency_delta_ns": 68.3
   }
 }
 ```
 
-An interrupted, skipped, invalid, or failed measurement has `value: null` and an explicit reason. The locality delta's
-per-loop `samples_ns` are same-round `global - 16 KiB` differences; they must not be interpreted as isolated page walks.
+An interrupted, invalid, or failed measurement has `latency_ns: null` and an explicit `reason_code`. `locality_latency_delta_ns`
+is `global_random_latency_ns - locality_16k_latency_ns` (`median(global) - median(16k)`) across the paired rounds and must
+not be interpreted as an isolated page walk.
 
 ### TLB analysis JSON (analyze mode)
 
@@ -2557,7 +2681,9 @@ after candidate-specific validation points have been planned; an interruption du
 `validation_required: false`, `validation_status: "not-run"`, and zero planned validation points even though the methodology
 requires independent validation before accepting a boundary.
 
-### Pattern keys (current)
+### Pattern keys (schema 1)
+
+Canonical patterns under `resolved_plan.patterns.<kind>` and `aggregates.patterns.<kind>`:
 
 - `sequential_forward`
 - `sequential_reverse`
@@ -2567,18 +2693,18 @@ requires independent validation before accepting a boundary.
 - `strided_2mb`
 - `random`
 
-Each pattern key contains methodology and workload metadata plus a `bandwidth` object. Its `read_gb_s`, `write_gb_s`,
-and `copy_gb_s` entries use the pattern-schema-v3 structure shown above: explicit status/reason, headline policy,
-nullable aggregate value, measured values, statistics including CV, and detailed per-loop measurements. This is not the
-same structure as the standard `main_memory.bandwidth` object.
+Each `resolved_plan.patterns.<kind>` holds pattern geometry, `effective_workers`, `worker_spans[]`, and (for `random`) `random_workload`. Each `aggregates.patterns.<kind>` contains `read`, `write`, and `copy` entries with explicit `status`/`reason_code`, `accepted_measurement_ids`, nullable `value` (median P50 GB/s), `relative_to_forward_pct`, `statistics`, and `quality` (with `cv_warning_threshold_pct` `5.0` or `10.0`).
 
 ### Useful JSON inspection commands
 
 Capture any supported machine-output command before applying the schema-specific checks below:
 
 ```bash
-memory_benchmark --benchmark --only-bandwidth --buffer-size 512 --count 5 --output - \
-  >results.json 2>benchmark.log
+memory_benchmark --cpu-bandwidth --buffer-size 512 --count 5 --output - \
+  >cpu_bw.json 2>cpu_bw.log
+
+memory_benchmark --cpu-latency --buffer-size 512 --count 5 --compare-locality --output - \
+  >cpu_lat.json 2>cpu_lat.log
 
 memory_benchmark --gpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output - \
   >gpu_bandwidth.json 2>gpu_bandwidth.log
@@ -2592,33 +2718,44 @@ memory_benchmark --llm-memory --weight-size-mb 64 --layers 4 \
 
 ```bash
 # Pretty print
-python3 -m json.tool results.json
+python3 -m json.tool cpu_bw.json
 
-# Main memory read median
-jq '.main_memory.bandwidth.read_gb_s.statistics.median' results.json
+# Main memory read median (GB/s)
+jq '.aggregates.targets.main_memory.read.statistics.median' cpu_bw.json
 
-# Main memory latency P95 from the pooled, separate sample pass
-jq '.main_memory.latency.headline_ns.pooled_sample_distribution.statistics.p95' results.json
-
-# Paired automatic locality delta median
-jq '.main_memory.latency.automatic_locality_comparison.locality_latency_delta_ns.statistics.median' results.json
-
-# Reject incomplete current standard output
-jq -e 'select(.configuration.mode == "benchmark" and
-              .configuration.benchmark_schema_version == 3 and
+# Reject incomplete or unaccepted CPU bandwidth output
+jq -e 'select(.schema_version == 1 and .mode == "cpu_bandwidth" and
+              .methodology_version == "cpu-bandwidth-v1-arm64-calibrated-seeded-balanced" and
               (.configuration.output_file | type) == "string" and
               .status == "complete" and .results_complete == true and
-              .conclusions_valid == true)' results.json
+              .run_accepted == true)' cpu_bw.json
+
+# Main memory latency P95 from the pooled, separate sample pass
+jq '.aggregates.targets.main_memory.pooled_sample_distribution.statistics.p95' cpu_lat.json
+
+# Paired locality delta median (requires --compare-locality)
+jq '.aggregates.locality_comparison.locality_latency_delta_ns' cpu_lat.json
+
+# Reject incomplete or unaccepted CPU latency output
+jq -e 'select(.schema_version == 1 and .mode == "cpu_latency" and
+              .methodology_version == "cpu-latency-v1-arm64-calibrated-seeded-balanced" and
+              (.configuration.output_file | type) == "string" and
+              .status == "complete" and .results_complete == true and
+              .run_accepted == true)' cpu_lat.json
 
 # Pattern random read median and status
-jq '{status: .patterns.random.bandwidth.read_gb_s.status, median: .patterns.random.bandwidth.read_gb_s.statistics.median_p50}' patterns.json
+jq '.aggregates.patterns.random.read | {status, median: .value, statistics}' patterns.json
 
-# Reject incomplete pattern output
-jq -e 'select(.configuration.pattern_schema_version == 3 and
-              .status == "complete" and .results_complete == true)' patterns.json
+# Reject incomplete or unaccepted pattern output
+jq -e 'select(.schema_version == 1 and .mode == "patterns" and
+              .methodology_version == "patterns-v1-arm64-phase-calibrated-seeded-balanced" and
+              (.configuration.output_file | type) == "string" and
+              .status == "complete" and .results_complete == true and
+              .run_accepted == true)' patterns.json
 
-# Pattern phase-count semantics, requested/effective threads, and exact totals
-jq '.patterns.strided_2mb.bandwidth.read_gb_s.measurements[] | {requested_threads, effective_threads, accesses_per_pass, accesses_per_pass_semantics, min_accesses_per_pass, max_accesses_per_pass, phase_period_passes, total_accesses, total_payload_bytes}' patterns.json
+# Pattern strided_2mb geometry, phase-count semantics, and exact totals
+jq '{pattern: .resolved_plan.patterns.strided_2mb,
+     plans: [.resolved_plan.operation_plans[] | select(.pattern == "strided_2mb")]}' patterns.json
 
 # TLB L1 boundary locality (KB)
 jq '.tlb_analysis.l1_tlb_detection.boundary_locality_kb' tlb_analysis.json
@@ -2704,53 +2841,79 @@ Plotting requires Python 3 and `matplotlib`; the M4/M5 comparison script additio
 python3 -m pip install matplotlib numpy
 ```
 
-The bundled standard-memory scripts accept outputs from compatible software releases. Before reading a selected metric
-path, each requires a non-empty top-level `version` string as provenance, standard mode, schema 3, methodology
-`benchmark-v2-calibrated-seeded-balanced`, complete/valid result state, a string output target, and the expected types
-for the fields it consumes. Exact software-version equality is not a compatibility condition. These scripts do not
-translate standard schema 2, unversioned historical standard JSON, other modes, or other methodology identities. The
-separately governed `plot_analyzetlb.py` retains its own TLB-history policy. Standard-memory plotters do not accept GPU
-schema 1.
+The bundled CPU script-examples accept outputs from compatible software releases. Before reading a selected metric path,
+each requires a non-empty `software.version` string as provenance, `schema_version == 1`, `mode` (`"cpu_bandwidth"` or
+`"cpu_latency"`), the exact methodology identity (`cpu-bandwidth-v1-arm64-calibrated-seeded-balanced` or
+`cpu-latency-v1-arm64-calibrated-seeded-balanced`), `status == "complete"`, `results_complete == true`, `run_accepted == true`,
+a string `configuration.output_file`, and the expected types for the fields it consumes. Exact software-version equality
+is not a compatibility condition. These scripts do not translate legacy standard schema-3/2, unversioned historical JSON,
+other modes, or other methodology identities. The separately governed `plot_analyzetlb.py` retains its own TLB-history
+policy. CPU plotters do not accept GPU schema 1.
+
+### Independent CPU artifact verifiers (`verify_cpu_*_result.py`, `verify_patterns_result.py`)
+
+Verify saved `-B` (`cpu_bandwidth`), `-L` (`cpu_latency`), or `-P` (`patterns`) schema-1 direct artifacts or schema-1 sweep envelopes
+independently without executing the benchmark:
+
+```bash
+python3 script-examples/verify_cpu_bandwidth_result.py cpu_bw.json --binary ./memory_benchmark --require-raw-timing
+python3 script-examples/verify_cpu_latency_result.py cpu_lat.json --binary ./memory_benchmark --require-raw-timing
+python3 script-examples/verify_patterns_result.py patterns.json --binary ./memory_benchmark --require-raw-timing
+make test-patterns-verifier
+make test-cpu-verifiers
+```
+
+`--binary PATH` hashes the binary against `build_manifest.binary_sha256` without running it; `--require-raw-timing`
+rejects missing `cpu_raw` Mach ticks; `verify_cpu_latency_result.py` also accepts `--max-chain-nodes N` (default
+`8,388,608`); and `verify_patterns_result.py` also accepts `--max-random-indices N` (default `1,000,000`). Exit `0`
+means consistent and accepted (`run_accepted: true`), exit `1` means inconsistent or consistently unaccepted, and exit `2`
+means unsupported schema/methodology or bounded resource/evidence limit. See
+[API.md](API.md#independent-cpu-artifact-verifiers) for full details.
 
 ### `script-examples/latency_test_script.sh`
 
 What it does:
 
-- Sweeps multiple custom cache sizes
-- Sweeps multiple `--latency-tlb-locality-kb` values
+- Invokes `--cpu-latency` across multiple custom cache sizes and `--latency-tlb-locality-kb` values
 - Writes per-run JSON files under `script-examples/tmp/`
-- Extracts `.cache.custom.latency.headline_ns.pooled_sample_distribution.statistics` from complete current standard
-  schema-3 files into `script-examples/final_output.txt`
+- Extracts `.aggregates.targets.custom.pooled_sample_distribution.statistics` from complete, accepted `cpu_latency`
+  schema-1 files into `script-examples/final_output.txt`
 - Uses `jq` for that local sanity check and extraction when available, with Python 3 as the fallback
 - Clears `tmp` after extraction
-- Returns a non-zero status after cleanup if any benchmark failed, an expected output is missing, or a current-schema
-  result is incomplete or cannot be parsed
+- Returns a non-zero status after cleanup if any benchmark failed, an expected output is missing, or a schema-1 result
+  is incomplete, unaccepted, or cannot be parsed
 
 The script prefers the executable built at the repository root, falls back to `memory_benchmark` from `PATH` when that
 file is unavailable, and honors an explicit `BENCHMARK_CMD=/path/to/memory_benchmark` override. Every selected producer
-must emit complete current standard schema 3; incompatible output is rejected before metric extraction.
+must emit complete, accepted `cpu_latency` schema 1; incompatible output is rejected before metric extraction.
 
-`latency_test_script_stride_tlb.sh` applies the same local-binary/override policy, uses embedded Python 3 for its local
-current-result sanity check and metric extraction, retains its timestamped JSON files, and returns non-zero unless every
-planned run produces one complete CSV row.
+`latency_test_script_stride_tlb.sh` applies the same local-binary/override policy, runs `--cpu-latency` across cache size,
+configured locality, and stride, uses embedded Python 3 to verify schema-1 contract acceptance and extract
+`pooled_sample_distribution.statistics`, `resolved_plan.chain_identities.custom.node_count`, and
+`environment.page_size_bytes`, retains its timestamped JSON files, and returns non-zero unless every planned run produces
+one complete CSV row.
 
-### Standard-result comparison and hierarchy plotters
+### CPU comparison and hierarchy plotters
 
-Both JSON entry paths require explicit current standard schema-3 inputs:
+Both plotters require explicit compatible schema-1 JSON inputs (`--metric` defaults to `median`):
 
 ```bash
 python3 script-examples/plot_M4vsM5_benchmark_comparison.py \
-  --m4-file current-m4.json --m5-file current-m5.json
+  --m4-bandwidth-file m4-bw.json --m4-latency-file m4-lat.json \
+  --m5-bandwidth-file m5-bw.json --m5-latency-file m5-lat.json
 python3 script-examples/plot_benchmark-memory-latency-hierarchy.py \
-  --file current-standard.json
+  --file cpu-latency-compare-locality.json
 ```
 
-They read the current headline and automatic-locality `statistics[metric]` paths directly; there is no historical
-`values` or `average` shape fallback.
+`plot_M4vsM5_benchmark_comparison.py` takes four explicit inputs (also aliased as `--m4-bandwidth`, `--m4-latency`,
+`--m5-bandwidth`, `--m5-latency`) so bandwidth (`mode: "cpu_bandwidth"`) and latency (`mode: "cpu_latency"` with
+`--compare-locality`) are verified independently and matched by `environment.processor_name`.
+`plot_benchmark-memory-latency-hierarchy.py` takes a `cpu_latency` schema-1 JSON generated with `--compare-locality`
+(reading `aggregates.targets.{l1,l2}` and `aggregates.locality_comparison` for `median` or `locality_comparison.rounds`
+for other `ALLOWED_METRICS`), or an explicit `-L --compare-locality` console-text file (for `--metric median` only).
 
-There are no archived JSON defaults. The hierarchy plotter's explicit `--file` input may instead be a console-text
-statistics file using the current producer's labels. That separate parser remains available but provides neither JSON
-schema compatibility nor support for historical pre-schema label spellings.
+There are no archived JSON defaults. The hierarchy plotter's separate console-text parser recognizes current `-L`
+console labels only and provides neither JSON schema compatibility nor support for historical label spellings.
 
 ### `script-examples/plot_cache_percentiles.py`
 
@@ -2806,8 +2969,8 @@ The repository's historical `results/0.53.7/MacMiniM4_benchmark.json` sample rep
 
 Under heavy concurrent load, expect lower throughput and higher variance than this historical sample. It is an empirical
 0.53.7 result, not a guaranteed current-methodology baseline. Historical pattern files from earlier methodology
-versions are not a stability baseline for current pattern schema 3 and should not be compared numerically with
-`pattern-v2-phase-calibrated-seeded` results without accounting for the methodology change.
+versions are not a stability baseline for current patterns schema 1 and should not be compared numerically with
+`patterns-v1-arm64-phase-calibrated-seeded-balanced` results without accounting for the methodology change.
 
 ---
 
@@ -2892,9 +3055,9 @@ If using a box mode (`random-box`, `same-random-in-box`, `diff-random-in-box`), 
 
 ### Buffer size warnings/capping
 
-Standard/pattern paths apply their documented size safety rules. GPU mode never silently caps its requested private
-buffer: below 64 MB, above Metal `maxBufferLength`, or above the two-buffer memory budget is rejected with a stable
-reason code.
+`--cpu-bandwidth`, `--cpu-latency`, `--patterns`, and `--gpu-bandwidth` enforce strict `memory_budget` preflight checks
+and reject oversized requests (`memory-budget-exceeded`) without silently truncating the working set. Only legacy
+`BenchmarkConfig`-based paths (`--analyze-tlb` candidate admission) apply `BenchmarkConfig` capping rules.
 
 ### GPU mode reports unsupported
 
@@ -2975,8 +3138,8 @@ model/count/worker demand or free memory rather than treating the reserve as mea
 ### Script cannot find benchmark binary
 
 The script first uses the repository-root `memory_benchmark` when it is executable, then tries `memory_benchmark` from
-`PATH`. If neither is suitable, set `BENCHMARK_CMD` to an executable path. The selected binary must produce complete
-current standard schema 3.
+`PATH`. If neither is suitable, set `BENCHMARK_CMD` to an executable path. The selected binary must produce complete,
+accepted `cpu_latency` schema 1.
 
 ### Plot script says no blocks found
 
@@ -2990,7 +3153,9 @@ Make sure you are passing `script-examples/final_output.txt` generated by the la
 - [API.md](API.md) - machine-readable process contract, stdout/stderr transport, schemas, and verifier contract
 - [CAPABILITIES.md](CAPABILITIES.md) - measurement capability overview and interpretation notes
 - [PARAMETER_MATRIX.md](PARAMETER_MATRIX.md) - complete flag list, mode compatibility tables, numeric limits, and sweep rules
-- [LATENCY_WHITEPAPER.md](LATENCY_WHITEPAPER.md) - pointer-chase latency methodology deep dive
+- [CPU_BANDWIDTH_WHITEPAPER.md](CPU_BANDWIDTH_WHITEPAPER.md) - audited CPU bandwidth methodology deep dive
+- [LATENCY_WHITEPAPER.md](LATENCY_WHITEPAPER.md) - audited pointer-chase latency methodology deep dive
+- [PATTERNS_WHITEPAPER.md](PATTERNS_WHITEPAPER.md) - audited 7-pattern ARM64 methodology deep dive
 - [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md) - TLB analysis methodology and JSON schema
 - [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md) - Core-to-Core Cache-Line Handoff Latency Benchmark: methodology, assembly protocol, scheduler-hint scenarios, and JSON contract
 - [GPU_BANDWIDTH_WHITEPAPER.md](GPU_BANDWIDTH_WHITEPAPER.md) - Metal GPU memory-bandwidth methodology, validation,
@@ -3011,8 +3176,8 @@ Recorded 0.63.0 LLM schema-1 examples:
 The pair is an empirical working-set scaling example. The runs have different model geometry and frozen work plans,
 so treat them as side-by-side examples rather than one pooled performance distribution.
 
-The following are retained historical records. Archived standard JSON among them is not accepted by the current
-bundled standard-result consumers.
+The following are retained historical records. Archived standard JSON among them is not accepted by current
+`script-examples/` consumers.
 
 - `results/0.53.7/MacMiniM4_benchmark.json`
 - `results/0.53.7/MacMiniM4_patterns.json`

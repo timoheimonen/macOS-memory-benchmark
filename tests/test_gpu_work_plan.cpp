@@ -21,7 +21,6 @@
 #include <string>
 #include <vector>
 
-#include "benchmark/benchmark_work_plan.h"
 #include "core/config/constants.h"
 #include "gpu_bandwidth/gpu_backend.h"
 #include "gpu_bandwidth/gpu_work_plan.h"

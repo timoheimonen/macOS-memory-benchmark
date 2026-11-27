@@ -1,23 +1,13 @@
-# Script-example fixtures
+# Test fixtures
 
-## Supported schema-3 fixtures
+## CPU Bandwidth, CPU Latency & Patterns schema-1 verifier fixtures
 
-`standard-schema-v3-complete-current.json` and `standard-schema-v3-custom-complete-current.json` are captured complete
-results for the bundled standard-memory script examples. They cover the supported schema and methodology,
-configuration, work metadata, completion fields, metric blocks, and raw output targets consumed by those examples.
+`cpu-bandwidth-schema-v1-complete-current.json`, `cpu-latency-schema-v1-complete-current.json`, `patterns-schema-v1-complete-current.json`, and `patterns-schema-v1-skipped-2mb-current.json` are schema-1 fixtures for the standalone `-B`/`--cpu-bandwidth` (`mode: "cpu_bandwidth"`), `-L`/`--cpu-latency` (`mode: "cpu_latency"`), and `-P`/`--patterns` (`mode: "patterns"`) modes, exercised by `tests/test_cpu_bandwidth_verifier.py`, `tests/test_cpu_latency_verifier.py`, and `tests/test_patterns_verifier.py` (`make test-patterns-verifier` and `make test-cpu-verifiers`) as well as `tests/test_script_examples.py` (`make test-script-examples`).
 
-To refresh the fixtures, build `memory_benchmark` and run:
-
-```bash
-./memory_benchmark --benchmark --iterations 1 --buffer-size 1 --count 1 --latency-samples 1 --output /tmp/standard-schema-v3-complete-current.capture.json
-./memory_benchmark --benchmark --only-latency --buffer-size 0 --cache-size 16 --count 1 --latency-samples 1 --latency-tlb-locality-kb 16 --latency-stride-bytes 256 --output /tmp/standard-schema-v3-custom-complete-current.capture.json
-```
-
-Replace the corresponding fixture files with the captured outputs. The full run supplies the bandwidth, L1/L2 headline
-latency, and automatic-locality paths used by both plotters. The custom-cache run supplies the pooled sample distribution
-and work metadata used by the shell examples. Refresh the fixtures, examples, and entry-path assertions together when
-the consumed schema, methodology, or result shape changes. A `SOFTVERSION`-only change does not require a fixture
-refresh. Run `make test-script-examples` after updating them.
+- `cpu-bandwidth-schema-v1-complete-current.json`: complete `-B` fixture covering main memory + custom cache bandwidth measurements, GF(2) oracle / write-pattern post-validation checks, and raw Mach timing evidence.
+- `cpu-latency-schema-v1-complete-current.json`: complete `-L` fixture covering custom cache + main memory latency measurements, canonical pointer-chain permutation hashes, final-pointer verification, and `pooled_sample_distribution` sample-window evidence.
+- `patterns-schema-v1-complete-current.json`: complete `-P` fixture (`-P -b 3 -t 2 -i 2 -r 3 --seed 424242 -o ...`) with all 7 patterns active, slot-tagged GF(2) read checksums (`patterns-read-checksum-v1`), 6-check write/copy cold post-validation, `splitmix64-coprime-fisher-yates-v1` random indices (`random_indices_sha256`), and raw Mach timing evidence (`cpu_raw`). Verified with `python3 script-examples/verify_patterns_result.py tests/fixtures/patterns-schema-v1-complete-current.json --require-raw-timing`.
+- `patterns-schema-v1-skipped-2mb-current.json`: complete `-P` fixture (`-P -b 1 -t 2 -i 2 -r 3 --seed 424242 -o ...`) where `strided_2mb` is explicitly `status: "skipped"` (`reason_code: "buffer-too-small-for-stride-transition"`) and omitted from `calibration`, `measurements[]`, and `loop_records[]`. Verified with `python3 script-examples/verify_patterns_result.py tests/fixtures/patterns-schema-v1-skipped-2mb-current.json --require-raw-timing`.
 
 ## LLM schema 2 verifier fixtures
 

@@ -101,6 +101,36 @@ void set_memory_system_calls_for_testing(const MemorySystemCalls& calls);
 void reset_memory_system_calls_for_testing();
 
 /**
+ * @brief Owned mmap buffer together with madvise/mprotect audit evidence.
+ */
+struct AllocatedBufferEvidence {
+  MmapPtr ptr{nullptr, MmapDeleter{0}};
+  size_t requested_bytes = 0;
+  size_t mapped_bytes = 0;
+  bool non_cacheable_requested = false;
+  int madvise_advice = 0;
+  bool madvise_applied = false;
+  int madvise_errno = 0;
+  bool read_only_protected = false;
+  int mprotect_errno = 0;
+};
+
+/**
+ * @brief Allocate a buffer via mmap and record madvise/mapping evidence.
+ */
+AllocatedBufferEvidence allocate_buffer_with_evidence(
+    size_t size,
+    bool non_cacheable = false,
+    const char* buffer_name = "buffer");
+
+/**
+ * @brief Apply PROT_READ protection to an allocated buffer and record errno/status.
+ */
+bool protect_buffer_read_only_with_evidence(
+    AllocatedBufferEvidence& evidence,
+    size_t size);
+
+/**
  * @brief Allocate a buffer using mmap with proper error handling and madvise hints
  * @param size Size of the buffer to allocate in bytes (must be > 0)
  * @param buffer_name Name of the buffer (used in error messages for clarity)

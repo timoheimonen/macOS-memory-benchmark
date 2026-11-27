@@ -148,7 +148,7 @@ std::string_view extract_long_option_name(std::string_view token) noexcept;
  * @brief Report whether `token` is a known space-separated value-taking option.
  *
  * Covers every short and long option that consumes a following argv token across
- * all six primary modes. Inline `--option=value` forms return `false`.
+ * all seven primary modes. Inline `--option=value` forms return `false`.
  */
 bool is_known_cli_value_option(std::string_view token) noexcept;
 

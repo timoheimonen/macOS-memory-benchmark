@@ -18,14 +18,16 @@
 @file plot_M4vsM5_benchmark_comparison.py
 @brief Side-by-side memory bandwidth and latency comparison: Apple M4 vs M5.
 
-Reads two benchmark JSON files produced by macos-memory-benchmark and renders
-a two-subplot figure:
+Reads four schema-1 JSON files produced by macos-memory-benchmark (--cpu-bandwidth
+and --cpu-latency --compare-locality for each machine) and renders a two-subplot
+figure:
   - Top:    Memory bandwidth (Copy / Read / Write, GB/s)
   - Bottom: Memory latency  (L1 / L2 / 16 KiB locality / global random, ns)
 """
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -37,18 +39,30 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Compare Apple M4 vs M5 memory bandwidth and latency.")
     parser.add_argument(
-        "-4", "--m4-file",
+        "--m4-bandwidth-file", "--m4-bandwidth",
+        dest="m4_bandwidth_file",
         required=True,
-        help="Path to a supported standard schema-3 M4 benchmark JSON")
+        help="Path to a supported CPU bandwidth schema-1 JSON for M4")
     parser.add_argument(
-        "-5", "--m5-file",
+        "--m4-latency-file", "--m4-latency",
+        dest="m4_latency_file",
         required=True,
-        help="Path to a supported standard schema-3 M5 benchmark JSON")
+        help="Path to a supported CPU latency schema-1 JSON (with --compare-locality) for M4")
+    parser.add_argument(
+        "--m5-bandwidth-file", "--m5-bandwidth",
+        dest="m5_bandwidth_file",
+        required=True,
+        help="Path to a supported CPU bandwidth schema-1 JSON for M5")
+    parser.add_argument(
+        "--m5-latency-file", "--m5-latency",
+        dest="m5_latency_file",
+        required=True,
+        help="Path to a supported CPU latency schema-1 JSON (with --compare-locality) for M5")
     parser.add_argument(
         "--metric",
-        default="average",
+        default="median",
         choices=VALID_METRICS,
-        help="Statistic to plot (default: average)")
+        help="Statistic to plot (default: median)")
     parser.add_argument(
         "--save",
         default=None,
@@ -76,63 +90,225 @@ def resolve_input_path(raw_path: str) -> Path:
     raise RuntimeError(f"Input JSON file not found: {raw_path}")
 
 
-def require_supported_standard_result(data: object, source: str) -> dict:
-    """Require the supported standard schema and methodology contract."""
+def _is_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _linear_percentile(sorted_values: list[float], percentile: float) -> float:
+    n = len(sorted_values)
+    if n == 1:
+        return float(sorted_values[0])
+    index = percentile * (n - 1)
+    lower = int(index)
+    upper = lower + 1
+    if upper >= n:
+        return float(sorted_values[-1])
+    weight = index - lower
+    return sorted_values[lower] * (1.0 - weight) + sorted_values[upper] * weight
+
+
+def _compute_metric(values: list[float], metric: str, label: str) -> float:
+    if not values:
+        raise RuntimeError(f"Missing measured locality rounds for '{label}'.")
+    sorted_vals = sorted(float(v) for v in values)
+    if metric == "average":
+        return sum(sorted_vals) / len(sorted_vals)
+    if metric == "median":
+        return _linear_percentile(sorted_vals, 0.50)
+    if metric == "p90":
+        return _linear_percentile(sorted_vals, 0.90)
+    if metric == "p95":
+        return _linear_percentile(sorted_vals, 0.95)
+    if metric == "p99":
+        return _linear_percentile(sorted_vals, 0.99)
+    if metric == "min":
+        return sorted_vals[0]
+    if metric == "max":
+        return sorted_vals[-1]
+    if metric == "stddev":
+        if len(sorted_vals) <= 1:
+            return 0.0
+        mean = sum(sorted_vals) / len(sorted_vals)
+        variance = sum((v - mean) ** 2 for v in sorted_vals) / (len(sorted_vals) - 1)
+        return math.sqrt(variance)
+    raise RuntimeError(f"Unsupported metric '{metric}'.")
+
+
+def require_supported_cpu_result(
+    data: object,
+    source: str,
+    *,
+    expected_mode: str,
+    expected_methodology: str,
+    label: str,
+) -> tuple[dict, dict, dict]:
+    """Require the supported CPU schema-1 and methodology contract."""
+    software = data.get("software") if isinstance(data, dict) else None
     configuration = data.get("configuration") if isinstance(data, dict) else None
+    environment = data.get("environment") if isinstance(data, dict) else None
     if not (
-        isinstance(configuration, dict)
-        and isinstance(data.get("version"), str)
-        and bool(data["version"])
-        and configuration.get("mode") == "benchmark"
-        and type(configuration.get("benchmark_schema_version")) is int
-        and configuration["benchmark_schema_version"] == 3
-        and configuration.get("methodology_version") == "benchmark-v2-calibrated-seeded-balanced"
+        isinstance(data, dict)
+        and type(data.get("schema_version")) is int
+        and data["schema_version"] == 1
+        and data.get("mode") == expected_mode
+        and data.get("methodology_version") == expected_methodology
+        and isinstance(software, dict)
+        and isinstance(software.get("version"), str)
+        and bool(software["version"])
+        and isinstance(configuration, dict)
+        and isinstance(configuration.get("output_file"), str)
+        and isinstance(environment, dict)
         and data.get("status") == "complete"
         and data.get("results_complete") is True
-        and data.get("conclusions_valid") is True
-        and isinstance(configuration.get("output_file"), str)
+        and data.get("run_accepted") is True
     ):
         raise RuntimeError(
-            f"{source} is not a complete supported standard schema-3 benchmark result")
-    return configuration
+            f"{source} is not a complete supported {label} schema-1 result")
+    return software, configuration, environment
 
 
 def _stat(obj: dict, *keys: str, metric: str) -> float:
     """Navigate nested dicts and return the requested statistic value."""
-    node = obj
+    node: object = obj
     for key in keys:
-        node = node.get(key, {})
-    stats = node.get("statistics", {})
+        if not isinstance(node, dict):
+            raise RuntimeError(
+                f"Metric '{metric}' not found at path {' -> '.join(keys)}")
+        node = node.get(key)
+    if not isinstance(node, dict):
+        raise RuntimeError(
+            f"Metric '{metric}' not found at path {' -> '.join(keys)}")
+    stats = node.get("statistics")
+    if not isinstance(stats, dict):
+        raise RuntimeError(
+            f"Metric '{metric}' not found at path {' -> '.join(keys)}")
     value = stats.get(metric)
-    if value is None:
+    if not _is_number(value):
         raise RuntimeError(
             f"Metric '{metric}' not found at path {' -> '.join(keys)}")
     return float(value)
 
 
-def load_data(path: Path, metric: str) -> dict:
+def load_bandwidth_data(path: Path, metric: str) -> dict:
     with path.open("r", encoding="utf-8") as fh:
         data = json.load(fh)
 
-    config = require_supported_standard_result(data, str(path))
-    cpu_name = str(config.get("cpu_name", "Unknown CPU"))
-    version = data["version"]
+    software, _, environment = require_supported_cpu_result(
+        data,
+        str(path),
+        expected_mode="cpu_bandwidth",
+        expected_methodology="cpu-bandwidth-v1-arm64-calibrated-seeded-balanced",
+        label="CPU bandwidth",
+    )
+    cpu_name = str(environment.get("processor_name") or "Unknown CPU")
+    version = software["version"]
 
-    mm = data.get("main_memory", {})
-    bw = mm.get("bandwidth", {})
-    cache = data.get("cache", {})
-    locality = mm.get("latency", {}).get("automatic_locality_comparison", {})
+    aggregates = data.get("aggregates")
+    targets = aggregates.get("targets") if isinstance(aggregates, dict) else None
+    mm = targets.get("main_memory") if isinstance(targets, dict) else None
+    if not isinstance(mm, dict):
+        raise RuntimeError(f"{path} is missing main_memory bandwidth aggregates")
 
     return {
         "cpu_name": cpu_name,
         "version": version,
-        "bw_copy":   _stat(bw,    "copy_gb_s",  metric=metric),
-        "bw_read":   _stat(bw,    "read_gb_s",  metric=metric),
-        "bw_write":  _stat(bw,    "write_gb_s", metric=metric),
-        "l1_lat":    _stat(cache, "l1", "latency", "headline_ns", metric=metric),
-        "l2_lat":    _stat(cache, "l2", "latency", "headline_ns", metric=metric),
-        "locality_16k": _stat(locality, "locality_16k_latency_ns", metric=metric),
-        "global_random": _stat(locality, "global_random_latency_ns", metric=metric),
+        "bw_copy": _stat(mm, "copy", metric=metric),
+        "bw_read": _stat(mm, "read", metric=metric),
+        "bw_write": _stat(mm, "write", metric=metric),
+    }
+
+
+def _extract_locality_values(data: dict, metric: str, source: Path) -> tuple[float, float]:
+    aggregates = data.get("aggregates")
+    loc_agg = aggregates.get("locality_comparison") if isinstance(aggregates, dict) else None
+    if not isinstance(loc_agg, dict):
+        raise RuntimeError(
+            f"{source} does not include locality comparison results; re-run --cpu-latency with --compare-locality"
+        )
+
+    if metric == "median":
+        loc_16k = loc_agg.get("locality_16k_latency_ns")
+        loc_global = loc_agg.get("global_random_latency_ns")
+        if _is_number(loc_16k) and _is_number(loc_global):
+            return float(loc_16k), float(loc_global)
+        raise RuntimeError(f"{source} is missing median locality comparison values")
+
+    loc_raw = data.get("locality_comparison")
+    rounds = loc_raw.get("rounds") if isinstance(loc_raw, dict) else None
+    if not isinstance(rounds, list) or not rounds:
+        raise RuntimeError(
+            f"{source} is missing locality_comparison.rounds needed for metric '{metric}'"
+        )
+
+    vals_16k: list[float] = []
+    vals_global: list[float] = []
+    for rnd in rounds:
+        if not isinstance(rnd, dict):
+            continue
+        sub16 = rnd.get("locality_16k")
+        if isinstance(sub16, dict) and sub16.get("status") == "measured" and _is_number(sub16.get("latency_ns")):
+            vals_16k.append(float(sub16["latency_ns"]))
+        subg = rnd.get("locality_global")
+        if isinstance(subg, dict) and subg.get("status") == "measured" and _is_number(subg.get("latency_ns")):
+            vals_global.append(float(subg["latency_ns"]))
+
+    return (
+        _compute_metric(vals_16k, metric, "16 KiB locality latency"),
+        _compute_metric(vals_global, metric, "Global-random latency"),
+    )
+
+
+def load_latency_data(path: Path, metric: str) -> dict:
+    with path.open("r", encoding="utf-8") as fh:
+        data = json.load(fh)
+
+    software, _, environment = require_supported_cpu_result(
+        data,
+        str(path),
+        expected_mode="cpu_latency",
+        expected_methodology="cpu-latency-v1-arm64-calibrated-seeded-balanced",
+        label="CPU latency",
+    )
+    cpu_name = str(environment.get("processor_name") or "Unknown CPU")
+    version = software["version"]
+
+    aggregates = data.get("aggregates")
+    targets = aggregates.get("targets") if isinstance(aggregates, dict) else None
+    if not isinstance(targets, dict):
+        raise RuntimeError(f"{path} is missing latency target aggregates")
+
+    l1_lat = _stat(targets, "l1", metric=metric)
+    l2_lat = _stat(targets, "l2", metric=metric)
+    locality_16k, global_random = _extract_locality_values(data, metric, path)
+
+    return {
+        "cpu_name": cpu_name,
+        "version": version,
+        "l1_lat": l1_lat,
+        "l2_lat": l2_lat,
+        "locality_16k": locality_16k,
+        "global_random": global_random,
+    }
+
+
+def load_machine_data(bw_path: Path, lat_path: Path, metric: str) -> dict:
+    bw = load_bandwidth_data(bw_path, metric)
+    lat = load_latency_data(lat_path, metric)
+    if bw["cpu_name"] != lat["cpu_name"]:
+        raise RuntimeError(
+            f"CPU mismatch between bandwidth ({bw['cpu_name']}) and latency ({lat['cpu_name']}) files"
+        )
+    version = bw["version"] if bw["version"] == lat["version"] else f"{bw['version']}/{lat['version']}"
+    return {
+        "cpu_name": bw["cpu_name"],
+        "version": version,
+        "bw_copy": bw["bw_copy"],
+        "bw_read": bw["bw_read"],
+        "bw_write": bw["bw_write"],
+        "l1_lat": lat["l1_lat"],
+        "l2_lat": lat["l2_lat"],
+        "locality_16k": lat["locality_16k"],
+        "global_random": lat["global_random"],
     }
 
 
@@ -152,11 +328,13 @@ def _bar_labels(ax, bars):
 def main():
     args = parse_args()
 
-    m4_path = resolve_input_path(args.m4_file)
-    m5_path = resolve_input_path(args.m5_file)
+    m4_bw_path = resolve_input_path(args.m4_bandwidth_file)
+    m4_lat_path = resolve_input_path(args.m4_latency_file)
+    m5_bw_path = resolve_input_path(args.m5_bandwidth_file)
+    m5_lat_path = resolve_input_path(args.m5_latency_file)
 
-    m4 = load_data(m4_path, args.metric)
-    m5 = load_data(m5_path, args.metric)
+    m4 = load_machine_data(m4_bw_path, m4_lat_path, args.metric)
+    m5 = load_machine_data(m5_bw_path, m5_lat_path, args.metric)
 
     metric_label = args.metric.capitalize()
     m4_label = f"{m4['cpu_name']} (v{m4['version']})"

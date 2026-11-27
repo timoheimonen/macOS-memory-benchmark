@@ -34,11 +34,12 @@ class JsonOutputSession;
 
 /** Nested result schema used to decide whether one sweep run completed. */
 enum class SweepNestedMode {
-  Standard = 0,
-  Patterns,
+  Patterns = 0,
   TlbAnalysis,
   CoreToCore,
   LlmMemory,
+  CpuBandwidth,
+  CpuLatency,
 };
 
 /** Auditable terminal state of one attempted nested sweep run. */

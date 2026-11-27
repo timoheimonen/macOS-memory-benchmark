@@ -28,7 +28,6 @@
  * - benchmark/benchmark_tests.h - Benchmark test functions
  * - utils/utils.h - Utility functions
  * - output/console/output_printer.h - Output/printing functions
- * - output/console/statistics.h - Statistics functions
  * - asm/asm_functions.h - Assembly function declarations
  * - core/config/version.h - Version information
  */
@@ -42,13 +41,11 @@
 #include "benchmark/benchmark_tests.h"
 #include "utils/utils.h"
 #include "output/console/output_printer.h"
-#include "output/console/statistics.h"
 #include "asm/asm_functions.h"
 #include "core/config/version.h"
 
 // Forward declarations (needed for function signatures in other headers)
 struct BenchmarkConfig;
-struct BenchmarkStatistics;
 
 // --- Warmup Functions (warmup/) ---
 #include "warmup/warmup.h"

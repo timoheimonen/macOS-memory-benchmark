@@ -19,7 +19,8 @@
 /** Primary command modes recognized before mode-specific parsing begins. */
 enum class PrimaryBenchmarkMode {
   None = 0,
-  Standard,
+  CpuBandwidth,
+  CpuLatency,
   Patterns,
   AnalyzeTlb,
   AnalyzeCoreToCore,

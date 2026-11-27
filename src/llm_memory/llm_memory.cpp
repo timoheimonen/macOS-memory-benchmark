@@ -18,7 +18,6 @@
  * @brief Standalone parsing, command boundary, validation, and status tokens
  */
 
-#include "../../.build-provenance.h"
 #include "llm_memory/llm_memory.h"
 
 #include <algorithm>
@@ -32,6 +31,9 @@
 #include <string>
 #include <string_view>
 #include <utility>
+
+#include "core/audit/build_manifest.h"
+#include "core/audit/checkpoint_policy.h"
 
 #include "core/config/cli_parser.h"
 #include "core/config/config.h"
@@ -249,8 +251,8 @@ void initialize_llm_setup_failure_result(
   result.status = LlmRunStatus::Failed;
   result.reason_code = canonicalize_llm_result_reason_code(reason_code);
   result.counters.planned_loops = config.loop_count;
-  result.snapshot_interval_loops = std::max<size_t>(
-      1, config.loop_count / 8 + (config.loop_count % 8 != 0));
+  result.snapshot_interval_loops =
+      calculate_bounded_snapshot_interval_loops(config.loop_count);
   constexpr std::array<LlmScenario, kLlmScenarioCount> kScenarios = {
       LlmScenario::WeightsOnly, LlmScenario::KvOnly,
       LlmScenario::Mixed};
@@ -1138,13 +1140,8 @@ int execute_llm_memory_run(const LlmMemoryConfig& config,
     if (print_banner) {
       print_runtime_banner();
     }
-    metadata.build_manifest = nlohmann::ordered_json::parse(LLM_BUILD_MANIFEST_JSON);
     const std::string binary_hash = capture_llm_binary_sha256();
-    if (!binary_hash.empty()) metadata.build_manifest["binary_sha256"] = binary_hash;
-    else {
-      metadata.build_manifest["status"] = "partial";
-      metadata.build_manifest["reason_code"] = "binary-hash-unavailable";
-    }
+    metadata.build_manifest = build_runtime_provenance_manifest_json(binary_hash);
     metadata.timestamp = build_utc_timestamp();
     metadata.main_thread_qos = prepare_main_thread_benchmark_qos(MainThreadQosSetter{}, false);
     std::optional<BenchmarkSignalMaskGuard> signal_guard;

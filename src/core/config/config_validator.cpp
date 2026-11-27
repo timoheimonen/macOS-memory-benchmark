@@ -21,8 +21,7 @@
  * This file implements configuration validation logic that ensures the parsed
  * configuration is internally consistent and meets system resource constraints.
  * Validation includes:
- * - Checking for mutually exclusive flags (--only-bandwidth vs --only-latency)
- * - Validating flag combinations with pattern mode
+ * - Validating flag combinations with pattern and TLB analysis modes
  * - Enforcing memory limits based on available system memory
  * - Verifying buffer size meets minimum requirements
  * - Capping buffer sizes to prevent system memory exhaustion
@@ -81,46 +80,14 @@ bool sweep_parameter_allowed(const BenchmarkConfig& config, SweepParameter param
            parameter == SweepParameter::TlbDensity;
   }
 
-  if (config.run_patterns) {
-    return parameter == SweepParameter::BufferSizeMb ||
-           parameter == SweepParameter::Threads;
-  }
-
-  if (config.only_bandwidth) {
-    return parameter == SweepParameter::BufferSizeMb ||
-           parameter == SweepParameter::Threads;
-  }
-
-  if (config.only_latency) {
-    return parameter == SweepParameter::BufferSizeMb ||
-           parameter == SweepParameter::CacheSizeKb ||
-           parameter == SweepParameter::LatencyTlbLocalityKb ||
-           parameter == SweepParameter::LatencyStrideBytes ||
-           parameter == SweepParameter::LatencyChainMode;
-  }
-
-  return parameter == SweepParameter::BufferSizeMb ||
-         parameter == SweepParameter::CacheSizeKb ||
-         parameter == SweepParameter::Threads ||
-         parameter == SweepParameter::LatencyTlbLocalityKb ||
-         parameter == SweepParameter::LatencyStrideBytes ||
-         parameter == SweepParameter::LatencyChainMode;
+  return false;
 }
 
 std::string mode_name_for_sweep(const BenchmarkConfig& config) {
   if (config.analyze_tlb) {
     return "--analyze-tlb";
   }
-  if (config.run_patterns) {
-    return "--patterns";
-  }
-  if (config.only_bandwidth) {
-    return "--benchmark --only-bandwidth";
-  }
-  if (config.only_latency) {
-    return "--benchmark --only-latency";
-  }
-  return "--benchmark";
+  return "";
 }
 
 const char* conflicting_direct_option_for_sweep(const BenchmarkConfig& config,
@@ -188,20 +155,10 @@ const char* canonical_sweep_parameter_name(SweepParameter parameter) {
 int validate_config(BenchmarkConfig& config) {
   const size_t page_size = get_config_page_size_bytes();
 
-  if (!config.analyze_tlb && !config.run_benchmark && !config.run_patterns) {
-    if (config.user_specified_pattern_seed || config.user_specified_benchmark_seed) {
+  if (!config.analyze_tlb) {
+    if (config.user_specified_seed) {
       std::cerr << Messages::error_prefix()
                 << Messages::error_seed_requires_supported_mode()
-                << std::endl;
-      return EXIT_FAILURE;
-    }
-    if (config.only_bandwidth && config.only_latency) {
-      std::cerr << Messages::error_prefix() << Messages::error_incompatible_flags() << std::endl;
-      return EXIT_FAILURE;
-    }
-    if (config.only_bandwidth || config.only_latency) {
-      std::cerr << Messages::error_prefix()
-                << Messages::error_only_flags_require_benchmark()
                 << std::endl;
       return EXIT_FAILURE;
     }
@@ -284,283 +241,5 @@ int validate_config(BenchmarkConfig& config) {
     return validate_analyze_tlb_stride(config.latency_stride_bytes, page_size);
   }
 
-  if (config.user_specified_pattern_seed && !config.run_patterns) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_seed_requires_supported_mode()
-              << std::endl;
-    return EXIT_FAILURE;
-  }
-  if (config.user_specified_benchmark_seed && !config.run_benchmark) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_seed_requires_supported_mode()
-              << std::endl;
-    return EXIT_FAILURE;
-  }
-
-  // Error: Validate mutually exclusive flags
-  if (config.only_bandwidth && config.only_latency) {
-    std::cerr << Messages::error_prefix() << Messages::error_incompatible_flags() << std::endl;
-    return EXIT_FAILURE;  // Return code: validation error
-  }
-
-  // Error: Validate flags with --patterns
-  if (config.run_patterns) {
-    if (config.only_bandwidth || config.only_latency) {
-      std::cerr << Messages::error_prefix() << Messages::error_only_flags_with_patterns() << std::endl;
-      return EXIT_FAILURE;  // Return code: validation error
-    }
-    if (config.use_custom_cache_size) {
-      std::cerr << Messages::error_prefix()
-                << Messages::error_patterns_incompatible_option("--cache-size")
-                << std::endl;
-      return EXIT_FAILURE;
-    }
-    if (config.user_specified_latency_samples) {
-      std::cerr << Messages::error_prefix()
-                << Messages::error_patterns_incompatible_option("--latency-samples")
-                << std::endl;
-      return EXIT_FAILURE;
-    }
-    if (config.user_specified_latency_stride) {
-      std::cerr << Messages::error_prefix()
-                << Messages::error_patterns_incompatible_option("--latency-stride-bytes")
-                << std::endl;
-      return EXIT_FAILURE;
-    }
-    if (config.user_specified_latency_chain_mode) {
-      std::cerr << Messages::error_prefix()
-                << Messages::error_patterns_incompatible_option("--latency-chain-mode")
-                << std::endl;
-      return EXIT_FAILURE;
-    }
-    if (config.user_specified_latency_tlb_locality) {
-      std::cerr << Messages::error_prefix()
-                << Messages::error_patterns_incompatible_option("--latency-tlb-locality-kb")
-                << std::endl;
-      return EXIT_FAILURE;
-    }
-  }
-
-  // Error: Validate --only-bandwidth incompatibilities
-  if (config.only_bandwidth) {
-    if (config.use_custom_cache_size) {
-      std::cerr << Messages::error_prefix() << Messages::error_only_bandwidth_with_cache_size() << std::endl;
-      return EXIT_FAILURE;  // Return code: validation error
-    }
-    if (config.user_specified_latency_samples) {
-      std::cerr << Messages::error_prefix() << Messages::error_only_bandwidth_with_latency_samples() << std::endl;
-      return EXIT_FAILURE;  // Return code: validation error
-    }
-    if (config.user_specified_latency_stride) {
-      std::cerr << Messages::error_prefix()
-                << Messages::error_only_bandwidth_incompatible_option("--latency-stride-bytes")
-                << std::endl;
-      return EXIT_FAILURE;
-    }
-    if (config.user_specified_latency_chain_mode) {
-      std::cerr << Messages::error_prefix()
-                << Messages::error_only_bandwidth_incompatible_option("--latency-chain-mode")
-                << std::endl;
-      return EXIT_FAILURE;
-    }
-    if (config.user_specified_latency_tlb_locality) {
-      std::cerr << Messages::error_prefix()
-                << Messages::error_only_bandwidth_incompatible_option("--latency-tlb-locality-kb")
-                << std::endl;
-      return EXIT_FAILURE;
-    }
-  }
-
-  // Error: Validate --only-latency incompatibilities
-  if (config.only_latency) {
-    if (config.user_specified_iterations) {
-      std::cerr << Messages::error_prefix() << Messages::error_only_latency_with_iterations() << std::endl;
-      return EXIT_FAILURE;  // Return code: validation error
-    }
-    if (config.user_specified_threads) {
-      std::cerr << Messages::error_prefix() << Messages::error_only_latency_with_threads() << std::endl;
-      return EXIT_FAILURE;
-    }
-  }
-
-  // Error: Validate latency stride settings.
-  if (config.latency_stride_bytes == 0) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_latency_stride_invalid(0, 1, std::numeric_limits<long long>::max())
-              << std::endl;
-    return EXIT_FAILURE;
-  }
-
-  if ((config.latency_stride_bytes % sizeof(uintptr_t)) != 0) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_latency_stride_alignment(config.latency_stride_bytes, sizeof(uintptr_t))
-              << std::endl;
-    return EXIT_FAILURE;
-  }
-
-  const LatencyChainMode effective_chain_mode =
-      resolve_latency_chain_mode(config.latency_chain_mode, config.latency_tlb_locality_bytes);
-  const bool chain_mode_uses_locality = latency_chain_mode_uses_locality(effective_chain_mode);
-
-  if (chain_mode_uses_locality && config.latency_tlb_locality_bytes == 0) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_latency_chain_mode_requires_locality(
-                     latency_chain_mode_to_string(effective_chain_mode))
-              << std::endl;
-    return EXIT_FAILURE;
-  }
-
-  if (!config.only_bandwidth) {
-    if (config.use_custom_cache_size && config.custom_cache_size_bytes > 0) {
-      const size_t custom_pointer_count = config.custom_cache_size_bytes / config.latency_stride_bytes;
-      if (custom_pointer_count < 2) {
-        std::cerr << Messages::error_prefix()
-                  << Messages::error_buffer_stride_invalid_latency_chain(custom_pointer_count,
-                                                                         config.custom_cache_size_bytes,
-                                                                         config.latency_stride_bytes)
-                  << std::endl;
-        return EXIT_FAILURE;
-      }
-    }
-
-    if (!config.use_custom_cache_size) {
-      if (config.l1_cache_size > 0) {
-        const size_t l1_pointer_count = config.l1_cache_size / config.latency_stride_bytes;
-        if (l1_pointer_count < 2) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_buffer_stride_invalid_latency_chain(l1_pointer_count,
-                                                                           config.l1_cache_size,
-                                                                           config.latency_stride_bytes)
-                    << std::endl;
-          return EXIT_FAILURE;
-        }
-      }
-
-      if (config.l2_cache_size > 0) {
-        const size_t l2_pointer_count = config.l2_cache_size / config.latency_stride_bytes;
-        if (l2_pointer_count < 2) {
-          std::cerr << Messages::error_prefix()
-                    << Messages::error_buffer_stride_invalid_latency_chain(l2_pointer_count,
-                                                                           config.l2_cache_size,
-                                                                           config.latency_stride_bytes)
-                    << std::endl;
-          return EXIT_FAILURE;
-        }
-      }
-    }
-  }
-
-  // Zero-size disabling behavior is only supported with --only-latency.
-  const bool cache_latency_disabled = (config.custom_cache_size_kb_ll == 0);
-  const bool main_latency_disabled = (config.buffer_size_mb == 0);
-
-  if (cache_latency_disabled && !config.only_latency) {
-    std::cerr << Messages::error_prefix() << Messages::error_cache_size_zero_requires_only_latency() << std::endl;
-    return EXIT_FAILURE;  // Return code: validation error
-  }
-
-  if (main_latency_disabled && !config.only_latency) {
-    std::cerr << Messages::error_prefix() << Messages::error_buffersize_zero_requires_only_latency() << std::endl;
-    return EXIT_FAILURE;  // Return code: validation error
-  }
-
-  if (config.only_latency && cache_latency_disabled && main_latency_disabled) {
-    std::cerr << Messages::error_prefix() << Messages::error_only_latency_requires_latency_target() << std::endl;
-    return EXIT_FAILURE;  // Return code: validation error
-  }
-
-  if (chain_mode_uses_locality &&
-      config.latency_tlb_locality_bytes > 0 &&
-      (config.latency_tlb_locality_bytes % page_size) != 0) {
-    const size_t locality_kb = config.latency_tlb_locality_bytes / Constants::BYTES_PER_KB;
-    const size_t page_kb = page_size / Constants::BYTES_PER_KB;
-    std::cerr << Messages::error_prefix()
-              << Messages::error_latency_tlb_locality_page_multiple(locality_kb, page_kb)
-              << std::endl;
-    return EXIT_FAILURE;  // Return code: validation error
-  }
-
-  if (chain_mode_uses_locality &&
-      config.latency_tlb_locality_bytes > 0 &&
-      (config.latency_tlb_locality_bytes / config.latency_stride_bytes) < 2) {
-    std::cerr << Messages::error_prefix()
-              << Messages::error_latency_tlb_locality_too_small_for_stride(
-                     config.latency_tlb_locality_bytes, config.latency_stride_bytes)
-              << std::endl;
-    return EXIT_FAILURE;  // Return code: validation error
-  }
-  
-  /**
-   * Memory-cap model notes:
-   * - This per-main-buffer cap is an early bound for the user-facing main buffer.
-   * - It reflects phased execution peak for main-memory buffers (1x or 2x).
-   * - Full peak concurrent validation, including cache phases, is performed by
-   *   calculate_total_allocation_bytes() before benchmark execution starts.
-   */
-  // Calculate memory limit
-  unsigned long available_mem_mb = get_available_memory_mb();
-  unsigned long max_allowed_mb_per_buffer = 0;
-  const unsigned long required_main_buffers =
-      config.only_latency ? 1 : 2;  // Latency: lat; all other modes: src + dst.
-
-  if (available_mem_mb > 0) {
-    config.max_total_allowed_mb = static_cast<unsigned long>(available_mem_mb * Constants::MEMORY_LIMIT_FACTOR);
-    // Divide by mode-specific main-buffer peak count.
-    // Full peak validation (including cache phases) is performed by
-    // calculate_total_allocation_bytes() before benchmark execution.
-    max_allowed_mb_per_buffer = config.max_total_allowed_mb / required_main_buffers;
-  } else {
-    std::cerr << Messages::warning_prefix() << Messages::warning_cannot_get_memory() << std::endl;
-    config.max_total_allowed_mb = Constants::FALLBACK_TOTAL_LIMIT_MB;
-    // Divide by mode-specific main-buffer peak count.
-    // Full peak validation (including cache phases) is performed by
-    // calculate_total_allocation_bytes() before benchmark execution.
-    max_allowed_mb_per_buffer = config.max_total_allowed_mb / required_main_buffers;
-    std::cout << Messages::info_setting_max_fallback(max_allowed_mb_per_buffer) << std::endl;
-  }
-  
-  if (max_allowed_mb_per_buffer < Constants::MINIMUM_LIMIT_MB_PER_BUFFER) {
-    std::cout << Messages::info_calculated_max_less_than_min(max_allowed_mb_per_buffer, Constants::MINIMUM_LIMIT_MB_PER_BUFFER) << std::endl;
-    max_allowed_mb_per_buffer = Constants::MINIMUM_LIMIT_MB_PER_BUFFER;
-  }
-
-  // Cap explicitly requested thread count after all incompatibility checks pass.
-  if (config.user_specified_threads) {
-    const ConfigTestHooks* test_hooks = get_config_test_hooks();
-    const int max_cores = (test_hooks != nullptr && test_hooks->use_system_info)
-                              ? test_hooks->total_logical_cores
-                              : get_total_logical_cores();
-    if (max_cores > 0 && config.num_threads > max_cores) {
-      std::cerr << Messages::warning_prefix()
-                << Messages::warning_threads_capped(config.num_threads, max_cores)
-                << std::endl;
-      config.num_threads = max_cores;
-    }
-  }
-
-  // Validate and cap buffer size.
-  if (config.buffer_size_mb > max_allowed_mb_per_buffer) {
-    std::cerr << Messages::warning_prefix() << Messages::warning_buffer_size_exceeds_limit(config.buffer_size_mb, max_allowed_mb_per_buffer) << std::endl;
-    config.buffer_size_mb = max_allowed_mb_per_buffer;
-  }
-
-  // Calculate final buffer size in bytes
-  config.buffer_size = static_cast<size_t>(config.buffer_size_mb) * Constants::BYTES_PER_MB;
-
-  // Sanity checks
-  // Error: Sanity check - buffer size calculation should be consistent
-  if (config.buffer_size_mb > 0 && (config.buffer_size == 0 || config.buffer_size / Constants::BYTES_PER_MB != config.buffer_size_mb)) {
-    std::cerr << Messages::error_prefix() << Messages::error_buffer_size_calculation(config.buffer_size_mb) << std::endl;
-    return EXIT_FAILURE;  // Return code: calculation error
-  }
-  
-  // Error: Buffer size must meet minimum requirements (page size and minimum latency buffer size)
-  // Skip this check when main memory latency is explicitly disabled (--only-latency with --buffer-size 0).
-  if (config.buffer_size_mb > 0 &&
-      (config.buffer_size < page_size || (config.buffer_size / config.latency_stride_bytes) < 2)) {
-    std::cerr << Messages::error_prefix() << Messages::error_buffer_size_too_small(config.buffer_size) << std::endl;
-    return EXIT_FAILURE;  // Return code: validation error
-  }
-
-  return EXIT_SUCCESS;  // All validations passed
+  return EXIT_FAILURE;
 }

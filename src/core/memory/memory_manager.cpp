@@ -30,7 +30,9 @@
  */
 
 #include "core/memory/memory_manager.h"
+#include "core/system/page_size.h"
 #include "output/console/messages/messages_api.h"
+#include "utils/numeric_utils.h"
 #include <cstring>  // strlen, strcpy, strerror
 #include <iostream> // std::cerr
 #include <cerrno>   // errno
@@ -52,6 +54,82 @@ void set_memory_system_calls_for_testing(const MemorySystemCalls& calls) {
 
 void reset_memory_system_calls_for_testing() {
   active_memory_system_calls = kDefaultMemorySystemCalls;
+}
+
+AllocatedBufferEvidence allocate_buffer_with_evidence(
+    size_t size,
+    bool non_cacheable,
+    const char* buffer_name) {
+  AllocatedBufferEvidence evidence;
+  evidence.requested_bytes = size;
+  evidence.non_cacheable_requested = non_cacheable;
+  evidence.madvise_advice = non_cacheable ? MADV_RANDOM : MADV_WILLNEED;
+
+  if (size == 0) {
+    std::cerr << Messages::error_prefix() << Messages::error_buffer_size_zero(buffer_name) << std::endl;
+    return evidence;
+  }
+
+  size_t mapped_bytes = size;
+  const size_t page_size = get_system_page_size_bytes();
+  if (page_size > 0 && !NumericUtils::checked_round_up(size, page_size, mapped_bytes)) {
+    std::cerr << Messages::error_prefix() << Messages::error_mmap_failed(buffer_name)
+              << ": " << strerror(ENOMEM) << std::endl;
+    return evidence;
+  }
+
+  errno = 0;
+  void* ptr = active_memory_system_calls.map(
+      nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (ptr == MAP_FAILED) {
+    const int saved_errno = errno;
+    std::cerr << Messages::error_prefix() << Messages::error_mmap_failed(buffer_name)
+              << ": " << strerror(saved_errno) << std::endl;
+    return evidence;
+  }
+
+  evidence.ptr = MmapPtr(ptr, MmapDeleter{size, active_memory_system_calls.unmap});
+  evidence.mapped_bytes = mapped_bytes;
+
+  errno = 0;
+  if (active_memory_system_calls.advise(ptr, size, evidence.madvise_advice) == -1) {
+    const int saved_errno = errno;
+    evidence.madvise_applied = false;
+    evidence.madvise_errno = saved_errno;
+    if (non_cacheable) {
+      std::cerr << Messages::warning_prefix()
+                << Messages::warning_madvise_random_failed(buffer_name, strerror(saved_errno))
+                << std::endl;
+    } else {
+      std::cerr << Messages::error_prefix() << Messages::error_madvise_failed(buffer_name)
+                << ": " << strerror(saved_errno) << std::endl;
+    }
+  } else {
+    evidence.madvise_applied = true;
+    evidence.madvise_errno = 0;
+  }
+
+  return evidence;
+}
+
+bool protect_buffer_read_only_with_evidence(
+    AllocatedBufferEvidence& evidence,
+    size_t size) {
+  if (evidence.ptr == nullptr || evidence.ptr.get() == MAP_FAILED || size == 0) {
+    evidence.read_only_protected = false;
+    evidence.mprotect_errno = EINVAL;
+    return false;
+  }
+  errno = 0;
+  if (active_memory_system_calls.protect(evidence.ptr.get(), size, PROT_READ) != 0) {
+    const int saved_errno = errno;
+    evidence.read_only_protected = false;
+    evidence.mprotect_errno = saved_errno;
+    return false;
+  }
+  evidence.read_only_protected = true;
+  evidence.mprotect_errno = 0;
+  return true;
 }
 
 /**
@@ -90,36 +168,7 @@ void reset_memory_system_calls_for_testing() {
  * @see buffer_allocator.cpp for example usage with null pointer checking
  */
 MmapPtr allocate_buffer(size_t size, const char* buffer_name) {
-  // Error: Validate size before allocation - zero size is invalid
-  if (size == 0) {
-    std::cerr << Messages::error_prefix() << Messages::error_buffer_size_zero(buffer_name) << std::endl;
-    return MmapPtr(nullptr, MmapDeleter{0});  // Return null pointer on validation error
-  }
-  
-  // Allocate memory using mmap (C-style API returns MAP_FAILED on error)
-  void *ptr = active_memory_system_calls.map(
-      nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  
-  // Error: System call failed - mmap returns MAP_FAILED on error
-  if (ptr == MAP_FAILED) {
-    // Create specific error message with errno details
-    std::cerr << Messages::error_prefix() << Messages::error_mmap_failed(buffer_name) 
-              << ": " << strerror(errno) << std::endl;
-    return MmapPtr(nullptr, MmapDeleter{0});  // Return null pointer on allocation failure
-  }
-  
-  // Create MmapPtr with custom deleter
-  MmapPtr buffer_ptr(ptr, MmapDeleter{size, active_memory_system_calls.unmap});
-  
-  // Advise the kernel that we will need this memory (prefault optimization)
-  // Note: Non-fatal error - madvise failure doesn't prevent memory from being usable
-  if (active_memory_system_calls.advise(ptr, size, MADV_WILLNEED) == -1) {
-    std::cerr << Messages::error_prefix() << Messages::error_madvise_failed(buffer_name) 
-              << ": " << strerror(errno) << std::endl;
-    // Non-fatal error, continue anyway - allocation succeeded
-  }
-  
-  return buffer_ptr;  // Return valid pointer on success
+  return allocate_buffer_with_evidence(size, false, buffer_name).ptr;
 }
 
 /**
@@ -154,46 +203,7 @@ MmapPtr allocate_buffer(size_t size, const char* buffer_name) {
  * @see allocate_buffer() for regular cached allocation
  */
 MmapPtr allocate_buffer_non_cacheable(size_t size, const char* buffer_name) {
-  // Error: Validate size before allocation - zero size is invalid
-  if (size == 0) {
-    std::cerr << Messages::error_prefix() << Messages::error_buffer_size_zero(buffer_name) << std::endl;
-    return MmapPtr(nullptr, MmapDeleter{0});  // Return null pointer on validation error
-  }
-  
-  // Allocate memory using mmap (same as regular allocation)
-  // Error: System call failed - mmap returns MAP_FAILED on error
-  void *ptr = active_memory_system_calls.map(
-      nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  
-  if (ptr == MAP_FAILED) {
-    // Create specific error message with errno details
-    std::cerr << Messages::error_prefix() << Messages::error_mmap_failed(buffer_name) 
-              << ": " << strerror(errno) << std::endl;
-    return MmapPtr(nullptr, MmapDeleter{0});  // Return null pointer on allocation failure
-  }
-  
-  // Create MmapPtr with custom deleter
-  MmapPtr buffer_ptr(ptr, MmapDeleter{size, active_memory_system_calls.unmap});
-  
-  // Apply cache-discouraging hints (best-effort approach)
-  // Note: User-space on macOS cannot achieve true non-cacheable memory because:
-  // - Cannot modify page table attributes (requires kernel privileges)
-  // - Cannot set MAIR (Memory Attribute Indirection Register)
-  // - Cannot create truly uncached mappings
-  // These hints may reduce but not eliminate caching behavior.
-  
-  // Use MADV_RANDOM to hint that access pattern is random, discouraging aggressive caching
-  // This is a best-effort hint; it does not guarantee non-cacheable behavior
-  // Note: Non-fatal error - madvise failure doesn't prevent memory from being usable
-  if (active_memory_system_calls.advise(ptr, size, MADV_RANDOM) == -1) {
-    std::cerr << Messages::warning_prefix()
-              << Messages::warning_madvise_random_failed(buffer_name,
-                                                         strerror(errno))
-              << std::endl;
-    // Non-fatal error, continue anyway - allocation succeeded
-  }
-  
-  return buffer_ptr;  // Return valid pointer on success
+  return allocate_buffer_with_evidence(size, true, buffer_name).ptr;
 }
 
 bool protect_buffer_read_only(void* buffer, size_t size) {

@@ -81,6 +81,22 @@ extern "C" {
      * @param byteCount Number of bytes to write
      */
     void memory_write_cache_loop_asm(void* dst, size_t byteCount);
+
+    /**
+     * @brief Optimized 64-bit pattern memory write loop (assembly, non-temporal)
+     * @param dst Destination buffer pointer
+     * @param byteCount Number of bytes to write
+     * @param pattern64 64-bit little-endian repeating pattern
+     */
+    void memory_write_pattern_loop_asm(void* dst, size_t byteCount, uint64_t pattern64);
+
+    /**
+     * @brief Optimized 64-bit pattern cache-focused memory write loop (assembly)
+     * @param dst Destination buffer pointer
+     * @param byteCount Number of bytes to write
+     * @param pattern64 64-bit little-endian repeating pattern
+     */
+    void memory_write_cache_pattern_loop_asm(void* dst, size_t byteCount, uint64_t pattern64);
     
     /**
      * @brief Pointer chasing loop for latency measurement (assembly)
@@ -130,6 +146,14 @@ extern "C" {
      * @param byteCount Number of bytes to write
      */
     void memory_write_reverse_loop_asm(void* dst, size_t byteCount);
+
+    /**
+     * @brief Optimized 64-bit pattern reverse sequential memory write loop (assembly, non-temporal)
+     * @param dst Destination buffer pointer
+     * @param byteCount Number of bytes to write
+     * @param pattern64 64-bit little-endian repeating pattern
+     */
+    void memory_write_reverse_pattern_loop_asm(void* dst, size_t byteCount, uint64_t pattern64);
     
     /**
      * @brief Optimized reverse sequential memory copy loop (assembly)
@@ -159,6 +183,19 @@ extern "C" {
                                                size_t passes, size_t initial_phase);
 
     /**
+     * @brief Execute complete strided 64-bit pattern write passes while rotating the 32-byte phase
+     * @param dst Destination buffer pointer
+     * @param byteCount Finalized worker span in bytes
+     * @param stride Stride size in bytes between accesses
+     * @param passes Number of complete phase-rotated passes
+     * @param initial_phase Initial byte phase in [0, stride)
+     * @param pattern64 64-bit little-endian repeating pattern
+     */
+    void memory_write_strided_phased_pattern_loop_asm(void* dst, size_t byteCount, size_t stride,
+                                                       size_t passes, size_t initial_phase,
+                                                       uint64_t pattern64);
+
+    /**
      * @brief Execute complete strided copy passes while rotating the 32-byte phase
      */
     void memory_copy_strided_phased_loop_asm(void* dst, const void* src, size_t byteCount,
@@ -181,6 +218,16 @@ extern "C" {
      * @param num_accesses Number of random accesses to perform
      */
     void memory_write_random_loop_asm(void* dst, const size_t* indices, size_t num_accesses);
+
+    /**
+     * @brief Optimized random access 64-bit pattern memory write loop (assembly, non-temporal)
+     * @param dst Destination buffer pointer
+     * @param indices Array of byte offsets for random access
+     * @param num_accesses Number of random accesses to perform
+     * @param pattern64 64-bit little-endian repeating pattern
+     */
+    void memory_write_random_pattern_loop_asm(void* dst, const size_t* indices, size_t num_accesses,
+                                              uint64_t pattern64);
     
     /**
      * @brief Optimized random access memory copy loop (assembly)

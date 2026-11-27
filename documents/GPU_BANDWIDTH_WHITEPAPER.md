@@ -464,8 +464,7 @@ already-computed measurement state.
 
 ## 14. GPU JSON Schema 1
 
-The top-level discriminator is independent of current standard schema 3. Released standard schema 2 is historical and
-unsupported by the bundled standard-memory examples, which accept compatible standard schema-3 producer releases:
+The top-level discriminator is independent of CPU bandwidth schema 1 (`mode: "cpu_bandwidth"`) and CPU latency schema 1 (`mode: "cpu_latency"`). Historical pre-split standard schemas are unsupported by the bundled CPU verifiers and plotting examples, which require compatible CPU schema-1 producer artifacts:
 
 ```json
 {

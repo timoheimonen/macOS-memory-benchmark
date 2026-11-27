@@ -21,31 +21,21 @@
 #ifndef LLM_ENVIRONMENT_H
 #define LLM_ENVIRONMENT_H
 
-#include <cstdint>
-#include <string>
+#include "core/audit/host_environment.h"
 
 /** Cold-path thermal, power, and physical-memory evidence. */
-struct LlmHostEnvironmentSnapshot {
-  std::string thermal_state = "unavailable";
-  bool low_power_mode_available = false;
-  bool low_power_mode_enabled = false;
-  uint64_t physical_memory_bytes = 0;
-};
+using LlmHostEnvironmentSnapshot = AuditHostEnvironmentSnapshot;
 
 /**
  * Capture process-wide host state without throwing across the command boundary.
- *
- * The values are observational metadata only and do not change benchmark work.
- * Thermal state and Low Power Mode come from `NSProcessInfo`; unavailable
- * platform fields retain explicit availability state rather than fabricated
- * nominal values.
  */
-LlmHostEnvironmentSnapshot capture_llm_host_environment() noexcept;
+inline LlmHostEnvironmentSnapshot capture_llm_host_environment() noexcept {
+  return capture_host_environment();
+}
 
-/** Stream SHA-256 of the executable path once on the cold command path.
- * Returns empty on lookup/read failure. This binds a file, not signed execution
- * attestation; concurrent replacement of that file is outside this evidence.
- */
-std::string capture_llm_binary_sha256() noexcept;
+/** Stream SHA-256 of the executable path once on the cold command path. */
+inline std::string capture_llm_binary_sha256() noexcept {
+  return capture_binary_sha256();
+}
 
 #endif  // LLM_ENVIRONMENT_H

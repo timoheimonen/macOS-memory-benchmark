@@ -65,20 +65,15 @@ TEST(MessagesErrorTest, ValidationErrorsHaveExactOutput) {
        "latency-tlb-locality-kb must be a multiple of system page size (16 KB), got 10 KB"},
       {"missing iterations", Messages::error_missing_value("--iterations"), "Missing value for --iterations"},
       {"unknown short", Messages::error_unknown_option("-unknown"), "Unknown option: -unknown"},
-      {"option does not take value", Messages::error_option_does_not_take_value("--benchmark"),
-       "Option --benchmark does not take a value"},
+      {"option does not take value", Messages::error_option_does_not_take_value("--patterns"),
+       "Option --patterns does not take a value"},
       {"option not allowed in mode",
        Messages::error_option_not_allowed_in_mode("--threads", Messages::error_gpu_bandwidth_must_be_used_alone()),
        "Unsupported option '--threads': " + Messages::error_gpu_bandwidth_must_be_used_alone()},
       {"missing primary mode", Messages::error_missing_primary_mode(),
-       "A primary mode option is required (--benchmark, --patterns, --analyze-tlb, "
-       "--analyze-core2core, --gpu-bandwidth, or --llm-memory)"},
-      {"patterns incompatible", Messages::error_patterns_incompatible_option("--cache-size"),
-       "--patterns cannot be used with --cache-size (pattern benchmarks do not run cache or latency tests)"},
-      {"only bandwidth incompatible", Messages::error_only_bandwidth_incompatible_option("--latency-stride-bytes"),
-       "--only-bandwidth cannot be used with --latency-stride-bytes (option is only relevant for latency tests)"},
-      {"only latency threads", Messages::error_only_latency_with_threads(),
-       "--only-latency cannot be used with --threads (latency tests are single-threaded)"},
+       "A primary mode option is required (--cpu-bandwidth, --cpu-latency, "
+       "--patterns, --analyze-tlb, --analyze-core2core, --gpu-bandwidth, or "
+       "--llm-memory)"},
       {"analyze tlb alone", Messages::error_analyze_tlb_must_be_used_alone(),
        "--analyze-tlb allows only optional -o/--output <target>, -s/--latency-stride-bytes <bytes>, "
        "-m/--latency-chain-mode <mode>, -D/--tlb-density <low|medium|high>, --seed <uint64>, "
@@ -515,10 +510,6 @@ TEST(MessagesFormattingTest, TlbPrivateCacheMessagesHaveExactOutput) {
 }
 
 TEST(MessagesFormattingTest, UsageOptions) {
-  const std::string standard_schema_contract =
-      "                        JSON uses standard schema " +
-      std::to_string(Constants::BENCHMARK_JSON_SCHEMA_VERSION) +
-      " methodology " + Constants::BENCHMARK_METHODOLOGY_VERSION + ".\n";
   struct HelpCase {
     std::string text;
     std::vector<std::string> fragments;
@@ -527,8 +518,10 @@ TEST(MessagesFormattingTest, UsageOptions) {
       {Messages::usage_options("memory_benchmark"),
        {
            "memory_benchmark",
-           "--benchmark",
-           standard_schema_contract,
+           "-B, --cpu-bandwidth",
+           "cpu-bandwidth-v1-arm64-calibrated-seeded-balanced",
+           "-L, --cpu-latency",
+           "cpu-latency-v1-arm64-calibrated-seeded-balanced",
            "100-300 ms window",
            "--iterations",
            "--buffer-size",
@@ -540,8 +533,8 @@ TEST(MessagesFormattingTest, UsageOptions) {
            "--tlb-density",
            "default: medium",
            "--analyze-tlb: 16",
-           "calibrate toward 150 ms",
-           "Reproducible workload/schedule seed for --benchmark, --patterns",
+           "calibrate work toward 150 ms",
+           "Reproducible workload/schedule seed for --cpu-bandwidth, --cpu-latency",
            "--gpu-bandwidth",
            Constants::GPU_METHODOLOGY_VERSION,
            "minimum buffer size is 64 MB",
@@ -561,12 +554,12 @@ TEST(MessagesFormattingTest, UsageOptions) {
            "--latency-stride-bytes",
            "--latency-chain-mode",
            "--latency-tlb-locality-kb",
+           "--compare-locality",
            "Locality-using modes require",
            "explicit global-random ignores",
-           "cache bandwidth uses one",
-           "keeps an explicit request uncapped",
-           "latency remains",
-           "single-threaded",
+           "in --patterns, requested",
+           "clamped per pattern",
+           "--cpu-latency and Metal --llm-memory reject --threads",
            "--cache-size",
            "--output <target>",
            "Exact - writes one final JSON document to stdout",
@@ -577,15 +570,13 @@ TEST(MessagesFormattingTest, UsageOptions) {
            "invalid for sweeps",
            "Every other non-empty value is a file",
            "including ./- and names such as -G",
-           "Standard, GPU, and LLM-memory files retain",
-           "LLM-memory snapshots every K=max(1,ceil(count/8)) loops",
+           "CPU bandwidth, CPU latency, patterns, GPU, and LLM-memory files retain",
+           "snapshot every K=max(1,ceil(count/8))",
            "Sweep files checkpoint attempts",
            "Cannot be combined with the matching direct flag. Requires --output <target>.",
-           "or cache/latency modifiers (--cache-size, --latency-*).",
-           "--latency-chain-mode, or --latency-tlb-locality-kb.",
-           "--iterations, or --threads.",
+           "patterns-v1-arm64-phase-calibrated-seeded-balanced",
+           "Use --patterns --help for exact rules and 11-option whitelist.",
            "-h",
-           std::to_string(Constants::DEFAULT_ITERATIONS),
            std::to_string(Constants::DEFAULT_BUFFER_SIZE_MB),
            std::to_string(Constants::DEFAULT_LOOP_COUNT),
            std::to_string(Constants::DEFAULT_LATENCY_SAMPLE_COUNT),
@@ -602,7 +593,6 @@ TEST(MessagesFormattingTest, UsageOptions) {
            "--context-tokens",
            "memory-only interpretation",
            "JSON uses schema 2 methodologies ",
-           "Metal LLM-memory rejects --threads",
            "and at command terminal (abrupt loss bound: 3K completed attempts).",
            "llm-memory-v2-cpu-decode-contiguous",
            "llm-memory-v2-cpu-decode-paged",
@@ -614,8 +604,8 @@ TEST(MessagesFormattingTest, UsageOptions) {
        }},
       {Messages::usage_header("1.0.0"), {"1.0.0", "Timo Heimonen", "GNU GPL", "github.com"}},
       {Messages::usage_example("memory_benchmark"),
-       {"memory_benchmark", "--iterations", "--buffer-size", "--output", "Machine JSON:", "--only-bandwidth",
-        "--output -"}},
+       {"memory_benchmark", "--cpu-bandwidth", "--iterations", "--buffer-size", "--output", "Machine JSON:",
+        "--cpu-latency", "--output -"}},
   };
   for (const HelpCase& test_case : cases) {
     for (const std::string& fragment : test_case.fragments) {
@@ -662,13 +652,6 @@ TEST(MessagesFormattingTest, ScalarConfigMessagesHaveExactOutput) {
       {"non-cacheable disabled", Messages::config_non_cacheable(false), "Non-Cacheable Memory Hints: Disabled"},
       {"global locality", Messages::config_latency_tlb_locality(0), "Latency TLB Locality: Global random"},
       {"locality window", Messages::config_latency_tlb_locality(16 * 1024), "Latency TLB Locality: 16.00 KB"},
-      {"ConfigPatternAutomaticIterations", Messages::config_pattern_iterations_auto(0.150, 0.100, 0.250),
-       "Pattern Passes: automatic duration calibration (target 150 ms; intended window 100-250 ms)"},
-      {"ConfigBenchmarkAutomaticIterations", Messages::config_benchmark_iterations_auto(0.150, 0.100, 0.250),
-       "Bandwidth Passes: automatic duration calibration (target 150 ms; intended window 100-250 ms)"},
-      {"ConfigLatencyCalibration", Messages::config_latency_calibration(0.250, 0.100, 0.300, 16),
-       "Latency Headline: automatic continuous-pass calibration (target 250 ms; intended window 100-300 ms; "
-       "minimum 16 complete cycles)"},
   });
 }
 
@@ -683,80 +666,6 @@ TEST(MessagesFormattingTest, CacheSizesHaveExactUnitsAndScope) {
   });
 }
 
-TEST(MessagesFormattingTest, BandwidthResultsHaveExactOutput) {
-  expect_exact_messages({
-      {"main read", Messages::results_read_bandwidth(25.123, 1.456), "  Read : 25.12300 GB/s (Total time: 1.45600 s)"},
-      {"main write", Messages::results_write_bandwidth(30.789, 2.345),
-       "  Write: 30.78900 GB/s (Total time: 2.34500 s)"},
-      {"main copy", Messages::results_copy_bandwidth(20.456, 3.789), "  Copy : 20.45600 GB/s (Total time: 3.78900 s)"},
-      {"cache read", Messages::results_cache_read_bandwidth(150.789), "    Read : 150.78900 GB/s"},
-      {"cache write", Messages::results_cache_write_bandwidth(200.123), "    Write: 200.12300 GB/s"},
-      {"cache copy", Messages::results_cache_copy_bandwidth(175.456), "    Copy : 175.45600 GB/s"},
-      {"first loop", Messages::results_loop_header(0), "\n--- Results (Loop 1) ---"},
-      {"fifth loop", Messages::results_loop_header(4), "\n--- Results (Loop 5) ---"},
-      {"cache scope", Messages::results_cache_bandwidth(1), "\nCache Bandwidth Tests (single-threaded):"},
-  });
-}
-
-TEST(MessagesFormattingTest, LatencyResultsHaveExactOutput) {
-  expect_exact_messages({
-      {"total time", Messages::results_latency_total_time(5.678), "  Total time: 5.67800 s"},
-      {"window latency", Messages::results_latency_average(123.45, 1024 * 1024),
-       "  Average latency (1.00 MB locality): 123.45 ns"},
-      {"global latency", Messages::results_latency_average(86.70, 0),
-       "  Average latency (global random locality): 86.70 ns"},
-      {"TLB hit", Messages::results_latency_tlb_hit(24.10), "  16 KiB locality latency: 24.10 ns"},
-      {"TLB miss", Messages::results_latency_tlb_miss(86.70), "  Global-random latency: 86.70 ns"},
-      {"locality delta", Messages::results_latency_page_walk_penalty(62.60),
-       "  Locality latency delta (global - 16 KiB): 62.60 ns"},
-  });
-}
-
-TEST(MessagesFormattingTest, BufferSizesHaveExactOutput) {
-  const std::vector<MessageCase> cases = {
-      {"bytes", Messages::results_buffer_size_bytes(1024), " (Buffer size: 1024 B)"},
-      {"kilobytes", Messages::results_buffer_size_kb(256.5), " (Buffer size: 256.50 KB)"},
-      {"megabytes", Messages::results_buffer_size_mb(1.25), " (Buffer size: 1.25 MB)"},
-  };
-
-  expect_exact_messages(cases);
-}
-
-TEST(MessagesFormattingTest, FiniteCacheLatenciesHaveExactOutput) {
-  const std::vector<MessageCase> cases = {
-      {"custom bytes", Messages::results_cache_latency_custom_ns(2.5, 256 * 1024),
-       "  Custom Cache: 2.50 ns (Buffer size: 262144 B)"},
-      {"custom kilobytes", Messages::results_cache_latency_custom_ns_kb(3.75, 128.5),
-       "  Custom Cache: 3.75 ns (Buffer size: 128.50 KB)"},
-      {"custom megabytes", Messages::results_cache_latency_custom_ns_mb(4.25, 0.5),
-       "  Custom Cache: 4.25 ns (Buffer size: 0.50 MB)"},
-      {"L1 bytes", Messages::results_cache_latency_l1_ns(0.5, 64 * 1024), "  L1 Cache: 0.50 ns (Buffer size: 65536 B)"},
-      {"L1 kilobytes", Messages::results_cache_latency_l1_ns_kb(0.75, 32.25),
-       "  L1 Cache: 0.75 ns (Buffer size: 32.25 KB)"},
-      {"L1 megabytes", Messages::results_cache_latency_l1_ns_mb(1.0, 0.064),
-       "  L1 Cache: 1.00 ns (Buffer size: 0.06 MB)"},
-      {"L2 bytes", Messages::results_cache_latency_l2_ns(2.5, 4 * 1024 * 1024),
-       "  L2 Cache: 2.50 ns (Buffer size: 4194304 B)"},
-      {"L2 kilobytes", Messages::results_cache_latency_l2_ns_kb(3.0, 4096.5),
-       "  L2 Cache: 3.00 ns (Buffer size: 4096.50 KB)"},
-      {"L2 megabytes", Messages::results_cache_latency_l2_ns_mb(4.5, 4.0),
-       "  L2 Cache: 4.50 ns (Buffer size: 4.00 MB)"},
-  };
-
-  expect_exact_messages(cases);
-}
-
-TEST(MessagesFormattingTest, NonFiniteCacheLatenciesRenderUnavailable) {
-  const std::vector<MessageCase> cases = {
-      {"NaN", Messages::results_cache_latency_custom_ns(std::numeric_limits<double>::quiet_NaN(), 1024),
-       "  Custom Cache: N/A ns (Buffer size: 1024 B)"},
-      {"infinity", Messages::results_cache_latency_custom_ns(std::numeric_limits<double>::infinity(), 1024),
-       "  Custom Cache: N/A ns (Buffer size: 1024 B)"},
-  };
-
-  expect_exact_messages(cases);
-}
-
 TEST(MessagesFormattingTest, WarningBenchmarkHighCv) {
   const std::string msg = Messages::warning_benchmark_high_cv("read bandwidth", 9.25, 7.5);
   EXPECT_NE(msg.find("read bandwidth"), std::string::npos);
@@ -764,17 +673,8 @@ TEST(MessagesFormattingTest, WarningBenchmarkHighCv) {
   EXPECT_NE(msg.find("7.5%"), std::string::npos);
 }
 
-TEST(MessagesFormattingTest, PatternMessagesHaveExactOutput) {
+TEST(MessagesFormattingTest, StatisticsCoefficientOfVariationHasExactOutput) {
   expect_exact_messages({
-      {"unavailable", Messages::pattern_measurement_unavailable("skipped", "buffer too small"),
-       "N/A [skipped: buffer too small]"},
-      {"statistics header", Messages::statistics_pattern_bandwidth_header("Random"),
-       "\nRandom Pattern Bandwidth (GB/s):"},
       {"coefficient of variation", Messages::statistics_coefficient_of_variation(12.34, 1), "  CV:      12.3%"},
-      {"noise warning", Messages::warning_pattern_measurement_noisy("Random read", 12.3, 10.0),
-       "Noisy pattern measurement: Random read CV 12.3% exceeds 10.0%"},
-      {"loop exception", Messages::pattern_reason_loop_exception("boom"), "pattern loop threw an exception: boom"},
-      {"coordinator exception", Messages::pattern_reason_coordinator_exception("boom"),
-       "pattern coordinator threw an exception: boom"},
   });
 }

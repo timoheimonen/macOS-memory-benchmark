@@ -26,6 +26,7 @@
 #include <string_view>
 #include <vector>
 
+#include "core/audit/build_manifest.h"
 #include "core/system/benchmark_qos.h"
 #include "llm_memory/llm_environment.h"
 #include "llm_memory/llm_runner.h"
@@ -51,10 +52,7 @@ struct LlmJsonPeakEstimate {
 
 /** Cold-path host and command metadata shared by every checkpoint snapshot. */
 struct LlmResultMetadata {
-  nlohmann::ordered_json build_manifest = {{"manifest_version", 1}, {"status", "unavailable"},
-      {"reason_code", "build-provenance-not-provided"}, {"binary_sha256", nullptr}, {"git_commit", nullptr},
-      {"git_dirty", nullptr}, {"compiler", nullptr}, {"compile_flags", nullptr}, {"link_flags", nullptr},
-      {"target_arch", nullptr}, {"sdk", nullptr}, {"min_os", nullptr}};
+  nlohmann::ordered_json build_manifest = unavailable_build_manifest_json();
   std::string timestamp;
   std::string processor_name;
   std::string macos_version;

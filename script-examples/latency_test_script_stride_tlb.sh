@@ -15,7 +15,8 @@ SUMMARY_CSV="${RUN_DIR}/latency_summary.csv"
 
 DEFAULT_BENCHMARK="${SCRIPT_DIR}/../memory_benchmark"
 # Whichever BENCHMARK_CMD/PATH producer is selected must emit the supported
-# standard schema 3 and methodology; extraction rejects incompatible contracts.
+# CPU latency schema 1 (mode: "cpu_latency") and methodology; extraction
+# rejects incompatible contracts.
 if [ -x "${DEFAULT_BENCHMARK}" ]; then
   BENCHMARK_CMD="${BENCHMARK_CMD:-${DEFAULT_BENCHMARK}}"
 else
@@ -48,8 +49,8 @@ elif ! command -v "${BENCHMARK_CMD}" >/dev/null 2>&1; then
 fi
 
 help_text="$("${BENCHMARK_CMD}" -h 2>&1 || true)"
-if [[ "${help_text}" != *"--latency-stride-bytes"* ]]; then
-  echo "Error: selected benchmark does not support --latency-stride-bytes"
+if [[ "${help_text}" != *"--cpu-latency"* || "${help_text}" != *"--latency-stride-bytes"* ]]; then
+  echo "Error: selected benchmark does not support --cpu-latency and --latency-stride-bytes"
   echo "Selected command: ${BENCHMARK_CMD}"
   echo "Tip: use the current local binary, e.g. BENCHMARK_CMD=${SCRIPT_DIR}/../memory_benchmark"
   exit 1
@@ -84,8 +85,7 @@ for stride in "${latency_strides_bytes[@]}"; do
 
       cmd=(
         "${BENCHMARK_CMD}"
-        --benchmark
-        --only-latency
+        --cpu-latency
         --buffer-size "${MAIN_BUFFER_MB}"
         --cache-size "${cache_kb}"
         --latency-samples "${LATENCY_SAMPLES}"
@@ -125,22 +125,25 @@ import sys
 from pathlib import Path
 
 
-def require_supported_standard_result(data):
+def require_supported_cpu_latency_result(data):
+    software = data.get("software") if isinstance(data, dict) else None
     configuration = data.get("configuration") if isinstance(data, dict) else None
     if not (
-        isinstance(configuration, dict)
-        and isinstance(data.get("version"), str)
-        and bool(data["version"])
-        and configuration.get("mode") == "benchmark"
-        and type(configuration.get("benchmark_schema_version")) is int
-        and configuration["benchmark_schema_version"] == 3
-        and configuration.get("methodology_version") == "benchmark-v2-calibrated-seeded-balanced"
+        isinstance(data, dict)
+        and type(data.get("schema_version")) is int
+        and data["schema_version"] == 1
+        and data.get("mode") == "cpu_latency"
+        and data.get("methodology_version") == "cpu-latency-v1-arm64-calibrated-seeded-balanced"
+        and isinstance(software, dict)
+        and isinstance(software.get("version"), str)
+        and bool(software["version"])
+        and isinstance(configuration, dict)
+        and isinstance(configuration.get("output_file"), str)
         and data.get("status") == "complete"
         and data.get("results_complete") is True
-        and data.get("conclusions_valid") is True
-        and isinstance(configuration.get("output_file"), str)
+        and data.get("run_accepted") is True
     ):
-        raise RuntimeError("not a complete supported standard schema-3 benchmark result")
+        raise RuntimeError("not a complete supported CPU latency schema-1 result")
     return configuration
 
 
@@ -153,20 +156,24 @@ errors = []
 for path in sorted(json_dir.glob("*.json")):
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        cfg = require_supported_standard_result(data)
-        headline = data["cache"]["custom"]["latency"]["headline_ns"]
-        stats = headline["pooled_sample_distribution"]["statistics"]
-        measurements = headline.get("measurements", []) or []
-        chain_node_count = next(
-            (
-                measurement.get("chain_node_count")
-                for measurement in measurements
-                if measurement.get("chain_node_count") is not None
-            ),
-            "",
+        cfg = require_supported_cpu_latency_result(data)
+        custom_target = data["aggregates"]["targets"]["custom"]
+        pooled = custom_target.get("pooled_sample_distribution")
+        if not isinstance(pooled, dict) or not isinstance(pooled.get("statistics"), dict):
+            raise RuntimeError("missing latency statistics")
+        stats = pooled["statistics"]
+        chain_node_count = (
+            data.get("resolved_plan", {})
+            .get("chain_identities", {})
+            .get("custom", {})
+            .get("node_count", "")
         )
+        if chain_node_count is None:
+            chain_node_count = ""
         unique_pages_touched = ""
-        page_size_bytes = cfg.get("native_page_size_bytes", "")
+        page_size_bytes = data.get("environment", {}).get("page_size_bytes", "")
+        if page_size_bytes is None:
+            page_size_bytes = ""
 
         required_statistics = ("average", "median", "p90", "p95", "p99", "min", "max", "stddev")
         missing_statistics = [name for name in required_statistics if stats.get(name) is None]

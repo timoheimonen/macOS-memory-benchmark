@@ -29,10 +29,6 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <vector>
-
-struct PatternRandomWorkerIndices;
-struct PatternWorkPlan;
 
 // --- Basic Warmup Functions ---
 /**
@@ -96,66 +92,5 @@ void warmup_cache_write(void* dst_buffer, size_t size, int num_threads);
  * @param num_threads Number of threads to use for warmup
  */
 void warmup_cache_copy(void* dst, void* src, size_t size, int num_threads);
-
-// --- Pattern-Specific Warmup Functions ---
-/**
- * @brief Warms up finalized strided worker ranges with the measured read kernel.
- * @param buffer Pointer to the buffer to warm up
- * @param plan Validated work plan whose worker partitions and phase period are used
- * @param dummy_checksum Atomic checksum accumulator (used to prevent optimization)
- * @pre `plan` has measured status and contains finalized worker ranges
- */
-void warmup_read_strided(void* buffer, const PatternWorkPlan& plan,
-                         std::atomic<uint64_t>& dummy_checksum);
-
-/**
- * @brief Warms up finalized strided worker ranges with the measured write kernel.
- * @param buffer Pointer to the buffer to warm up
- * @param plan Validated work plan whose worker partitions and phase period are used
- * @pre `plan` has measured status and contains finalized worker ranges
- */
-void warmup_write_strided(void* buffer, const PatternWorkPlan& plan);
-
-/**
- * @brief Warms up finalized strided worker ranges with the measured copy kernel.
- * @param dst Pointer to the destination buffer
- * @param src Pointer to the source buffer
- * @param plan Validated work plan whose worker partitions and phase period are used
- * @pre `plan` has measured status and contains finalized worker ranges
- */
-void warmup_copy_strided(void* dst, void* src, const PatternWorkPlan& plan);
-
-/**
- * @brief Warms up finalized random worker chunks with the measured read kernel.
- * @param buffer Pointer to the buffer to warm up
- * @param worker_indices Validated worker partitions with chunk-relative offsets
- * @param dummy_checksum Atomic checksum accumulator (used to prevent optimization)
- * @pre Every worker offset is valid within its finalized chunk
- */
-void warmup_read_random(
-    void* buffer,
-    const std::vector<PatternRandomWorkerIndices>& worker_indices,
-    std::atomic<uint64_t>& dummy_checksum);
-
-/**
- * @brief Warms up finalized random worker chunks with the measured write kernel.
- * @param buffer Pointer to the buffer to warm up
- * @param worker_indices Validated worker partitions with chunk-relative offsets
- * @pre Every worker offset is valid within its finalized chunk
- */
-void warmup_write_random(
-    void* buffer,
-    const std::vector<PatternRandomWorkerIndices>& worker_indices);
-
-/**
- * @brief Warms up finalized random worker chunks with the measured copy kernel.
- * @param dst Pointer to the destination buffer
- * @param src Pointer to the source buffer
- * @param worker_indices Validated worker partitions with chunk-relative offsets
- * @pre Every worker offset is valid within its finalized chunk
- */
-void warmup_copy_random(
-    void* dst, void* src,
-    const std::vector<PatternRandomWorkerIndices>& worker_indices);
 
 #endif // WARMUP_H

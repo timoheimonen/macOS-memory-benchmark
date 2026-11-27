@@ -5,7 +5,8 @@
 This document specifies the current `memory_benchmark` implementation in this repository for macOS Apple Silicon.
 
 It is intentionally implementation-driven and reflects real behavior in code paths under `main.cpp`, `src/core`,
-`src/benchmark`, `src/pattern_benchmark`, `src/gpu_bandwidth`, `src/llm_memory`, `src/output`, and `src/asm`.
+`src/cpu_bandwidth`, `src/cpu_latency`, `src/benchmark`, `src/pattern_benchmark`, `src/gpu_bandwidth`, `src/llm_memory`,
+`src/output`, and `src/asm`.
 
 Primary goals:
 
@@ -17,7 +18,12 @@ Primary goals:
 
 Out of scope:
 
-- Generic memory-performance theory (see [LATENCY_WHITEPAPER.md](LATENCY_WHITEPAPER.md)).
+- Detailed `--cpu-bandwidth` methodology and schema field catalog (see
+  [CPU_BANDWIDTH_WHITEPAPER.md](CPU_BANDWIDTH_WHITEPAPER.md)).
+- Detailed `--cpu-latency` pointer-chase methodology and schema field catalog (see
+  [LATENCY_WHITEPAPER.md](LATENCY_WHITEPAPER.md)).
+- Detailed `--patterns` 7-pattern methodology, GF(2)/random oracles, and schema field catalog (see
+  [PATTERNS_WHITEPAPER.md](PATTERNS_WHITEPAPER.md)).
 - `--analyze-tlb` methodology details (see [TLB_ANALYSIS_WHITEPAPER.md](TLB_ANALYSIS_WHITEPAPER.md)).
 - `--analyze-core2core` methodology details (see [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md)).
 - Detailed `--gpu-bandwidth` methodology and schema field catalog (see
@@ -33,8 +39,10 @@ Out of scope:
 - Language: C++17 with ARM64 Apple Silicon assembly kernels, two Objective-C++ Metal backends, and one Objective-C++
   environment-capture unit.
 - Build: `Makefile` (`clang++`, `as`), with Python 3 required to generate embedded build provenance.
-- Test frameworks: GoogleTest (`test_runner`) and Python `unittest` for script examples and the independent LLM
-  artifact verifier. Objective-C++ test sources are compiled with test flags and ARC.
+- Test frameworks: GoogleTest (`test_runner`) and Python `unittest` for script examples, the independent LLM
+  artifact verifier (`test-llm-verifier`), the independent patterns artifact verifier (`test-patterns-verifier`), and
+  the independent CPU bandwidth/latency/patterns artifact verifiers (`test-cpu-verifiers`). Objective-C++ test sources
+  are compiled with test flags and ARC.
 - Build provenance records Git revision/dirty state, compiler, target, SDK, deployment target, and build/link flags.
   Make regenerates the manifest and invalidates objects when these inputs change; unavailable Git metadata remains null.
 - Deployment target: macOS 26.0 for production/test sources, assembly, and final links. External static archives must
@@ -72,46 +80,58 @@ Recommendation:
 
 Main orchestration (`main.cpp`) follows this pipeline:
 
-`select_primary_benchmark_mode` scans all mode flags before mode-specific parsing, skipping one opaque value token for
-every known space-separated value-taking option across all six modes and recognizing `--mode=value`, so a command
-containing multiple primary modes fails deterministically instead of being routed by the first token and flag-shaped
-option values (such as `--benchmark --buffer-size -G` or `--benchmark --sweep -T`) do not trigger false mode conflicts.
-Core-to-core uses `CoreToCoreLatencyConfig`; GPU uses `GpuBandwidthConfig`; LLM-memory uses `LlmMemoryConfig`; TLB uses
-a dedicated branch that populates `BenchmarkConfig`. All six modes share the descriptor-driven CLI option scanner in
-`src/core/config/cli_parser.h` / `.cpp`.
+`select_primary_benchmark_mode` scans all seven primary mode flags (`-B`/`--cpu-bandwidth`, `-L`/`--cpu-latency`,
+`-P`/`--patterns`, `-T`/`--analyze-tlb`, `-C`/`--analyze-core2core`, `-G`/`--gpu-bandwidth`, `-M`/`--llm-memory`)
+before mode-specific parsing, skipping one opaque value token for every known space-separated value-taking option across
+all seven modes and recognizing `--mode=value`, so a command containing multiple primary modes fails deterministically
+instead of being routed by the first token and flag-shaped option values (such as `--cpu-bandwidth --buffer-size -G` or
+`--cpu-latency --sweep -T`) do not trigger false mode conflicts.
+CPU bandwidth uses `CpuBandwidthConfig`; CPU latency uses `CpuLatencyConfig`; Patterns uses `PatternsConfig`; Core-to-core uses `CoreToCoreLatencyConfig`;
+GPU uses `GpuBandwidthConfig`; LLM-memory uses `LlmMemoryConfig`; standalone TLB populates `BenchmarkConfig`. All seven
+modes share the descriptor-driven CLI option scanner in `src/core/config/cli_parser.h` / `.cpp`.
 Running with no arguments (`argc <= 1`) prints help to stdout and exits `0` before timer creation or mode selection.
-`main.cpp` wraps mode selection and argument parsing to contain unexpected exceptions, dispatches GPU and LLM-memory
-before the general pipeline (never calling general CPU config validation or buffer/access derivation), and dispatches
-core-to-core to its dedicated command boundary. The numbered pipeline below
-applies to standard/pattern execution; TLB and general sweeps share its parse, output-session, validation, and
-final-output boundaries before entering their dedicated collectors/coordinators.
+`main.cpp` wraps mode selection and argument parsing to contain unexpected exceptions, pre-routes CPU bandwidth
+(`run_cpu_bandwidth_mode`), CPU latency (`run_cpu_latency_mode`), Patterns (`run_patterns_mode`), LLM-memory (`run_llm_memory_mode`), GPU
+(`run_gpu_bandwidth_mode`), and core-to-core (`run_core_to_core_latency_mode`) before the general `BenchmarkConfig`
+pipeline, and uses the numbered pipeline below for `-T`/`--analyze-tlb` and TLB sweeps.
 
 1. Parse CLI arguments into `BenchmarkConfig` (`parse_arguments`, single-pass via `parse_cli_options`) and finish
    human-facing `-h`/`--help` handling before OS sysctl queries, cache detection, seed generation, or timer creation.
 2. Reject modifier-only invocations with no primary mode flag (`validate_config`) before creating `JsonOutputSession`,
    returning `EXIT_FAILURE` with empty stdout and a centralized stderr error.
-3. Classify the raw output target. Standard/pattern/TLB commands and sweeps using `-` create a command-scoped
+3. Classify the raw output target. TLB commands and sweeps using `-` create a command-scoped
    `JsonOutputSession` that routes subsequent human `std::cout` output to stderr while retaining the original stdout
    buffer for final JSON.
 4. Validate configuration (`validate_config`) while the supported machine-output routing is active (including
-   incompatible-option checks, direct-vs-`--sweep` conflict checks, thread capping, and memory limits).
-5. Create high-resolution total-execution timer (when needed for execution) and calculate derived sizes and counts:
-   - `calculate_buffer_sizes`
-   - `calculate_access_counts` (fallback latency access counts)
-   - `calculate_total_allocation_bytes`
+   direct-vs-`--sweep` conflict checks and memory limits).
+5. Create high-resolution total-execution timer (when needed for execution) and calculate derived sizes and counts (`calculate_buffer_sizes`, `calculate_access_counts`, `calculate_total_allocation_bytes`).
 6. Print resolved configuration and cache info.
 7. Raise main thread QoS (`QOS_CLASS_USER_INTERACTIVE`) best-effort.
-8. Execute one mode:
-   - Standard benchmark mode (`run_all_benchmarks`), which allocates/initializes buffers per phase and releases them after the phase.
-   - Pattern benchmark mode (`run_all_pattern_benchmarks`), whose command-level orchestration in
-     `pattern_statistics_manager.cpp` owns and prepares one shared `PatternBuffers` source/destination pair for every
-     pattern and loop; `pattern_coordinator.cpp` executes one outer loop.
-9. Print loop results and aggregate statistics.
+8. Execute standalone TLB analysis or TLB sweeps via `src/benchmark/tlb_*` and `sweep_runner.cpp`.
+9. Print summary results.
 10. Build any representable terminal payload, dispatch it according to the mode-aware file/stdout lifecycle, and preserve
     execution status separately from output status.
 11. Print total elapsed runtime, restore the previous stdout buffer at scope exit, and return the combined status.
 
 Memory cleanup is RAII-based through `MmapPtr` custom deleters (`munmap` on scope exit).
+
+CPU Bandwidth (`run_cpu_bandwidth_mode`), CPU Latency (`run_cpu_latency_mode`), and Patterns (`run_patterns_mode`) each follow their own standalone
+synchronous pipeline (mirroring LLM's audit and checkpoint discipline):
+
+1. Parse the exact 12-option (`-B`), 16-option (`-L`), or 11-option (`-P`) whitelist via `parse_cli_options`, enforce strict unsigned ranges
+   and sweep syntax/conflicts, and handle `-h`/`--help` before OS queries, target-omission/sweep checks, or file I/O.
+2. Build `CpuBandwidthConfig` / `CpuLatencyConfig` / `PatternsConfig` (resolving seed, workers, and sweep preflight).
+3. Classify the raw output target (`ResolveAgainstCurrentDirectory`) and install a command-scoped `JsonOutputSession`
+   before the runtime banner. When `--sweep` is active, dispatch `run_cpu_bandwidth_sweep` / `run_cpu_latency_sweep` / `run_patterns_sweep`
+   through `execute_sweep_plan(SweepNestedMode::CpuBandwidth | CpuLatency | Patterns, ...)`.
+4. Capture host environment (`capture_host_environment()`) and executable SHA-256 (`capture_binary_sha256()`), build the
+   runtime `build_manifest` (`src/core/audit/build_manifest.*`), apply best-effort `QOS_CLASS_USER_INTERACTIVE`, and
+   enter `BenchmarkSignalMaskGuard`.
+5. Build `CpuBandwidthWorkPlan` / `CpuLatencyWorkPlan` / `PatternsWorkPlan` with strict `memory_budget` preflight (no silent truncation).
+6. Prepare persistent `mprotect(PROT_READ)` source buffers (`-B`, `-P`) or Hamiltonian-prevalidated `mprotect(PROT_READ)`
+   pointer chains (`-L`), run excluded calibration and frozen-plan warmups, execute balanced cyclic loops with bounded
+   `K=max(1,ceil(count/8))` atomic file checkpoints (`stdout` skips intermediate serialization), render console summary
+   and quality warnings, and emit terminal JSON.
 
 Core-to-core keeps its dedicated parser and configuration. After successful combined parsing/preflight and human help
 handling, its command boundary creates the same output session, then either collects one schema-2 direct result or enters
@@ -200,14 +220,28 @@ retried at an outer final-write boundary.
 
 ## 5. Configuration Model
 
-Configuration state is represented by `BenchmarkConfig` (`src/core/config/config.h`).
+Standalone TLB configuration state is represented by `BenchmarkConfig` (`src/core/config/config.h`); `-B`/`--cpu-bandwidth`, `-L`/`--cpu-latency`, `-P`/`--patterns`, `-C`/`--analyze-core2core`, `-G`/`--gpu-bandwidth`, and `-M`/`--llm-memory` each use independent, dedicated configuration and work-plan structures.
 
 ### 5.1 User-facing control fields
 
-- Main options: buffer size MB, iterations, loop count, raw output target, threads. The existing configuration fields are
-  named `output_file`, but command adapters classify exact `-` before interpreting every other non-empty value as a
+- Main options: buffer size MB, iterations, loop count, raw output target, threads. The configuration fields are
+  named `output_file`, and command adapters classify exact `-` before interpreting every other non-empty value as a
   path. An empty raw value disables JSON for direct commands and is missing/invalid for sweeps.
-- General mode/config flags: `run_benchmark`, `run_patterns`, `analyze_tlb`, `only_bandwidth`, and `only_latency`.
+- General mode/config flag in `BenchmarkConfig`: `analyze_tlb`.
+- `--cpu-bandwidth` is pre-routed in `main.cpp` and uses `CpuBandwidthConfig`: buffer size MB (`0` to omit), optional custom
+  cache KB (`0` to omit), requested workers, optional fixed passes (`1..1,000,000,000`), loop count (default `3`),
+  non-cacheable hint, seed, raw output target, sweep controls (`buffer-size`, `cache-size`, `threads`), and exact `argv`.
+- `--cpu-latency` is pre-routed in `main.cpp` and uses `CpuLatencyConfig`: buffer size MB (`0` to omit), optional custom
+  cache KB (`0` to omit), optional fixed complete chain cycles (`1..1,000,000,000`), loop count (default `3`), sample
+  window count (`0` to disable, default `1000`), 8-byte-aligned stride (default `256`), chain mode (`auto` default),
+  TLB locality KB (default `1024`), explicit `--compare-locality` flag, non-cacheable hint, seed, raw output target,
+  sweep controls (`buffer-size`, `cache-size`, `latency-tlb-locality-kb`, `latency-stride-bytes`, `latency-chain-mode`),
+  and exact `argv`.
+- `--patterns` is pre-routed in `main.cpp` and uses `PatternsConfig`: positive buffer size MB (`1..2^53 - 1`, default `512`),
+  requested workers (`1..UINT32_MAX`, default logical cores, preserving `requested_workers` and clamping `effective_workers`
+  per pattern), optional fixed passes (`1..1,000,000,000`), loop count (default `3`, max `2^53 - 1`), non-cacheable hint,
+  seed, raw output target, sweep controls (`buffer-size`, `threads`, `--sweep-max-runs` default `256`, max `2^53 - 1`),
+  and exact `argv`.
 - Standalone TLB state remains in `BenchmarkConfig` (`analyze_tlb`, density, seed, stride/chain settings, and common sweep
   fields) and is populated by the dedicated `--analyze-tlb` branch in `argument_parser.cpp`.
 - `--analyze-core2core` is pre-routed in `main.cpp` and uses the separate `CoreToCoreLatencyConfig` parser/runner path.
@@ -224,14 +258,13 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   templates and storage accounting. The active Metal alternative owns phase-specific contiguous or paged segments,
   Tier-2 argument-buffer and parameter ABIs, scenario pipeline/grid, resource, admission, GPU timing, lookup, and
   checksum/validation evidence.
-- Cache behavior: auto L1/L2 or user-provided `--cache-size`.
-- Latency sampling: `latency_sample_count`.
-- Latency-chain construction mode: `latency_chain_mode` (type `LatencyChainMode`,
-  CLI flag `--latency-chain-mode`).
+- Cache behavior in `-B`/`-L`: auto L1/L2 detection or user-provided `--cache-size` (`0` to omit).
+- Latency sampling in `-L`: `latency_samples` (default `1000`, `0` to disable).
+- Latency-chain construction mode in `-L`/`-T`: `latency_chain_mode` (type `LatencyChainMode`, CLI flag `--latency-chain-mode`).
 - TLB-locality control for latency chain construction:
-  - `latency_tlb_locality_bytes` (default 1024 KB)
-  - `0` means global random chain.
-- Best-effort cache-discouraging mode: `use_non_cacheable`.
+  - `latency_tlb_locality_kb` / `latency_tlb_locality_bytes` (default `1024` KB)
+  - `0` selects `global-random` when mode is `auto`.
+- Best-effort cache-discouraging mode (`-B`, `-L`, `-P`): `non_cacheable` / `use_non_cacheable`.
 
 ### 5.2 Derived fields
 
@@ -245,50 +278,69 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
 ### 6.1 Parsing behavior (`cli_parser.cpp`, `mode_selector.cpp`, `argument_parser.cpp`)
 
 - Shared descriptor-driven parsing (`src/core/config/cli_parser.h` / `.cpp`):
-  - All six primary modes (`--benchmark`, `--patterns`, `--analyze-tlb`, `--analyze-core2core`, `--gpu-bandwidth`, and
-    `--llm-memory`) share `parse_cli_options` over declarative `CliOptionSpec` tables.
+  - All seven primary modes (`--cpu-bandwidth`, `--cpu-latency`, `--patterns`, `--analyze-tlb`, `--analyze-core2core`,
+    `--gpu-bandwidth`, and `--llm-memory`) share `parse_cli_options` over declarative `CliOptionSpec` tables.
   - Long options that take values accept both space-separated (`--buffer-size 512`, `--output -`) and inline
     `--option=value` forms (`--buffer-size=512`, `--output=-`, `--output=`, `--sweep=buffer-size=128,256`). Passing an
-    inline value to a boolean or mode flag (such as `--benchmark=1` or `--help=1`) is rejected as `UnexpectedValue`
-    (`Option --... does not take a value`). Single-dash short options remain space-separated one-character flags; legacy
-    single-dash long names (`-buffersize`) and single-dash inline forms (`-b=512`) are rejected as unknown options.
-  - All single-occurrence options (including primary mode selectors `-B`, `-P`, `-T`, `-C`, `-G`, `-M` and boolean flags
-    `-W`, `-L`, `-u`, `-h`) are uniformly rejected when duplicated across all six modes. Only `-S`/`--sweep` is
-    repeatable (once per distinct parameter key; duplicate keys fail with
+    inline value to a boolean or mode flag (such as `--cpu-bandwidth=1`, `--cpu-latency=1`, `--compare-locality=1`, or
+    `--help=1`) is rejected as `UnexpectedValue` (`Option --... does not take a value`). Single-dash short options remain
+    space-separated one-character flags; legacy single-dash long names (`-buffersize`) and single-dash inline forms
+    (`-b=512`) are rejected as unknown options.
+  - All single-occurrence options (including primary mode selectors `-B`, `-L`, `-P`, `-T`, `-C`, `-G`, `-M` and boolean
+    flags `--compare-locality`, `-u`, `-h`) are uniformly rejected when duplicated across all seven modes. Only
+    `-S`/`--sweep` is repeatable (once per distinct parameter key; duplicate keys fail with
     `Messages::error_duplicate_sweep_parameter`, i.e., `sweep parameter specified more than once: <key>`).
   - Mode pre-scan (`mode_selector.cpp`) uses `is_known_cli_value_option` and `extract_long_option_name` to skip one
-    opaque following value token for every known space-separated value-taking option across all six modes (so
-    flag-shaped values such as `--benchmark --buffer-size -G` or `--benchmark --sweep -T` route to the active mode and
-    report a value error rather than a false primary-mode conflict) and to route `--mode=value` to that mode for a clean
-    unexpected-value diagnostic.
+    opaque following value token for every known space-separated value-taking option across all seven modes (so
+    flag-shaped values such as `--cpu-bandwidth --buffer-size -G` or `--cpu-latency --sweep -T` route to the active mode
+    and report a value error rather than a false primary-mode conflict) and to route `--mode=value` to that mode for a
+    clean unexpected-value diagnostic.
   - Every mode parser resets its config struct on entry, guards `argc == 0` and null `argv` entries via
     `cli_program_name`, emits concise single-line `Error: ...` diagnostics on `stderr` through centralized `Messages::`
     helpers without dumping full usage text on parse errors, and contains exceptions at parser/command boundaries.
-    Standalone whitelist modes (`--analyze-tlb`, `--analyze-core2core`, `--gpu-bandwidth`, `--llm-memory`) name the
-    offending option explicitly (`Unsupported option '<token>': ...`).
-- Single-pass general/TLB parse (`argument_parser.cpp`):
-  - The redundant `--cache-size` pre-scan pass is removed; options are scanned once via `parse_cli_options`.
+    Standalone whitelist modes (`--cpu-bandwidth`, `--cpu-latency`, `--patterns`, `--analyze-tlb`, `--analyze-core2core`,
+    `--gpu-bandwidth`, `--llm-memory`) name the offending option explicitly (`Unsupported option '<token>': ...`).
+- Single-pass TLB parse (`argument_parser.cpp`):
+  - Options are scanned once via `parse_cli_options`.
   - Strict integer parsing uses `std::from_chars` with centralized `Messages::reason_*` helpers; `--buffer-size` uses
     LP64-safe `parse_strict_nonnegative_ulong` covering `[0, ULONG_MAX]` without `long long` truncation.
-  - OS `sysctl` queries, cache detection, seed generation, and thread capping are deferred until after syntactic parsing
-    and `-h`/`--help` handling; thread capping (`warning_threads_capped`) executes in `validate_config`. Standalone TLB
-    parsing honors `ConfigTestHooks` for system information just like the general branch.
+  - OS `sysctl` queries, cache detection, and seed generation are deferred until after syntactic parsing
+    and `-h`/`--help` handling. Standalone TLB parsing honors `ConfigTestHooks` for system information, while `-P`
+    uses `PatternsParserTestHooks` / `PatternsCommandTestHooks`.
 - Uniform `-h`/`--help` and no-mode behavior:
-  - All six modes (including `--analyze-tlb --help`) accept `-h`/`--help`. Across every mode, `--help` still runs full
+  - All seven modes (including `--analyze-tlb --help`) accept `-h`/`--help`. Across every mode, `--help` still runs full
     syntactic, whitelist, duplicate, missing-value, and value-parse checks first, and once valid prints human-facing
     help to stdout and exits `0` before required-option checks, semantic validation, OS queries, timer creation, seed
     generation, or output-session setup (`--output - --help` and `--help --output -` remain human-facing help to stdout
-    across all six modes).
+    across all seven modes).
   - Running with no arguments (`argc <= 1`) prints help to stdout and exits `0`. Running with modifier options but no
     primary mode flag fails in validation before output-session setup with `EXIT_FAILURE`, empty stdout, and a
-    centralized stderr error (`error_only_flags_require_benchmark`, `error_seed_requires_supported_mode`, or
-    `error_missing_primary_mode`).
-- Standard/pattern/TLB output-target classification occurs only after successful parsing, `--help`, and primary-mode
-  checks. Core-to-core classifies its target after its dedicated combined parse/preflight and help handling; GPU and LLM
-  do the same after their dedicated parser and help handling. For every result-producing direct command and supported
-  sweep, exact `-` is reserved for final stdout JSON. An empty value disables JSON for a direct command and is
-  missing/invalid for a sweep. Every other non-empty value is a file target, including `./-` and flag-shaped names such
-  as `-G`.
+    centralized stderr error (`error_seed_requires_supported_mode` or `error_missing_primary_mode`).
+- TLB output-target classification occurs only after successful parsing, `--help`, and primary-mode checks. CPU
+  bandwidth, CPU latency, patterns, core-to-core, GPU, and LLM each classify their target after their dedicated parser and help
+  handling. For every result-producing direct command and supported sweep, exact `-` is reserved for final stdout JSON.
+  An empty value disables JSON for a direct command and is missing/invalid for a sweep. Every other non-empty value is
+  a file target, including `./-` and flag-shaped names such as `-G`.
+- `--cpu-bandwidth` (`src/cpu_bandwidth/cpu_bandwidth.cpp`) uses an exact 12-option whitelist (`-B/--cpu-bandwidth`,
+  `-b/--buffer-size`, `-k/--cache-size`, `-t/--threads`, `-i/--iterations`, `-r/--count`, `--seed`, `-u/--non-cacheable`,
+  `-o/--output`, `-S/--sweep`, `-X/--sweep-max-runs`, `-h/--help`). Strict unsigned parsing rejects negative/malformed
+  tokens (`-i`: `1..1,000,000,000`; `-b`: `0..2^53 - 1`; `-k`: `0` or `16..1048576`; `-t`: `1..UINT32_MAX`; `-r`/`-X`:
+  `1..2^53 - 1`), rejects `--buffer-size 0 --cache-size 0`, supports sweeps over `buffer-size`, `cache-size`, and
+  `threads`, and rejects conflicting direct+sweep flags.
+- `--cpu-latency` (`src/cpu_latency/cpu_latency.cpp`) uses an exact 16-option whitelist (`-L/--cpu-latency`,
+  `-b/--buffer-size`, `-k/--cache-size`, `-i/--iterations`, `-r/--count`, `-n/--latency-samples`,
+  `-s/--latency-stride-bytes`, `-m/--latency-chain-mode`, `-l/--latency-tlb-locality-kb`, `--compare-locality`, `--seed`,
+  `-u/--non-cacheable`, `-o/--output`, `-S/--sweep`, `-X/--sweep-max-runs`, `-h/--help`). Enforces `-i`:
+  `1..1,000,000,000`, `-n`: `0..INT_MAX`, `-s`: `8..UINT32_MAX` (8-byte aligned), `-l`: `0..2^53 - 1` (page-aligned
+  when non-zero in locality modes), `--buffer-size 0 --cache-size 0` rejection, `--compare-locality` eligibility
+  (`--buffer-size > 0` and `--latency-stride-bytes <= 8192`), and sweeps over `buffer-size`, `cache-size`,
+  `latency-tlb-locality-kb`, `latency-stride-bytes`, and `latency-chain-mode`.
+- `--patterns` (`src/pattern_benchmark/patterns.cpp`) uses an exact 11-option whitelist (`-P/--patterns`,
+  `-b/--buffer-size`, `-t/--threads`, `-i/--iterations`, `-r/--count`, `--seed`, `-u/--non-cacheable`, `-o/--output`,
+  `-S/--sweep`, `-X/--sweep-max-runs`, `-h/--help`). Enforces `-b`: `1..2^53 - 1` (`0` rejected), `-t`: `1..UINT32_MAX`,
+  `-i`: `1..1,000,000,000`, `-r`/`-X`: `1..2^53 - 1` (defaults `-b 512`, `-r 3`, `-X 256`), `--seed` long-only
+  `0..UINT64_MAX`, sweeps over `buffer-size` and `threads` with conflicting direct+sweep rejection and full
+  `preflight_patterns_sweep` validation before run `0`.
 - `--latency-chain-mode` accepts string values and resolves to `LatencyChainMode` enum.
 - `--analyze-tlb` uses a dedicated descriptor-driven parse branch in `argument_parser.cpp`. It only allows optional
   `--output`, `--latency-stride-bytes`, `--latency-chain-mode`, `--tlb-density`, `--seed`, `--sweep`,
@@ -360,46 +412,46 @@ Configuration state is represented by `BenchmarkConfig` (`src/core/config/config
   enumeration or GPU dispatch: contiguous scenarios count all applicable ranges, while paged `weights_only` counts its
   weight-layer ranges and paged KV-bearing owner kernels report zero serial range visits.
 
-### 6.2 Validation behavior (`config_validator.cpp`)
+### 6.2 Validation behavior (`config_validator.cpp` and standalone validators)
 
 Validation rejects missing primary modes, incompatible flag combinations, direct-vs-sweep conflicts, and invalid value states:
 
-- Missing primary mode (modifier options without `--benchmark`, `--patterns`, `--analyze-tlb`, `--analyze-core2core`,
-  `--gpu-bandwidth`, or `--llm-memory`): fails with `--seed` mode requirement, `--only-bandwidth`/`--only-latency`
-  benchmark requirement, or `A primary mode option is required (...)`.
-- `--only-bandwidth` and `--only-latency` are mutually exclusive.
-- `--patterns` cannot be combined with `--only-bandwidth`, `--only-latency`, `--cache-size`, `--latency-samples`,
-  `--latency-stride-bytes`, `--latency-chain-mode`, or `--latency-tlb-locality-kb`.
-- `--only-bandwidth` cannot be combined with `--cache-size`, `--latency-samples`, `--latency-stride-bytes`,
-  `--latency-chain-mode`, or `--latency-tlb-locality-kb`.
-- `--only-latency` cannot be combined with `--iterations` or `--threads`.
-- Direct option + `--sweep` for the same parameter is rejected uniformly across general (`--benchmark`, `--patterns`)
-  and `--analyze-tlb` sweeps via `Cannot specify both --<opt> and --sweep <key>` (matching core-to-core and LLM modes).
-- Requested thread counts above detected cores are capped here (`warning_threads_capped`, honoring `ConfigTestHooks`)
-  after incompatibility checks pass, avoiding spurious warnings on rejected or `--help` invocations.
+- Missing primary mode (modifier options without `--cpu-bandwidth`, `--cpu-latency`, `--patterns`, `--analyze-tlb`,
+  `--analyze-core2core`, `--gpu-bandwidth`, or `--llm-memory`): fails with `--seed` mode requirement or
+  `A primary mode option is required (...)`.
+- Removed pre-split combined-mode and subset flags are rejected as unknown/unsupported options.
+- `--patterns` rejects options outside its exact 11-option whitelist in `src/pattern_benchmark/patterns.cpp`
+  (`Unsupported option '<token>': ...`) rather than `config_validator.cpp`, preserves `requested_workers`, and clamps
+  `effective_workers` per pattern in `patterns_work_plan.cpp`.
+- Direct option + `--sweep` for the same parameter is rejected uniformly across all 6 sweep-capable modes
+  (`--cpu-bandwidth`, `--cpu-latency`, `--patterns`, `--analyze-tlb`, `--analyze-core2core`, `--llm-memory`) via
+  `Cannot specify both --<opt> and --sweep <key>`.
 
-Zero-disabling semantics (supported only in `--only-latency`):
+Zero-disabling semantics (supported in `--cpu-bandwidth` and `--cpu-latency`):
 
-- `--buffer-size 0` disables main-memory latency path.
-- `--cache-size 0` disables cache-latency path.
-- Both cannot be zero simultaneously in `--only-latency`.
+- `--buffer-size 0` omits `main_memory`.
+- `--cache-size 0` omits cache targets (`l1`/`l2`/`custom`).
+- Both cannot be zero simultaneously (`--buffer-size 0 --cache-size 0` is rejected).
 
 TLB-locality constraints:
 
 - When the effective chain mode uses locality, `--latency-tlb-locality-kb` must be a non-zero multiple of system page
-  size and span at least two latency-stride steps. Explicit `GlobalRandom` ignores the configured locality value.
+  size and span at least two latency-stride steps. Explicit `global-random` ignores the configured locality value.
 
 Latency stride constraints:
 
-- `--latency-stride-bytes` must be greater than zero.
-- Stride must be pointer-size aligned.
+- `--latency-stride-bytes` must be greater than zero and pointer-size aligned (`8` bytes on Apple Silicon).
 
 Memory-limit model:
 
-- System available memory is queried.
-- Global cap uses `MEMORY_LIMIT_FACTOR` (80%).
-- Per-main-buffer cap is mode-aware (1 or 2 main buffers, depending on active mode/phase needs).
-- A second peak-concurrent allocation check validates the highest active phase footprint (main + cache paths).
+- For `--analyze-tlb`, `config_validator.cpp` applies `MEMORY_LIMIT_FACTOR` (80% of available memory,
+  or `FALLBACK_TOTAL_LIMIT_MB = 2048 MiB`).
+- For `--cpu-bandwidth`, `--cpu-latency`, and `--patterns`, `cpu_bandwidth_work_plan`, `cpu_latency_work_plan`, and
+  `patterns_work_plan` compute strict `memory_budget` admission
+  (`known_owned_peak_bytes = committed_data_bytes + transient_peak_bytes <= admitted_budget_bytes`,
+  where `admitted_budget_bytes = floor(0.80 * available_memory_bytes)` or `2048 MiB` fallback) and reject oversized
+  requests (`memory-budget-exceeded`) without silent truncation. (`patterns_work_plan` also charges
+  `index_structure_bytes = 2 * selected_random * sizeof(size_t)` for random worker indices and the sorted validation copy.)
 
 GPU validation is separate from `config_validator.cpp`:
 
@@ -425,12 +477,12 @@ GPU validation is separate from `config_validator.cpp`:
 
 ### 7.2 Latency access counts
 
-- `calculate_access_counts` populates fallback desired counts; it does not normally determine the measured latency work.
-- Standard latency execution runs an excluded whole-chain pilot, calibrates a duration-targeted
-  `BenchmarkLatencyWorkPlan`, rounds to complete chain cycles, and reuses the resolved plan across outer loops.
-- The main-memory fallback scales from a base count relative to the default buffer size. Cache fallbacks use fixed
-  `L1`, `L2`, and `CUSTOM` constants.
-- `--buffer-size 0` (in allowed mode) sets the main-memory fallback to zero and disables that latency target.
+- `cpu_latency_runner` runs an excluded whole-chain pilot (`kMinPilotAccesses = 16,384` minimum), calibrates complete
+  chain cycles toward `0.250s` (`[0.100s, 0.300s]`, max `2` corrections, minimum `16` complete chain cycles when
+  permitted by `kCpuLatencyMaxAccesses = 4,000,000,000`), freezes `target_plans[]`, and reuses the frozen plan across
+  outer loops.
+- `--buffer-size 0` omits `main_memory` in `--cpu-bandwidth` and `--cpu-latency`.
+- `calculate_access_counts` in `buffer_calculator.cpp` remains for shared `BenchmarkConfig` fallback fields.
 
 ## 8. Memory Allocation and Initialization
 
@@ -438,24 +490,23 @@ GPU validation is separate from `config_validator.cpp`:
 
 Allocation entrypoints:
 
-- Standard benchmark mode: per-phase allocators in `src/benchmark/benchmark_executor.cpp` (`prepare_*_buffers` helpers).
-- Pattern benchmark mode: `run_all_pattern_benchmarks` in `pattern_statistics_manager.cpp` calls
-  `allocate_pattern_buffers` (`src/core/memory/buffer_allocator.cpp`), retains the pair for the full command, and
-  releases it on return.
+- CPU bandwidth (`-B`): persistent `src` + `dst` mappings per active target allocated and recorded via
+  `allocate_buffer_with_evidence(...)` (`src/core/memory/memory_manager.cpp`) for the command lifetime (`src` is
+  `mprotect(PROT_READ)` via `protect_buffer_read_only_with_evidence`).
+- CPU latency (`-L`): persistent pointer-chain buffer per active target (plus optional `compare_buffer` when
+  `--compare-locality` is enabled) allocated via `allocate_buffer_with_evidence(...)` and protected read-only via
+  `mprotect(PROT_READ)`.
+- Patterns (`-P`): `prepare_patterns_resources` (`src/pattern_benchmark/patterns_executor.cpp`) allocates persistent
+  `src` + `dst` mappings via `allocate_buffer_with_evidence(...)` (`src/core/memory/memory_manager.cpp`), protects
+  `src` via `protect_buffer_read_only_with_evidence` (`mprotect(PROT_READ)`), and builds per-worker `random` index
+  tables plus an ascending `sorted_validation_indices` copy (`<= 8 MiB` at `1,000,000 * 8 B`).
 
 Shared allocation behavior:
 
-- Uses `mmap` anonymous private mappings (macOS-specific behavior and limits apply).
-- Uses phase- or mode-specific allocation to avoid unused buffers.
+- Uses `mmap` anonymous private mappings (macOS-specific behavior and limits apply) and records `AllocatedBufferEvidence`
+  (`madvise`/`mprotect` errno and status) for audited CPU modes.
 - Performs overflow-safe byte arithmetic before allocation.
-- Enforces global memory-limit checks from peak-concurrent requirements.
-
-Allocated buffer families (conditional):
-
-- Main bandwidth: `src`, `dst`.
-- Main latency: `lat`.
-- Cache latency: `l1/l2` or `custom`.
-- Cache bandwidth: `l1_bw_src/dst`, `l2_bw_src/dst` or `custom_bw_src/dst`.
+- Enforces strict `memory_budget` checks from peak-concurrent requirements.
 
 Pattern mode intentionally allocates and uses only main source/destination buffers.
 
@@ -500,14 +551,20 @@ Workload sizes are rejected rather than silently reduced.
 
 Initialization entrypoints:
 
-- Standard benchmark mode: per-phase initialization in `run_single_benchmark_loop` before each measured phase.
-- Pattern benchmark mode: `initialize_pattern_buffers` (`src/core/memory/buffer_initializer.cpp`).
+- CPU bandwidth (`-B`): O(1) GF(2) deterministic pattern fill of `src` (`cpu-bw-buffer-pattern-v1`) + `mprotect(PROT_READ)`
+  at setup, and `pre_copy_sentinel` fill of `dst` before each `copy` attempt.
+- CPU latency (`-L`): `build_cpu_latency_chain` (`splitmix64-fisher-yates-rejection-v1`, canonical `indices[0] == 0`),
+  Hamiltonian prevalidation, and `mprotect(PROT_READ)` at setup (plus per-round rebuild/prevalidate/protect for
+  `--compare-locality`).
+- Patterns (`-P`): O(1) slot-tagged GF(2) deterministic pattern fill of `src` (`patterns-buffer-pattern-v1`) +
+  `mprotect(PROT_READ)` at setup, initial `pre_op_sentinel` fill of `dst` at setup, and fresh odd `pre_op_sentinel`
+  fill of `dst` before each `copy` attempt and each `write` attempt with `has_untouched_dst_bytes == true`.
 
 Initialization semantics:
 
-- Bandwidth buffers: deterministic source pattern + zeroed destination.
-- Latency buffers: deterministically seeded, randomized pointer-chasing circular chain via `setup_latency_chain`.
-- Allocation/initialization happen before phase timing starts and are excluded from measured benchmark durations.
+- Bandwidth buffers: deterministic GF(2) source pattern + sentinel-initialized destination.
+- Latency buffers: deterministically seeded, randomized circular Hamiltonian pointer-chasing chain.
+- Allocation/initialization happen before timing starts and are excluded from measured benchmark durations.
 
 GPU initialization/precondition is compute-based and deterministic. Read fills A with a seed-derived source pattern;
 write poisons A before the timed kernel writes a pass-derived pattern; copy fills A with source data and B with poison.
@@ -574,88 +631,65 @@ Warmup functions (`src/warmup`) run before measured tests.
 - Cache-bandwidth warmups are multi-threaded and touch the full cache-sized buffer.
 - Latency warmups are single-threaded page-prefault passes that read and write one byte per native page; they do not
   execute the pointer chain.
-- Sequential pattern warmups use the main-memory adaptive policy. Strided warmups execute one complete 32-byte phase
-  period over the finalized worker partitions, while random warmups traverse each finalized worker's index list once.
+- `-B`, `-L`, and `-P` do not call `src/warmup/`; instead they run excluded `calibration_shape_warmup`, optional
+  `single_unit_confirmation_warmup`, and `frozen_measurement_warmup` directly through their own executors before loop `0`.
 - Worker and/or single-thread warmups attempt high QoS class best-effort.
 
-## 10.1 Automatic Locality Comparison
+## 11. CPU Bandwidth Execution (`src/cpu_bandwidth/*`)
 
-When standard main-memory locality is not explicitly supplied, the executor runs three paired rounds comparing a
-16 KiB-locality chain with a global-random chain. The first-measured layout alternates by round. Both chains use recorded,
-domain-separated seeds and the calibrated complete-chain access count. Results retain both raw point values and the
-same-round `global - locality` deltas; the delta headline is the median of paired deltas.
+Standalone coordinator: `run_cpu_bandwidth_mode` -> `run_cpu_bandwidth_collect` (`src/cpu_bandwidth/cpu_bandwidth_runner.cpp`).
 
-This auxiliary fixed-window comparison requires at least two stride-spaced nodes inside 16 KiB (stride at most 8192
-bytes). It is not part of config-validator target eligibility: if an otherwise valid standard configuration uses a larger
-stride, the comparison records unavailable measurements while the configured target measurements can still run. Because
-the three comparison measurements remain part of the loop's plan, that loop is `partial` and top-level
-`results_complete` remains `false`.
+- Canonical active target set (subset of `("main_memory", "l1", "l2", "custom")`) and operations `("read", "write", "copy")`.
+  Main memory defaults to all detected logical cores and cache targets default to `1` worker; explicit `--threads`
+  applies to every target and is capped per target to `min(desired, available_workers, max(1, target_bytes / 64))` with
+  64-byte-aligned worker slices (`partition_cpu_bandwidth_64b`).
+- Persistent `src` mappings are seeded once via `cpu-bw-buffer-pattern-v1` (`T[k] = splitmix64_mix(target_src_seed ^ k)`,
+  `W[i] = T[i & 255] ^ i ^ rotl64(i, 19) ^ rotl64(i, 41)`) and protected `PROT_READ`.
+- Omitted `--iterations` runs excluded calibration (`8 MiB` min pilot, `0.150s` target in `[0.100s, 0.250s]`, max `2`
+  corrections) + `calibration_shape_warmup` / optional `single_unit_confirmation_warmup`; plans freeze atomically and
+  run `frozen_measurement_warmup` before loop `0`.
+- Loop `i` rotates `active_targets` by `i % num_targets` and `("read", "write", "copy")` by `i % 3` in a cyclic
+  Latin-square schedule (`operation_order_balance_complete` when `loop_count % 3 == 0`; `target_order_balance_complete`
+  when `loop_count % num_targets == 0`).
+- Read uses `memory_read*_loop_asm` with non-cancelling per-pass accumulators (`cpu-bw-read-checksum-v1`) verified in
+  O(1); write uses `memory_write_pattern_loop_asm` (`stnp`) / `memory_write_cache_pattern_loop_asm` (`stp`) with unique
+  odd `write_pattern` and cold parallel full-buffer byte check; copy fills `dst` with unique odd `pre_copy_sentinel`
+  outside timing, runs `memory_copy*_loop_asm`, and validates every byte against `src` via parallel `std::memcmp`.
+- Direct files checkpoint atomically every `K=max(1,ceil(loop_count/8))` completed loops and at terminal; stdout skips
+  intermediate serialization and writes one schema-1 document.
 
-Current standard schema 3 serializes these as `locality_16k_latency_ns`, `global_random_latency_ns`, and
-`locality_latency_delta_ns` under
-`main_memory.latency.automatic_locality_comparison`. The comparison does not isolate page-table walks and must not be
-used as a substitute for `--analyze-tlb`.
+## 11.1 CPU Latency Execution (`src/cpu_latency/*`)
 
-## 11. Standard Benchmark Execution
+Standalone coordinator: `run_cpu_latency_mode` -> `run_cpu_latency_collect` (`src/cpu_latency/cpu_latency_runner.cpp`).
 
-Standard mode coordinator: `run_all_benchmarks` -> `run_single_benchmark_loop`.
+- Canonical active target set (subset of `("l1", "l2", "custom", "main_memory")`), always single-threaded.
+- Each target chain uses `chain_seed = splitmix64_mix(base_seed ^ domain_id)`, `splitmix64-fisher-yates-rejection-v1`,
+  cyclic rotation so `indices[0] == 0`, `chain_permutation_sha256` over little-endian `uint64_t` indices, Hamiltonian
+  cycle prevalidation (`validate_cpu_latency_hamiltonian_cycle`), and `mprotect(PROT_READ)`.
+- Omitted `--iterations` calibrates complete chain cycles toward `0.250s` (`[0.100s, 0.300s]`, max `2` corrections,
+  minimum `16` cycles when within `4,000,000,000` accesses), then freezes plans and runs `frozen_measurement_warmup`.
+- Each target measurement executes `memory_latency_chase_asm` for `complete_chain_cycles * node_count` steps and verifies
+  `main-final-pointer` (`expected_node = 0`). When `--latency-samples > 0`, a separate continuous sample pass runs
+  `effective_samples = min(requested, access_count)` windows, verifies each window's `cpu_raw` timebase and exact
+  terminal node `indices[cum_steps % N]` (`sample-window-end-pointers`), and populates `pooled_sample_distribution`.
+- Explicit opt-in `--compare-locality` (requires `--buffer-size > 0` and `--latency-stride-bytes <= 8192`) executes `3`
+  paired rounds per loop before target measurements (`locality_16k` `random-box` first, then `locality_global`
+  `global-random`, using frozen `main_exec_plan.complete_chain_cycles`), each rebuilding, prevalidating, and protecting
+  its chain; `aggregates.locality_comparison.locality_latency_delta_ns = median(global) - median(16k)`.
+- Direct files checkpoint atomically every `K=max(1,ceil(loop_count/8))` completed loops and at terminal. See
+  [LATENCY_WHITEPAPER.md](LATENCY_WHITEPAPER.md) for the complete specification.
 
-Enabled phase groups are main bandwidth, cache bandwidth, cache latency, and main latency. Their order rotates by outer
-loop index using a deterministic cyclic Latin schedule. Read/write/copy order rotates independently by loop. Each
-measurement records its phase and operation position.
+## 12. Pattern Benchmark Execution (`src/pattern_benchmark/*`)
 
-Important execution semantics:
+Standalone coordinator: `run_patterns_mode` -> `run_patterns_collect` (`src/pattern_benchmark/patterns.cpp` and `src/pattern_benchmark/patterns_runner.cpp`).
 
-- Phase-local buffers are allocated and initialized immediately before each phase and released after the phase, reducing standard-mode peak footprint.
-- `benchmark_work_plan` finalizes cache-line-aligned worker boundaries, effective workers, passes/accesses, and exact
-  payload before execution. Executors consume those boundaries unchanged; copy payload counts both read and write.
-- Omitted `--iterations` uses an excluded same-shape pilot to target 150 ms, with a 100–250 ms intended window and at
-  most two corrections. Explicit iterations are exact. Resolved per-target/per-operation work is reused across loops.
-- Cache bandwidth defaults to single-thread unless user explicitly provides `--threads`.
-- All latency targets use one continuous headline pass calibrated toward 250 ms, evaluated against a 100–300 ms
-  window, and rounded to at least 16 complete chain cycles. A cycle-minimum-limited overrun is classified explicitly;
-  the CLI then runs a separate sample pass with 1,000 windows by default. `--latency-samples` selects a positive window
-  count, and sampling continues from one window's terminal pointer to the next without defining the headline.
-- One command-level seed derives target/layout seeds; repeated loops rebuild equivalent logical chains.
-- Each operation has explicit measurement status and optional value. Interrupted/incomplete work is excluded from
-  aggregate vectors. A standard file target is atomically checkpointed after completed loop-state changes. Stdout
-  checkpoint calls are lazy no-ops, and direct `--output -` receives one final schema-3 payload, including representable
-  interrupted or failed evidence, before the execution status is returned.
-
-## 12. Pattern Benchmark Execution
-
-Command-level pattern orchestration is `run_all_pattern_benchmarks`
-(`src/pattern_benchmark/pattern_statistics_manager.cpp`): it owns allocation, initialization, outer-loop control,
-interruption handling, and aggregation. `run_pattern_benchmarks` (`src/pattern_benchmark/pattern_coordinator.cpp`)
-executes one outer loop and coordinates its seven pattern families.
-
-Executed pattern families:
-
-- Sequential forward.
-- Sequential reverse.
-- Strided 64B.
-- Strided 4096B.
-- Strided 16384B.
-- Strided 2MB.
-- Random uniform.
-
-Each pattern reports read/write/copy bandwidth metrics.
-
-Implementation notes:
-
-- Random offsets are generated once per pattern loop as a deterministic, aligned, no-replacement permutation prefix
-  from the command-level pattern seed. The same finalized offsets are reused by read, write, and copy; repeated
-  `--count` loops reconstruct the same workload.
-- Omitted `--iterations` gives every read/write/copy operation an excluded same-shape pilot and automatic calibration
-  toward 150 ms (100-250 ms intended window). An explicit value is the exact measured pass count.
-- Pattern order rotates across outer loops. Strided plans also rotate the 32-byte starting phase by pass and record
-  phase-aware access and payload totals.
-- Requested workers may be reduced when a small buffer or large stride cannot give every worker a genuine stride
-  transition. JSON records requested and effective workers.
-- Large-stride patterns can be skipped when constraints invalidate execution.
-- Pattern statistics are aggregated across completed outer-loop measurements; unavailable operations are excluded.
-- Direct pattern output is built before propagating the run status. A file target keeps the existing final atomic write;
-  exact `--output -` receives the same schema-3 object once after orchestration reaches its terminal state.
+- Canonical 7-pattern order: `("sequential_forward", "sequential_reverse", "strided_64", "strided_4096", "strided_16384", "strided_2mb", "random")`, each with `read`, `write`, and `copy` (`32B` access width, `2 * total_accesses * 32` copy payload). `strided_2mb` is published as `status: "skipped"` (`buffer-too-small-for-stride-transition`) when `buffer_bytes < 2 MiB + 32 B` and omitted from `calibration`, `measurements[]`, and `loop_records[]`.
+- `requested_workers` is preserved while `effective_workers` uses `partition_patterns_64b` (64B-aligned spans) and strided worker reduction (`>= 2` accesses per worker); `random` clamps selected accesses to `[1000, 1_000_000]` (`min(total_slots, clamped)`) and generates per-worker offsets via `splitmix64-coprime-fisher-yates-v1` (`random_indices_sha256` + `<= 8 MiB` sorted validation copy).
+- Persistent `src` mappings are seeded once via slot-tagged GF(2) `patterns-buffer-pattern-v1` and protected `PROT_READ`.
+- Omitted `--iterations` runs excluded calibration (`8 MiB` min pilot, `0.150s` target in `[0.100s, 0.250s]`, max `2` corrections) + `calibration_shape_warmup` / optional `single_unit_confirmation_warmup`; plans freeze atomically in `frozen_plan_refs` and run `frozen_measurement_warmup` before loop `0`.
+- Loop `i` rotates active patterns (`i % active_patterns.size()`) and operations (`i % 3`) in a 2-axis cyclic Latin-square schedule (`operation_order_balance_complete` when `loop_count % 3 == 0`; `pattern_order_balance_complete` when `loop_count % active_patterns.size() == 0`).
+- Read passes verify non-cancelling per-worker and folded `patterns-read-checksum-v1` values in O(1) (sequential + 2D partial-cycle strided); write (`memory_write_pattern_loop_asm`, `memory_write_reverse_pattern_loop_asm`, `memory_write_strided_phased_pattern_loop_asm`, `memory_write_random_pattern_loop_asm`) and copy fill `dst` with unique odd `pre_op_sentinel` (when `has_untouched_dst_bytes` or `copy`) and undergo parallel cold 100% touched-byte and 100% untouched-sentinel validation (`execution.validation.checks[]`, 6 entries).
+- Direct files checkpoint atomically every `K=max(1,ceil(loop_count/8))` completed loops and at terminal; stdout skips intermediate serialization and emits one schema-1 document. See [PATTERNS_WHITEPAPER.md](PATTERNS_WHITEPAPER.md) for the complete specification.
 
 ## 13. Standalone GPU and LLM Execution
 
@@ -1068,17 +1102,15 @@ interpretation contract.
 
 ## 14. Assembly Kernel Layer
 
-Standard, cache, latency, pattern, and core-to-core assembly entrypoints are declared in `src/asm/asm_functions.h` and
+CPU bandwidth, cache, latency, pattern, and core-to-core assembly entrypoints are declared in `src/asm/asm_functions.h` and
 used by benchmark/warmup code, while the four LLM assembly entrypoints (`llm_decode_memory_asm`,
 `llm_decode_memory_paged_asm`, `llm_prefill_memory_asm`, and `llm_prefill_memory_paged_asm`) are declared with
 `extern "C"` in `src/llm_memory/llm_executor.h`:
 
-- Main-memory kernels: read, write, copy (non-temporal stores).
-- Cache kernels: read, write, copy (cache-focused variants).
+- Main-memory kernels: `memory_read_loop_asm` (4 NEON XOR lanes folded to `x0` + `<32B` byte tail), `memory_write_pattern_loop_asm` (`stnp` 64-bit arbitrary pattern fill + little-endian scalar tail for `--cpu-bandwidth` and `--patterns`), `memory_write_loop_asm` (non-temporal zero fill for warmup), and `memory_copy_loop_asm`.
+- Cache kernels: `memory_read_cache_loop_asm`, `memory_write_cache_pattern_loop_asm` (`stp` 64-bit arbitrary pattern fill + little-endian scalar tail for `--cpu-bandwidth`), `memory_write_cache_loop_asm`, and `memory_copy_cache_loop_asm` (`stnp` `>=32B` + `str` `<32B`).
 - Latency kernel: pointer-chase loop.
-- Pattern kernels: reverse (read/write/copy), three parameterized phased strided entrypoints
-  (`memory_{read,write,copy}_strided_phased_loop_asm`) that accept stride, pass count, and initial 32-byte phase, and
-  random (read/write/copy). The 64 B, 4096 B, 16384 B, and 2 MiB patterns use the same phased strided API.
+- Pattern kernels: sequential forward (`memory_read_loop_asm`, `memory_write_pattern_loop_asm`, `memory_copy_loop_asm`), reverse (`memory_read_reverse_loop_asm`, `memory_write_reverse_pattern_loop_asm`, `memory_copy_reverse_loop_asm`), parameterized phased strided entrypoints (`memory_read_strided_phased_loop_asm`, `memory_write_strided_phased_pattern_loop_asm`, `memory_copy_strided_phased_loop_asm`) accepting stride, pass count, and initial 32-byte phase, and random (`memory_read_random_loop_asm`, `memory_write_random_pattern_loop_asm`, `memory_copy_random_loop_asm`). The 64 B, 4096 B, 16384 B, and 2 MiB patterns use the same phased strided API. Legacy zero-fill `memory_write_{reverse,strided,random}.s` remain untouched for kernel tests.
 - Core-to-core kernels: initiator and responder round-trip loops.
 
 Design intent:
@@ -1149,9 +1181,9 @@ between tasks; the timing semantics are warm, cacheable, and cache-inclusive.
 
 ## 16. Statistics and Aggregation
 
-`BenchmarkStatistics` and pattern statistics collect vectors per metric across outer loops.
+`DescriptiveStatistics` (`src/utils/descriptive_statistics.*`) and mode-specific runners collect accepted measurement vectors across outer loops.
 
-- Single loop: direct value reporting.
+- Single loop: direct value reporting (`repeatability_assessment_available: false`).
 - Multiple loops: aggregate statistics printed and optionally serialized.
 - Statistics include central tendency and percentile-oriented summaries.
 
@@ -1166,14 +1198,16 @@ Computed from collected value vectors:
 - **P90**: 90th percentile value.
 - **P95**: 95th percentile value.
 - **P99**: 99th percentile value.
-- **Stddev**: Standard deviation.
+- **Stddev**: Sample standard deviation (`n - 1` denominator; `0` when `n == 1`).
 - **CV**: Sample standard deviation divided by the absolute mean, as a percentage when the mean is valid.
 - **MAD**: Median absolute deviation from the median.
 - **Min**: Minimum observed value.
 - **Max**: Maximum observed value.
 
-Standard repeated-loop aggregates set a diagnostic quality warning above 7.5% CV. Values are retained without outlier
-filtering, and the warning does not by itself invalidate the result.
+CPU bandwidth (`-B`) flags CV above `5.0%` (`kCpuBandwidthCvWarningPct`), CPU latency (`-L`) flags CV above
+`7.5%` (`kCpuLatencyCvWarningPct`), and patterns (`-P`) flags CV above `5.0%` for streaming (`sequential_forward`,
+`sequential_reverse`, `strided_64`) and `10.0%` for sparse (`strided_4096`, `strided_16384`, `strided_2mb`, `random`).
+Values are retained without outlier filtering, and the warning does not invalidate `run_accepted`.
 
 GPU aggregates use the same descriptive-statistics implementation, a 5% CV threshold, and only validated measured
 values. Multiple GPU loop values use median P50; fewer than three cannot receive a repeatability classification stronger
@@ -1187,7 +1221,8 @@ Mixed weight/KV fractions are byte fractions, not independently timed component 
 
 ## 17. Console Output Contract
 
-Console rendering is centralized in `src/output/console` and message helpers in `src/output/console/messages`.
+Console rendering is centralized in `src/output/console` (with mode-specific renderers in `src/cpu_bandwidth/`,
+`src/cpu_latency/`, `src/pattern_benchmark/`, and `src/llm_memory/`) and message helpers in `src/output/console/messages`.
 
 Contract highlights:
 
@@ -1195,9 +1230,16 @@ Contract highlights:
   before mode-specific configuration or status output. Nested sweep runs do not repeat it. Help output retains the
   separate usage preamble; parse and preflight failures emit concise single-line `Error: ...` diagnostics on stderr
   without dumping full usage text or the runtime banner.
-- Result-producing CPU benchmark paths print applicable configuration and cache information before execution.
-- Per-loop results are printed in standard mode.
-- Pattern mode prints pattern table-style sections and derived efficiency indicators.
+- Result-producing CPU benchmark paths print applicable configuration and cache/target information before execution.
+- `-B`/`--cpu-bandwidth` prints `CPU Bandwidth Mode (schema v1)`, active targets/workers/seed, and a summary section
+  with per-target/operation `P50=<v> GB/s (min=..., max=..., CV=..., MAD=..., n=...)` plus deduplicated warning tokens on stderr.
+- `-L`/`--cpu-latency` prints `CPU Latency Mode (schema v1)`, page size/chain/seed/`compare_locality` settings, active
+  targets/node counts, and a summary section with per-target `P50=<v> ns (min=..., max=..., CV=..., MAD=..., n=...)`,
+  optional `| PooledSamples P50=... (P90=..., P99=..., n=...)`, and optional `Locality Comparison: 16KB P50=..., Global P50=..., Delta=...`.
+- `-P`/`--patterns` prints `Patterns Mode (schema v1)`, buffer/work-policy/seed/non-cacheable metadata, per-pattern active or
+  `skipped (<reason>)` lines, and `--- Patterns Benchmark Results (<status>, <measured>/<planned> measured) ---` with
+  per-pattern/operation `P50=<v> GB/s (...% vs forward) (min=..., max=..., CV=..., MAD=..., n=...)` (or `skipped` /
+  `unavailable`) plus deduplicated warning tokens on stderr.
 - GPU mode prints a separate device/private-tracked header, read/write/copy effective-payload headlines, repeatability,
   and interpretation note. Copy is explicitly aggregate read + write and DRAM residency remains unverified.
 - LLM mode prints a separate header with backend, phase/work unit, KV layout, phase geometry, cacheable semantics,
@@ -1211,30 +1253,37 @@ Contract highlights:
   tokens/s.
 - Aggregate statistics printed when loop count > 1.
 - Errors and warnings use `Messages::error_prefix()` / `Messages::warning_prefix()` conventions.
-- Live progress uses the shared spinner on `stderr` only when it is a TTY; redirected standard and pattern output contains no carriage-return control sequences.
+- Live progress uses the shared spinner on `stderr` only when it is a TTY; redirected TLB output contains no carriage-return control sequences.
 - For every result-producing direct command or supported sweep using `--output -`, the output session is installed before
-  runtime console
-  rendering and worker-thread creation. The general standard/pattern/TLB branch installs it before sweep/direct
-  validation; core-to-core installs it after its combined parse/preflight; GPU installs it after its dedicated parser
-  and help handling but before the runtime banner, QoS, signal scope, and backend factory. LLM installs the same session
-  before banner/QoS/signal preparation, mappings, and workers. Post-parse human output therefore goes to stderr, while
-  final JSON bypasses the redirected stream through the retained original stdout buffer. Parse/preflight and other
-  pre-result failures leave stdout empty; human help remains stdout.
+  runtime console rendering and worker-thread creation. CPU bandwidth, CPU latency, patterns, TLB, core-to-core, GPU, and
+  LLM each install `JsonOutputSession` before banner/QoS/signal preparation and workers. Post-parse human output therefore
+  goes to stderr, while final JSON bypasses the redirected stream through the retained original stdout buffer.
+  Parse/preflight and other pre-result failures leave stdout empty; human help remains stdout.
 
 ## 18. JSON Output Contract
-
-JSON writer API (`src/output/json/json_output/json_output.cpp`):
 
 Every result-producing direct mode and supported sweep can send its existing payload either to an
 atomic file target or, for exact raw `-`, to one final stdout document. This transport does not wrap or change the
 measurement schema. [API.md](API.md) is the process-integration contract and support matrix.
 
-- Standard mode schema 3: `configuration` with `mode = "benchmark"` and the raw `output_file` target as a required
-  string,
-  `execution_time_sec`, completion counters/status, `results_complete`, `conclusions_valid`, per-loop `loops`,
-  `main_memory`, `cache`, `timestamp`, and `version`.
-- Pattern mode schema 3: `configuration`, `execution_time_sec`, command status/reason, planned/completed loop and
-  measurement counters, `results_complete`, optional retained `patterns` evidence, `timestamp`, and `version`.
+- CPU Bandwidth schema 1 (`src/cpu_bandwidth/cpu_bandwidth_json.cpp`): 26 top-level keys (`schema_version: 1`,
+  `mode: "cpu_bandwidth"`, `methodology_version: "cpu-bandwidth-v1-arm64-calibrated-seeded-balanced"`, `software`,
+  `build_manifest`, `configuration` with raw `output_file` and `argv`, `resolved_plan`, `memory_budget`, `calibration`,
+  `measurements`, `aggregates`, `status`, `reason_code`, `results_complete`, `run_accepted`, `interpretation`,
+  `diagnostic`, `interruption_requested`, `operation_order_balance_complete`, `target_order_balance_complete`, `seeds`,
+  `counters`, `checkpoint_lifecycle`, `loop_records`, `environment`, `quality_warnings`).
+- CPU Latency schema 1 (`src/cpu_latency/cpu_latency_json.cpp`): 26 top-level keys (`schema_version: 1`,
+  `mode: "cpu_latency"`, `methodology_version: "cpu-latency-v1-arm64-calibrated-seeded-balanced"`, `software`,
+  `build_manifest`, `configuration` with raw `output_file` and `argv`, `resolved_plan`, `memory_budget`, `calibration`,
+  `measurements`, `locality_comparison`, `aggregates`, `status`, `reason_code`, `results_complete`, `run_accepted`,
+  `interpretation`, `diagnostic`, `interruption_requested`, `target_order_balance_complete`, `seeds`, `counters`,
+  `checkpoint_lifecycle`, `loop_records`, `environment`, `quality_warnings`).
+- Patterns schema 1 (`src/pattern_benchmark/patterns_json.cpp`): 26 top-level keys (`schema_version: 1`,
+  `mode: "patterns"`, `methodology_version: "patterns-v1-arm64-phase-calibrated-seeded-balanced"`, `software`,
+  `build_manifest`, `configuration` with raw `output_file` and `argv`, `resolved_plan`, `memory_budget`, `calibration`,
+  `measurements`, `aggregates`, `status`, `reason_code`, `results_complete`, `run_accepted`, `interpretation`,
+  `diagnostic`, `interruption_requested`, `operation_order_balance_complete`, `pattern_order_balance_complete`, `seeds`,
+  `counters`, `checkpoint_lifecycle`, `loop_records`, `environment`, `quality_warnings`).
 - TLB analysis schema 4: `configuration`, `execution_time_sec`, `tlb_analysis`, `timestamp`, `version`; conclusions
   require nested `status: "complete"` and `conclusions_valid: true`.
 - Core-to-core schema 2: calibrated methodology configuration, `core_to_core_latency` command completion metadata, scenario work plans, nullable aggregate values, per-loop order/status/duration/hint/sample-boundary records, and affinity-comparison interpretability metadata.
@@ -1245,89 +1294,83 @@ measurement schema. [API.md](API.md) is the process-integration contract and sup
   `backend_evidence`, memory-budget/calibration evidence, status-bearing generic work-unit measurements, measured-only
   aggregates, and interpretation, plus additive exact traffic, checksum, loop/checkpoint, environment, and warning
   evidence.
-- Sweep envelope schema 1: general, core-to-core, and LLM-memory producers record `configuration.mode = "sweep"`,
-  `configuration.sweep_schema_version = 1`, `configuration.base_mode`, `configuration.run_count`,
-  `configuration.sweep_max_runs`, `configuration.sweep_parameters`, top-level `status`, `status_reason`,
-  `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`, plus per-entry `runs[].index`,
-  `parameters`, `status`, `status_reason`, and `result`. Every attempted run is retained and
+- Sweep envelope schema 1: CPU bandwidth, CPU latency, patterns, TLB, core-to-core, and LLM-memory producers
+  record `configuration.mode = "sweep"`, `configuration.sweep_schema_version = 1`, `configuration.base_mode`,
+  `configuration.run_count`, `configuration.sweep_max_runs`, `configuration.sweep_parameters`, top-level `status`,
+  `status_reason`, `planned_runs`, `attempted_runs`, `completed_runs`, and `conclusions_valid`, plus per-entry
+  `runs[].index`, `parameters`, `status`, `status_reason`, and `result`. Every attempted run is retained and
   `attempted_runs == runs.size()`; a file target checkpoints each attempt and also checkpoints a terminal envelope when
   the run plan is empty or a stop is observed before a run, without incrementing `attempted_runs`. Stdout preserves that
-  logical cadence but defers serialization until the terminal envelope. `completed_runs` requires current standard
-  schema 3 to have nested `configuration.mode: "benchmark"`, `status: "complete"`, `results_complete: true`,
-  `conclusions_valid: true`, and a string `configuration.output_file`. Nested standard schema 2 and every other
-  standard schema version are unsupported. Pattern requires nested `status: "complete"` and `results_complete: true`;
-  TLB requires `tlb_analysis.status: "complete"` and `tlb_analysis.conclusions_valid: true`; core-to-core requires
+  logical cadence but defers serialization until the terminal envelope. `completed_runs` requires nested CPU bandwidth
+  (`SweepNestedMode::CpuBandwidth`) to have `mode: "cpu_bandwidth"`, `schema_version: 1`, `status: "complete"`,
+  `results_complete: true`, `run_accepted: true`, `configuration.output_file: ""`, and every planned measurement
+  `status: "measured"`; nested CPU latency (`SweepNestedMode::CpuLatency`) has the identical predicate with
+  `mode: "cpu_latency"`; nested patterns (`SweepNestedMode::Patterns`) has the identical predicate with
+  `mode: "patterns"`, `schema_version: 1`, `status: "complete"`, `results_complete: true`, `run_accepted: true`,
+  `configuration.output_file: ""`, and non-empty `measurements[]` all `status: "measured"`. TLB requires
+  `tlb_analysis.status: "complete"` and `tlb_analysis.conclusions_valid: true`; core-to-core requires
   `core_to_core_latency.status: "complete"` and `measurements_complete: true`; and LLM-memory requires nested
-  `mode: "llm_memory"`, integer `schema_version: 2`, `status: "complete"`, `results_complete: true`,
-  `run_accepted: true`, and a non-empty `measurements` array in which every entry has `status: "measured"`. Partial,
-  interrupted, and failed attempts remain as evidence without incrementing the completed count. TLB's native
-  `status: "error"` and LLM's native `status: "unsupported"` both map to a failed attempt (with LLM preserving its
-  `reason_code`, and TLB retaining its schema-4 payload without a fabricated nested `status_reason`). For LLM sweeps,
-  a pre-initialization `preparation-interrupted` stop records an interrupted attempt with `result: null` and
-  `EXIT_SUCCESS`, while a pre-initialization setup failure records a failed attempt with `result: null` and its stable
-  failure reason. The authoritative schema-1 sweep acceptance predicate is exactly
-  `status == "complete" && conclusions_valid == true`. Producers maintain `completed_runs == planned_runs` for an
+  `mode: "llm_memory"`, integer `schema_version: 2`, `status: "complete"`, `results_complete: true`, `run_accepted: true`,
+  and a non-empty `measurements` array in which every entry has `status: "measured"`. Partial, interrupted, and failed
+  attempts remain as evidence without incrementing the completed count. TLB's native `status: "error"`, CPU
+  bandwidth/latency/patterns' native `status: "unsupported"`, and LLM's native `status: "unsupported"` map to a failed attempt.
+  For CPU bandwidth, CPU latency, patterns, and LLM sweeps, a pre-initialization `preparation-interrupted` stop records an
+  interrupted attempt with `result: null` and `EXIT_SUCCESS`, while a pre-initialization setup failure records a failed
+  attempt with `result: null` and its stable failure reason. The authoritative schema-1 sweep acceptance predicate is
+  exactly `status == "complete" && conclusions_valid == true`. Producers maintain `completed_runs == planned_runs` for an
   envelope satisfying that predicate; consumers may check the equality separately as a defensive consistency check,
   but it is not an additional completeness condition.
 
-Pattern schema 3 plans 21 measurements per loop and treats numeric measured values plus intentional skips as terminal.
-Only Complete loops feed aggregate vectors, medians, statistics, and console summaries. Partial, interrupted, and failed
-loop measurements remain in JSON as evidence, while command status/counters keep `results_complete` false. Preparation
-failure may omit `patterns`; main and sweep orchestration still build the completion payload before returning or
-classifying the failure.
-
-Command completeness for current standard schema 3 requires `configuration.mode == "benchmark"`,
-`status == "complete" && results_complete == true && conclusions_valid == true`, with string
-`configuration.output_file`. Bundled standard-memory examples accept compatible producer releases when
-`configuration.methodology_version == "benchmark-v2-calibrated-seeded-balanced"`, the command is complete, and each
-consumed field has the expected shape. They retain a non-empty top-level `version` string as provenance without
-requiring exact software-version equality. They do not translate released standard schema 2, unversioned historical
-standard JSON layouts, or other methodology identities. Pattern requires
-`status == "complete" && results_complete == true`. TLB requires
-`tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true`; core-to-core requires
-`core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true`. Metric consumers must
-additionally require the selected measurement's status and non-null value; an intentionally skipped pattern measurement
-can coexist with command completeness without being consumable as a measured value. Affinity-scenario interpretation
+Command completeness for CPU bandwidth, CPU latency, and patterns schema 1 requires `schema_version == 1`, the expected `mode`
+(`"cpu_bandwidth"`, `"cpu_latency"`, or `"patterns"`) and `methodology_version`, matching `component_identities`, `status == "complete"`,
+`results_complete == true`, `run_accepted == true`, string `configuration.output_file`, and every scheduled measurement
+`status == "measured"`. Bundled `script-examples/` scripts accept compatible producer releases when those schema-1
+contracts and consumed field shapes match, retaining `software.version` as provenance only without translating legacy
+standard schema-3/2, legacy pattern schema-3, or unversioned historical JSON layouts.
+TLB requires `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true`; core-to-core requires
+`core_to_core_latency.status: "complete" && core_to_core_latency.measurements_complete == true`. Metric consumers must
+additionally require the selected aggregate/measurement's `status == "measured"` and non-null `value`; in patterns,
+`strided_2mb` may be `status == "skipped"` (`buffer-too-small-for-stride-transition`) in `resolved_plan.patterns.strided_2mb`
+and `aggregates.patterns.strided_2mb.<op>` (and omitted from `measurements[]`) while the command remains complete. Affinity-scenario interpretation
 also requires `affinity_hint_comparison_interpretable == true`. GPU requires `status == "complete" &&
 results_complete == true && conclusions_valid == true`; position-balanced comparisons additionally require
 `operation_order_balance_complete == true`.
 LLM requires `mode == "llm_memory" && schema_version == 2`, top-level backend/phase/layout equal to the request,
 methodology equal to `llm-memory-v2-<backend>-<phase>-<layout>`, `status == "complete"`, `results_complete == true`,
-`run_accepted == true`, the run-policy identity `llm-run-policy-bounded-loop-snapshots-v1`, and every planned
+`run_accepted == true`, the run-policy identity `bounded-loop-snapshots-v1` (or LLM policy token), and every planned
 measurement to be `measured`. A selected metric additionally requires accepted timing, checksum, and required
 post-validation evidence. Run acceptance is independent of position balance, sample count, CV, duration, and environment;
 comparison policy must assess those separately and match frozen work, seeds, component identities, and output cadence.
 
-### 18.1 Configuration keys
+### 18.1 CPU Bandwidth (`-B`) Schema 1 Highlights
 
-In addition to standard fields (buffer size, iterations, loop count, thread count, CPU/OS info):
+- `schema_version: 1`, `mode: "cpu_bandwidth"`, `methodology_version: "cpu-bandwidth-v1-arm64-calibrated-seeded-balanced"`.
+- `resolved_plan.component_identities`: `cpu-bandwidth-components-v1`, `cpu-bandwidth-work-plan-v1`,
+  `cpu-bw-buffer-pattern-v1`, `cpu-bw-read-checksum-v1`, `bounded-loop-snapshots-v1`.
+- `resolved_plan.targets.<target>` (`main_memory`, `l1`, `l2`, `custom`): `bytes`, `effective_workers`, `worker_spans[]`.
+- `resolved_plan.operation_plans[]`: `plan_ref`, `target`, `operation`, `passes`, `exact_payload_bytes`, `op_seed_uint64_decimal`, `expected_checksum`.
+- `measurements[]`: `plan_ref`, `bandwidth_gb_s`, `completed_passes`, `completed_exact_payload_bytes`, `execution.timing.cpu_raw`, `execution.write_pattern_uint64_decimal`, `execution.checksum`, `execution.validation.checks[]` (`post-validation-structure`, `read-checksum`, `write-final-full-buffer`, `copy-final-full-buffer`, `src-readonly-protection`).
+- `aggregates.targets.<target>.<op>`: `accepted_measurement_ids`, `value` (median GB/s), `statistics` (11 keys), `quality`.
 
-- `latency_chain_mode` (string): Resolved pointer-chain construction mode.
-- `use_latency_tlb_locality` (boolean): Whether the configured locality value is greater than zero; an explicit
-  `global-random` mode can still ignore that value.
-- `latency_tlb_locality_bytes` (number): TLB-locality window size in bytes.
-- `latency_tlb_locality_kb` (number): TLB-locality window size in KB.
-- `benchmark_schema_version` (number): `3` for current output.
-- `output_file` (required string, standard schema 3): Raw direct output target; nested standard sweep results use an
-  empty string because the envelope owns persistence.
-- `methodology_version` (string): `benchmark-v2-calibrated-seeded-balanced`.
-- `benchmark_seed` (string): exact uint64 decimal string plus source/encoding fields.
-- Calibration targets/windows and phase/operation schedule policies.
+### 18.2 CPU Latency (`-L`) Schema 1 Highlights
 
-Schema 3 makes `configuration.output_file` and top-level `conclusions_valid` mandatory without changing the standard
-methodology version. Bundled standard-memory examples identify compatible input from the standard mode, schema,
-methodology, completion fields, and consumed field shapes rather than inferring identity from metric layout or requiring
-an exact software version; schema 2 and unversioned historical standard JSON are unsupported inputs.
+- `schema_version: 1`, `mode: "cpu_latency"`, `methodology_version: "cpu-latency-v1-arm64-calibrated-seeded-balanced"`.
+- `resolved_plan.component_identities`: `cpu-latency-components-v1`, `cpu-latency-work-plan-v1`,
+  `splitmix64-fisher-yates-rejection-v1`, `cpu-latency-chain-v1`, `bounded-loop-snapshots-v1`.
+- `resolved_plan.chain_identities.<target>`: `node_count`, `stride_bytes`, `chain_mode`, `tlb_locality_kb`, `chain_seed_uint64_decimal`, `chain_permutation_sha256`.
+- `measurements[]`: `plan_ref`, `latency_ns`, `completed_accesses`, `completed_chain_cycles`, `final_pointer_verification` (`expected_node: 0`, `actual_node`, `valid`), `sample_windows` (`timebase`, `sample_count`, `sample_delta_ticks`, `samples_ns`, `validation.end_node_indices`), `execution.timing.cpu_raw`, `execution.validation.checks[]`.
+- `locality_comparison`: `null` unless `--compare-locality`, else `rounds[]` (`locality_16k`, `locality_global` per round).
+- `aggregates.targets.<target>`: `accepted_measurement_ids`, `value` (median ns), `statistics`, `quality`, `pooled_sample_distribution`; `aggregates.locality_comparison`: `locality_16k_latency_ns`, `global_random_latency_ns`, `locality_latency_delta_ns` (`median(global) - median(16k)`).
 
-### 18.2 Main-memory latency keys
+### 18.2.1 Patterns (`-P`) Schema 1 Highlights
 
-- `main_memory.latency.headline_ns`: status, median-or-single headline, loop values, robust statistics, measurement
-  records, quality, and the pooled separate-sample distribution with loop boundaries.
-- `main_memory.latency.automatic_locality_comparison.locality_16k_latency_ns`.
-- `main_memory.latency.automatic_locality_comparison.global_random_latency_ns`.
-- `main_memory.latency.automatic_locality_comparison.locality_latency_delta_ns`.
-- `loops[].measurements`: nullable per-loop status/value plus exact work, worker, seed, timing, calibration, and order
-  metadata.
+- `schema_version: 1`, `mode: "patterns"`, `methodology_version: "patterns-v1-arm64-phase-calibrated-seeded-balanced"`.
+- `resolved_plan.component_identities`: `patterns-components-v1`, `patterns-work-plan-v1`,
+  `patterns-buffer-pattern-v1`, `patterns-read-checksum-v1`, `splitmix64-coprime-fisher-yates-v1`, `bounded-loop-snapshots-v1`.
+- `resolved_plan.patterns.<kind>` (all 7 patterns): `enabled`, `status` (`active`/`skipped`/`unavailable`), `reason_code`, `access_size_bytes: 32`, `stride_bytes`, `phase_period_passes`, `native_page_size_bytes`, `stride_equals_native_page_size`, `large_page_backing_verified: false`, `large_page_backing_status`, `effective_workers`, `worker_spans[]`, plus `random_workload` (`random_indices_sha256`) on `random`.
+- `resolved_plan.operation_plans[]` & `frozen_plan_refs`: `plan_ref`, `pattern`, `operation`, `passes`, `total_accesses`, `exact_payload_bytes`, `accesses_per_pass`, `min_accesses_per_pass`, `max_accesses_per_pass`, `distinct_address_count`, `logical_working_set_bytes`, `completed_phase_cycles`, `has_untouched_dst_bytes`, `op_seed_uint64_decimal`, `expected_checksum`.
+- `measurements[]`: `plan_ref`, `bandwidth_gb_s`, `completed_passes`, `completed_exact_payload_bytes`, `execution.timing.cpu_raw`, `execution.write_pattern_uint64_decimal`, `execution.pre_op_sentinel_uint64_decimal`, `execution.validation.checks[]` (`post-validation-structure`, `read-checksum`, `write-final-touched-bytes`, `copy-final-touched-bytes`, `untouched-sentinel-isolation`, `src-readonly-protection`), `checksum`.
+- `aggregates.patterns.<kind>.<op>`: `status`, `reason_code`, `accepted_measurement_ids`, `value` (median GB/s), `relative_to_forward_pct`, `statistics`, `quality` (`5.0%` streaming / `10.0%` sparse CV).
 
 ### 18.3 Structure conventions
 
@@ -1488,20 +1531,22 @@ checks write and flush state, contains exceptions, and restores the prior stream
 destructor. An observable terminal serialization, write, or flush failure returns `EXIT_FAILURE` without changing the
 already-computed measurement state.
 
-Standard, pattern, and TLB command boundaries select this infrastructure after successful parse/help handling and before
-direct or sweep validation. Core-to-core selects it after its dedicated combined parse/preflight and help handling, but
-before sweep execution, the runtime banner, and worker creation. GPU selects it after its dedicated parser/help path and
-before its banner, QoS, signal scope, and backend factory. LLM selects it before banner, QoS, signal scope, sweep
-dispatch or direct work-plan admission, mappings, and workers. Direct pattern, TLB, and core-to-core files receive one
-atomic final write; standard and all sweep files (general, core-to-core, and LLM) retain per-attempt atomic checkpoints
-(LLM sweeps do not write intra-run LLM file snapshots). GPU files retain terminal-measurement/failure
-checkpoints and their post-release replacement. Direct LLM files snapshot every Kth fully completed loop,
+TLB command boundaries select this infrastructure after successful parse/help handling and before
+direct or sweep validation. CPU bandwidth (`-B`), CPU latency (`-L`), and patterns (`-P`) select it after dedicated parse/help/config-build
+and before banner, QoS, signal scope, sweep dispatch or direct plan admission, mappings, and workers. Core-to-core
+selects it after its dedicated combined parse/preflight and help handling, but before sweep execution, the runtime banner,
+and worker creation. GPU selects it after its dedicated parser/help path and before its banner, QoS, signal scope, and
+backend factory. LLM selects it before banner, QoS, signal scope, sweep dispatch or direct work-plan admission,
+mappings, and workers. Direct TLB and core-to-core files receive one atomic final write; all sweep files
+(CPU bandwidth, CPU latency, patterns, TLB, core-to-core, and LLM) retain per-attempt atomic checkpoints (without
+intra-run snapshots). GPU files retain terminal-measurement/failure checkpoints and their post-release replacement.
+Direct CPU bandwidth, CPU latency, patterns, and LLM files snapshot every Kth fully completed loop,
 where `K=max(1,ceil(planned_loops/8))`, at most eight progress writes plus one post-release command terminal. An abrupt
-exit can lose up to `3K` completed attempts, including while replacement is in progress; no file may exist before the
+exit can lose up to `3K` (or `K * active_patterns.size() * 3` for `-P`) completed attempts, including while replacement is in progress; no file may exist before the
 first successful snapshot. Graceful interruption retains the finished prefix when terminal persistence succeeds.
 A late command exception after successful terminal persistence may produce one corrective failure snapshot. A failed
 checkpoint is terminal and is never retried. Atomic rename does not promise power-loss durability.
-LLM `checkpoint_lifecycle` reports prior actual file-writer attempts/successes before current snapshot preparation;
+`checkpoint_lifecycle` reports prior actual file-writer attempts/successes before current snapshot preparation;
 `current_persistence_success` remains null because the snapshot cannot attest to its own future write. Stdout emits one
 terminal DOM, and disabled output builds none. Stop checks remain at task boundaries even when progress is skipped.
 The supported process contract, including help and pre-result-failure exceptions, is defined in [API.md](API.md).
@@ -1509,12 +1554,13 @@ The supported process contract, including help and pre-result-failure exceptions
 ### 18.8 Path behavior
 
 - Relative file `--output` paths are resolved against the current working directory
-  (`JsonFilePathPolicy::ResolveAgainstCurrentDirectory`) by standard, pattern, TLB, core-to-core, and LLM command
-  boundaries; standalone GPU uses `JsonFilePathPolicy::PreserveRaw`.
-- Standard schema 3, GPU, and LLM preserve the raw output spelling in `configuration.output_file` (with GPU serializing
-  `null` when empty, and standard/LLM serializing `""` for disabled direct output or nested sweep runs); GPU and LLM
-  also retain exact captured `argv`. Exact `-` therefore remains `"-"` in a stdout payload, while `./-`, `-G`, and every
-  other non-empty non-sentinel value are real file targets.
+  (`JsonFilePathPolicy::ResolveAgainstCurrentDirectory`) by CPU bandwidth, CPU latency, patterns, TLB, core-to-core, and
+  LLM command boundaries; standalone GPU uses `JsonFilePathPolicy::PreserveRaw`.
+- CPU bandwidth schema 1, CPU latency schema 1, patterns schema 1, GPU schema 1, and LLM schema 2 preserve the raw output spelling in
+  `configuration.output_file` (with GPU serializing `null` when empty, and CPU bandwidth/CPU latency/patterns/LLM serializing
+  `""` for disabled direct output or nested sweep runs); all five also retain exact captured `argv`. Exact `-` therefore
+  remains `"-"` in a stdout payload, while `./-`, `-G`, and every other non-empty non-sentinel value are real file
+  targets.
 
 ## 19. Error-Handling Model
 
@@ -1593,10 +1639,12 @@ Recommended validation commands:
 - Build: `make`
 - Unit tests (non-integration): `make test`
 - Script-example JSON entry paths: `make test-script-examples`
+- Independent patterns schema-1 contract and mutation tests: `make test-patterns-verifier`
+- Independent CPU bandwidth, CPU latency, and patterns schema-1 contract and mutation tests: `make test-cpu-verifiers`
 - Independent LLM schema-2 artifact and schema-1 sweep envelope contract and mutation tests: `make test-llm-verifier`
 - Integration-only: `make test-integration`
 - Full test set: `make test-all`
-- CLI help smoke checks: `./memory_benchmark -h`, `./memory_benchmark --analyze-tlb --help`
+- CLI help smoke checks: `./memory_benchmark -h`, `./memory_benchmark -B -h`, `./memory_benchmark -L -h`, `./memory_benchmark -P -h`, `./memory_benchmark --analyze-tlb --help`
 - GPU help smoke check: `./memory_benchmark --gpu-bandwidth --help`
 - LLM help smoke check: `./memory_benchmark --llm-memory --help`
 - Deterministic CLI parser tests:
@@ -1621,17 +1669,23 @@ Recommended validation commands:
 For narrow changes, prefer targeted `gtest` filters via `./test_runner --gtest_filter=...`.
 
 The aggregate `make test-all` gate requires Python 3; after all GTest cases pass, it runs the focused script-example
-entry test and independent LLM verifier tests. `jq` is not required by this gate.
+entry test (`test-script-examples`), independent LLM verifier tests (`test-llm-verifier`), and independent CPU
+bandwidth/latency/patterns verifier tests (`test-cpu-verifiers`, including `test-patterns-verifier`). `jq` is not required by this gate.
 
+`python3 script-examples/verify_cpu_bandwidth_result.py result.json`,
+`python3 script-examples/verify_cpu_latency_result.py result.json`, and
+`python3 script-examples/verify_patterns_result.py result.json` independently verify schema-1 `cpu_bandwidth`,
+`cpu_latency`, and `patterns` direct artifacts or schema-1 sweep envelopes (shared library `script-examples/cpu_verify_common.py`), with
+`--binary PATH` and `--require-raw-timing` (plus `--max-chain-nodes N` on latency and `--max-random-indices N` on patterns).
 `python3 script-examples/verify_llm_result.py result.json` independently verifies either a single schema-2 LLM artifact
 across the eight supported profiles or a schema-1 LLM sweep envelope (`configuration.mode == "sweep"`,
 `configuration.base_mode == "llm_memory"`, `configuration.sweep_schema_version == 1`) without invoking producer
 helpers. For single artifacts it reconstructs geometry, plan/checksum identities, timing, named validation, accepted
-populations, and exact statistics. For LLM sweeps it additionally verifies Cartesian parameter progression (independent
+populations, and exact statistics. For sweeps it additionally verifies Cartesian parameter progression (independent
 of JSON key order in `sweep_parameters`), base-configuration and build-manifest invariance across nested runs, empty
 nested `output_file`, per-run status/result consistency, envelope completion counters, and every non-null nested
-schema-2 payload under one shared bounded work budget (hashing `--binary` once across the sweep), adding
-`artifact_kind: "llm_sweep"`, `planned_runs`, `completed_runs`, `verified_runs`, and `run_verdicts` to the verdict.
+payload under one shared bounded work budget (hashing `--binary` once across the sweep), adding
+`artifact_kind`, `planned_runs`, `completed_runs`, `verified_runs`, and `run_verdicts` to the verdict.
 Verdicts separate `artifact_consistent` from `run_accepted`: exit 0 means consistent and accepted, exit 1 means
 inconsistent or consistently unaccepted, and exit 2 means unsupported or bounded evidence is unavailable.
 `--require-raw-timing` requires original CPU timing; `--binary PATH` checks the manifest hash without running that
@@ -1641,8 +1695,33 @@ file. Verification does not prove original process success, physical traffic, or
 
 - Program entry: `main.cpp`
 - Build provenance: `build-support/generate_provenance.py`
+- Shared audit primitives:
+  - `src/core/audit/host_environment.h`, `src/core/audit/host_environment.mm`
+  - `src/core/audit/build_manifest.h`, `src/core/audit/build_manifest.cpp`
+  - `src/core/audit/checkpoint_policy.h`
+  - `src/core/audit/deterministic_rng.h`
+- Independent CPU verifiers: `script-examples/cpu_verify_common.py`, `script-examples/verify_cpu_bandwidth_result.py`,
+  `script-examples/verify_cpu_latency_result.py`, and `script-examples/verify_patterns_result.py`.
 - Independent LLM verifier: `script-examples/verify_llm_result.py`, `script-examples/llm_verify_profiles.py`,
   and `script-examples/llm_verify_oracles.py`.
+- Standalone CPU bandwidth (`-B` / `--cpu-bandwidth`):
+  - `src/cpu_bandwidth/cpu_bandwidth.cpp`
+  - `src/cpu_bandwidth/cpu_bandwidth_work_plan.cpp`
+  - `src/cpu_bandwidth/cpu_bandwidth_oracle.cpp`
+  - `src/cpu_bandwidth/cpu_bandwidth_executor.cpp`
+  - `src/cpu_bandwidth/cpu_bandwidth_runner.cpp`
+  - `src/cpu_bandwidth/cpu_bandwidth_json.cpp`
+  - `src/cpu_bandwidth/cpu_bandwidth_output.cpp`
+  - `src/cpu_bandwidth/cpu_bandwidth_sweep_runner.cpp`
+- Standalone CPU latency (`-L` / `--cpu-latency`):
+  - `src/cpu_latency/cpu_latency.cpp`
+  - `src/cpu_latency/cpu_latency_work_plan.cpp`
+  - `src/cpu_latency/cpu_latency_chain.cpp`
+  - `src/cpu_latency/cpu_latency_executor.cpp`
+  - `src/cpu_latency/cpu_latency_runner.cpp`
+  - `src/cpu_latency/cpu_latency_json.cpp`
+  - `src/cpu_latency/cpu_latency_output.cpp`
+  - `src/cpu_latency/cpu_latency_sweep_runner.cpp`
 - LLM memory profile with all four CPU and all four Metal phase/layout profiles:
   - `src/llm_memory/llm_memory.cpp`
   - `src/llm_memory/llm_sweep_runner.cpp`
@@ -1658,7 +1737,7 @@ file. Verification does not prove original process success, physical traffic, or
   - `src/llm_memory/llm_runner.cpp`
   - `src/llm_memory/llm_json.cpp`
   - `src/llm_memory/llm_output.cpp`
-  - `src/llm_memory/llm_environment.mm`
+  - `src/llm_memory/llm_environment.h`
 - Config parse/validate/derive:
   - `src/core/config/cli_parser.h`
   - `src/core/config/cli_parser.cpp`
@@ -1668,18 +1747,13 @@ file. Verification does not prove original process success, physical traffic, or
   - `src/core/config/buffer_calculator.cpp`
   - `src/core/config/sweep_utils.cpp`
 - Memory allocation/init:
-  - `src/core/memory/buffer_allocator.cpp`
-  - `src/core/memory/buffer_initializer.cpp`
   - `src/core/memory/memory_manager.cpp`
   - `src/core/memory/memory_utils.cpp`
-- Standard benchmark:
-  - `src/benchmark/benchmark_runner.cpp`
-  - `src/benchmark/benchmark_executor.cpp`
-  - `src/benchmark/benchmark_work_plan.cpp`
-  - `src/benchmark/benchmark_statistics_collector.cpp`
+- Shared benchmark infrastructure and sweeps:
   - `src/benchmark/sweep_runner.cpp`
   - `src/benchmark/bandwidth_tests.cpp`
   - `src/benchmark/latency_tests.cpp`
+  - `src/benchmark/parallel_test_framework.h`
 - Standalone TLB planning and scheduling:
   - `src/benchmark/tlb_sweep_planner.cpp`
   - `src/benchmark/tlb_measurement_scheduler.cpp`
@@ -1693,11 +1767,15 @@ file. Verification does not prove original process success, physical traffic, or
   - `src/benchmark/core_to_core_latency_runner.cpp`
   - `src/benchmark/core_to_core_sweep_runner.cpp`
   - `src/benchmark/core_to_core_latency_json.cpp`
-- Pattern benchmark:
-  - `src/pattern_benchmark/pattern_statistics_manager.cpp`
-  - `src/pattern_benchmark/pattern_coordinator.cpp`
-  - `src/pattern_benchmark/pattern_work_plan.cpp`
-  - `src/pattern_benchmark/output.cpp`
+- Standalone patterns (`-P` / `--patterns`):
+  - `src/pattern_benchmark/patterns.cpp`
+  - `src/pattern_benchmark/patterns_work_plan.cpp`
+  - `src/pattern_benchmark/patterns_oracle.cpp`
+  - `src/pattern_benchmark/patterns_executor.cpp`
+  - `src/pattern_benchmark/patterns_runner.cpp`
+  - `src/pattern_benchmark/patterns_json.cpp`
+  - `src/pattern_benchmark/patterns_sweep_runner.cpp`
+  - `src/pattern_benchmark/patterns_output.cpp`
 - Standalone GPU bandwidth:
   - `src/gpu_bandwidth/gpu_bandwidth.cpp`
   - `src/gpu_bandwidth/gpu_work_plan.cpp`
@@ -1708,9 +1786,11 @@ file. Verification does not prove original process success, physical traffic, or
   - `src/gpu_bandwidth/gpu_kernels_source.h`
 - Output:
   - `src/output/console/output_printer.cpp`
-  - `src/output/json/json_output/*.cpp`
+  - `src/output/json/json_output/file_writer.cpp`
+  - `src/output/json/json_output/json_output_session.cpp`
 - Assembly kernels:
   - `src/asm/*.s`
+  - `src/asm/memory_write_reverse_pattern.s`, `src/asm/memory_write_strided_pattern.s`, `src/asm/memory_write_random_pattern.s` (arbitrary 64-bit pattern writes for `-P`; see [PATTERNS_WHITEPAPER.md](PATTERNS_WHITEPAPER.md))
   - `src/asm/core_to_core_latency.s` (core-to-core latency measurements; see [CORE_TO_CORE_WHITEPAPER.md](CORE_TO_CORE_WHITEPAPER.md))
   - `src/asm/llm_decode_memory.s` (LLM weight/KV reads, temporal appends, and observable checksums; see
     [LLM_MEMORY_PROFILE_WHITEPAPER.md](LLM_MEMORY_PROFILE_WHITEPAPER.md))

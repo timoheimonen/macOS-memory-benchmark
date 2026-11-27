@@ -26,15 +26,12 @@
 #define BENCHMARK_TESTS_H
 
 #include <cstddef>  // size_t
-#include <cstdint>  // uint64_t
+#include <cstdint>  // uintptr_t
 #include <functional>
 #include <vector>   // std::vector
 
-#include "benchmark/benchmark_work_plan.h"
-
 // Forward declaration
 struct HighResTimer;
-struct ParallelExecutionMetadata;
 
 /** Optional kernel seam for deterministic latency sampling tests. */
 struct LatencyMeasurementTestHooks {
@@ -42,12 +39,6 @@ struct LatencyMeasurementTestHooks {
 };
 
 // --- Benchmark Test Functions ---
-double run_read_test_with_plan(void* buffer,
-                               const BenchmarkWorkPlan& plan,
-                               uint64_t& checksum,
-                               HighResTimer& timer,
-                               uint64_t (*read_func)(const void*, size_t),
-                               ParallelExecutionMetadata* execution_metadata = nullptr);
 
 /**
  * @brief Run write benchmark test
@@ -60,12 +51,6 @@ double run_read_test_with_plan(void* buffer,
  */
 double run_write_test(void* buffer, size_t size, int iterations, int num_threads, HighResTimer& timer);
 
-double run_write_test_with_plan(void* buffer,
-                                const BenchmarkWorkPlan& plan,
-                                HighResTimer& timer,
-                                void (*write_func)(void*, size_t),
-                                ParallelExecutionMetadata* execution_metadata = nullptr);
-
 /**
  * @brief Run copy benchmark test
  * @param dst Pointer to destination buffer
@@ -77,13 +62,6 @@ double run_write_test_with_plan(void* buffer,
  * @return Total elapsed time in seconds
  */
 double run_copy_test(void* dst, void* src, size_t size, int iterations, int num_threads, HighResTimer& timer);
-
-double run_copy_test_with_plan(void* dst,
-                               void* src,
-                               const BenchmarkWorkPlan& plan,
-                               HighResTimer& timer,
-                               void (*copy_func)(void*, const void*, size_t),
-                               ParallelExecutionMetadata* execution_metadata = nullptr);
 
 /**
  * @brief Run latency benchmark test

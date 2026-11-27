@@ -61,9 +61,6 @@ std::string error_option_does_not_take_value(const std::string& option);
 std::string error_option_not_allowed_in_mode(const std::string& option,
                                              const std::string& allowed_options);
 const std::string& error_missing_primary_mode();
-std::string error_patterns_incompatible_option(const std::string& option);
-std::string error_only_bandwidth_incompatible_option(const std::string& option);
-const std::string& error_only_latency_with_threads();
 const std::string& reason_signed_integer_invalid();
 const std::string& reason_signed_integer_out_of_range();
 const std::string& reason_unsigned_integer_invalid();
@@ -110,7 +107,6 @@ std::string error_madvise_failed(const std::string& buffer_name);
 std::string error_munmap_failed();
 std::string error_sysctlbyname_failed(const std::string& operation, const std::string& key);
 std::string error_mach_timebase_info_failed(const std::string& error_details);
-std::string error_benchmark_tests(const std::string& error);
 std::string error_benchmark_loop(int loop, const std::string& error);
 std::string error_file_write_failed(const std::string& file_path, const std::string& error_details);
 std::string error_json_stdout_write_failed(const std::string& error_details);
@@ -151,14 +147,6 @@ const std::string& error_calculated_l1_buffer_size_zero();
 const std::string& error_calculated_l2_buffer_size_zero();
 const std::string& error_latency_access_count_overflow();
 const std::string& error_latency_access_count_negative();
-const std::string& error_incompatible_flags();
-const std::string& error_only_flags_with_patterns();
-const std::string& error_only_bandwidth_with_cache_size();
-const std::string& error_only_bandwidth_with_latency_samples();
-const std::string& error_buffersize_zero_requires_only_latency();
-const std::string& error_cache_size_zero_requires_only_latency();
-const std::string& error_only_latency_requires_latency_target();
-const std::string& error_only_latency_with_iterations();
 std::string error_mutually_exclusive_modes(const std::string& mode1, const std::string& mode2);
 const std::string& error_gpu_bandwidth_must_be_used_alone();
 std::string error_gpu_buffer_size_below_minimum(unsigned long requested_mb,
@@ -187,7 +175,6 @@ const std::string& llm_memory_reason_kv_element_bytes();
 const std::string& llm_memory_reason_phase();
 const std::string& llm_memory_reason_kv_layout();
 const std::string& llm_memory_reason_platform_size_range();
-const std::string& error_only_flags_require_benchmark();
 const std::string& error_sweep_requires_parameter();
 std::string error_sweep_too_many_runs(size_t run_count, size_t max_runs);
 std::string error_sweep_parameter_not_allowed(const std::string& parameter_name, const std::string& mode_name);
@@ -225,10 +212,7 @@ std::string info_calculated_max_less_than_min(unsigned long max_mb, unsigned lon
 std::string info_custom_cache_rounded_up(unsigned long original_kb, unsigned long rounded_kb);
 
 // --- Main Program Messages ---
-const std::string& msg_running_benchmarks();
 std::string msg_done_total_time(double total_time_sec);
-const std::string& msg_running_pattern_benchmarks();
-std::string msg_pattern_benchmark_loop_completed(int current_loop, int total_loops);
 std::string msg_results_saved_to(const std::string& file_path);
 const std::string& msg_running_tlb_analysis();
 const std::string& msg_running_core_to_core_analysis();
@@ -486,16 +470,6 @@ std::string config_license();
 std::string config_buffer_size(double buffer_size_mib, unsigned long buffer_size_mb);
 std::string config_total_allocation(double total_mib);
 std::string config_iterations(int iterations);
-std::string config_benchmark_iterations_auto(double target_seconds,
-                                             double min_seconds,
-                                             double max_seconds);
-std::string config_pattern_iterations_auto(double target_seconds,
-                                           double min_seconds,
-                                           double max_seconds);
-std::string config_latency_calibration(double target_seconds,
-                                       double min_seconds,
-                                       double max_seconds,
-                                       size_t minimum_complete_cycles);
 std::string config_loop_count(int loop_count);
 std::string config_non_cacheable(bool use_non_cacheable);
 std::string config_latency_stride(size_t stride_bytes);
@@ -515,74 +489,9 @@ std::string cache_size_custom_disabled();
 std::string cache_size_l1(size_t size_bytes);
 std::string cache_size_l2(size_t size_bytes);
 
-// --- Results Output Messages ---
-std::string results_loop_header(int loop);
-std::string results_main_memory_bandwidth(int num_threads);
-std::string results_read_bandwidth(double bw_gb_s, double total_time);
-std::string results_write_bandwidth(double bw_gb_s, double total_time);
-std::string results_copy_bandwidth(double bw_gb_s, double total_time);
-std::string results_main_memory_latency();
-std::string results_latency_total_time(double total_time_sec);
-std::string results_latency_average(double latency_ns, size_t locality_bytes);
-std::string results_latency_tlb_hit(double latency_ns);
-std::string results_latency_tlb_miss(double latency_ns);
-std::string results_latency_page_walk_penalty(double penalty_ns);
-std::string results_cache_bandwidth(int num_threads);
-std::string results_cache_latency();
-std::string results_custom_cache();
-std::string results_l1_cache();
-std::string results_l2_cache();
-std::string results_cache_read_bandwidth(double bw_gb_s);
-std::string results_cache_write_bandwidth(double bw_gb_s);
-std::string results_cache_copy_bandwidth(double bw_gb_s);
-std::string results_buffer_size_bytes(size_t buffer_size);
-std::string results_buffer_size_kb(double buffer_size_kb);
-std::string results_buffer_size_mb(double buffer_size_mb);
-std::string results_separator();
-std::string results_cache_latency_custom_ns(double latency_ns, size_t buffer_size);
-std::string results_cache_latency_custom_ns_kb(double latency_ns, double buffer_size_kb);
-std::string results_cache_latency_custom_ns_mb(double latency_ns, double buffer_size_mb);
-std::string results_cache_latency_l1_ns(double latency_ns, size_t buffer_size);
-std::string results_cache_latency_l1_ns_kb(double latency_ns, double buffer_size_kb);
-std::string results_cache_latency_l1_ns_mb(double latency_ns, double buffer_size_mb);
-std::string results_cache_latency_l2_ns(double latency_ns, size_t buffer_size);
-std::string results_cache_latency_l2_ns_kb(double latency_ns, double buffer_size_kb);
-std::string results_cache_latency_l2_ns_mb(double latency_ns, double buffer_size_mb);
-std::string results_measurement_unavailable(const std::string& label,
-                                            const std::string& status,
-                                            const std::string& reason);
-const std::string& benchmark_reason_interrupted_before_measurement();
-const std::string& benchmark_reason_interrupted_by_user();
-const std::string& benchmark_reason_planned_measurements_unavailable();
-const std::string& benchmark_reason_invalid_locality_work();
-const std::string& benchmark_reason_locality_comparison_unavailable();
-const std::string& benchmark_reason_interrupted_calibration_pilot();
-const std::string& benchmark_reason_invalid_calibration_pilot();
-const std::string& benchmark_reason_interrupted_measured_operation();
-const std::string& benchmark_reason_invalid_bandwidth_duration();
-const std::string& benchmark_reason_invalid_bandwidth_value();
-const std::string& benchmark_reason_interrupted_latency_pilot();
-const std::string& benchmark_reason_interrupted_latency_measurement();
-const std::string& benchmark_reason_invalid_latency_measurement();
-const std::string& benchmark_reason_loops_remain();
-const std::string& benchmark_reason_checkpoint_failed();
-const std::string& benchmark_reason_unknown_loop_exception();
-std::string benchmark_reason_coordinator_exception(const std::string& error);
-const std::string& benchmark_reason_unknown_coordinator_exception();
-std::string benchmark_reason_prepare_failed(const std::string& phase_name);
-const std::string& benchmark_reason_invalid_bandwidth_plan();
-const std::string& benchmark_reason_no_worker_partition();
-const std::string& benchmark_reason_copy_payload_overflow();
-const std::string& benchmark_reason_total_payload_overflow();
-const std::string& benchmark_reason_invalid_latency_plan();
-const std::string& benchmark_reason_latency_chain_too_short();
-const std::string& benchmark_reason_minimum_cycles_exceed_limit();
-const std::string& benchmark_reason_rounded_accesses_exceed_limit();
-
 // --- Statistics Messages ---
 std::string statistics_header(int loop_count);
 std::string statistics_header(int requested_loop_count, size_t measured_loop_count);
-std::string statistics_metric_name(const std::string& metric_name);
 std::string statistics_average(double value, int precision = 3);
 std::string statistics_median_p50(double value, int precision = 3);
 std::string statistics_p90(double value, int precision = 3);
@@ -591,67 +500,13 @@ std::string statistics_p99(double value, int precision = 3);
 std::string statistics_stddev(double value, int precision = 3);
 std::string statistics_min(double value, int precision = 3);
 std::string statistics_max(double value, int precision = 3);
-std::string statistics_cache_bandwidth_header(const std::string& cache_name);
-std::string statistics_pattern_bandwidth_header(const std::string& pattern_name);
 std::string statistics_coefficient_of_variation(double value, int precision = 1);
 std::string statistics_median_absolute_deviation(double value, int precision = 3);
 std::string statistics_cache_read();
 std::string statistics_cache_write();
 std::string statistics_cache_copy();
-std::string statistics_cache_latency_header();
-std::string statistics_cache_latency_name(const std::string& cache_name);
 std::string statistics_median_p50_from_samples(double value, size_t sample_count, int precision = 2);
-std::string statistics_pooled_sample_distribution(size_t sample_count);
-std::string statistics_main_memory_latency_header();
-std::string statistics_tlb_hit_latency_metric_name();
-std::string statistics_tlb_miss_latency_metric_name();
-std::string statistics_page_walk_penalty_metric_name();
 std::string statistics_footer();
-
-// --- Pattern Benchmark Messages ---
-const std::string& pattern_sequential_forward();
-const std::string& pattern_sequential_reverse();
-std::string pattern_strided(const std::string& stride_name);
-const std::string& pattern_random_uniform();
-const std::string& pattern_cache_line_64b();
-const std::string& pattern_page_4096b();
-const std::string& pattern_page_16384b();
-const std::string& pattern_superpage_2mb();
-const std::string& pattern_separator();
-const std::string& pattern_read_label();
-const std::string& pattern_write_label();
-const std::string& pattern_copy_label();
-const std::string& pattern_bandwidth_unit();
-std::string pattern_measurement_unavailable(const std::string& status,
-                                            const std::string& reason);
-std::string warning_pattern_measurement_noisy(const std::string& metric,
-                                              double cv_pct,
-                                              double threshold_pct);
-const std::string& pattern_reason_measurement_not_completed();
-const std::string& pattern_reason_timer_creation_failed();
-const std::string& pattern_reason_calibration_or_accounting_failed();
-const std::string& pattern_reason_no_valid_random_workload();
-const std::string& pattern_reason_stride_transition_unavailable();
-const std::string& pattern_reason_copy_accounting_overflow();
-const std::string& pattern_reason_invalid_strided_timing();
-const std::string& pattern_reason_work_plan_byte_overflow();
-const std::string& pattern_reason_invalid_work_plan_parameters();
-const std::string& pattern_reason_stride_access_sum_overflow();
-const std::string& pattern_reason_buffer_lacks_two_strided_accesses();
-const std::string& pattern_reason_no_valid_strided_worker_partition();
-const std::string& pattern_reason_work_plan_pass_limit();
-const std::string& pattern_reason_work_plan_total_overflow();
-const std::string& pattern_reason_buffers_allocation_failed();
-const std::string& pattern_reason_buffers_initialization_failed();
-const std::string& pattern_reason_loop_execution_failed();
-const std::string& pattern_reason_loop_interrupted();
-const std::string& pattern_reason_loop_incomplete();
-const std::string& pattern_reason_invalid_measurement();
-const std::string& pattern_reason_loops_remain();
-std::string pattern_reason_loop_exception(const std::string& error);
-const std::string& pattern_reason_unknown_loop_exception();
-std::string pattern_reason_coordinator_exception(const std::string& error);
-const std::string& pattern_reason_unknown_coordinator_exception();
 
 } // namespace Messages
 

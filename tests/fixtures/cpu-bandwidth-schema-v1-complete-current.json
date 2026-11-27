@@ -1,0 +1,2847 @@
+{
+  "schema_version": 1,
+  "mode": "cpu_bandwidth",
+  "methodology_version": "cpu-bandwidth-v1-arm64-calibrated-seeded-balanced",
+  "software": {
+    "version": "0.66.0",
+    "timestamp": "2026-11-27T07:00:00Z"
+  },
+  "build_manifest": {
+    "manifest_version": 1,
+    "status": "available",
+    "reason_code": "valid",
+    "binary_sha256": "290477ca268c1c2a4527475ffce32373d537d9419cf2c90edfadcb8aacb6805d",
+    "git_commit": "870b175927d747fb1d90fadefebe8728da38407a",
+    "git_dirty": false,
+    "compiler": "Apple clang version 21.0.0",
+    "compile_flags": {
+      "asflags": "-arch arm64",
+      "cxxflags": "-Wall -O3 -std=c++17 -arch arm64",
+      "test_cxxflags": "-Wall -g -std=c++17 -arch arm64"
+    },
+    "link_flags": "-pthread -framework Metal -framework Foundation",
+    "target_arch": "arm64-apple-darwin25.6.0",
+    "sdk": "26.5",
+    "min_os": "26.0"
+  },
+  "configuration": {
+    "buffer_size_mb": 1,
+    "custom_cache_size_kb": 16,
+    "requested_workers": 2,
+    "available_workers": 10,
+    "worker_source": "user",
+    "iterations": 2,
+    "work_policy": "explicit_fixed_work",
+    "loop_count": 3,
+    "non_cacheable": false,
+    "base_seed_uint64_decimal": "424242",
+    "seed_source": "user",
+    "output_file": "tests/fixtures/cpu-bandwidth-schema-v1-complete-current.json",
+    "argv": [
+      "./memory_benchmark",
+      "--cpu-bandwidth",
+      "-b",
+      "1",
+      "-k",
+      "16",
+      "-t",
+      "2",
+      "-i",
+      "2",
+      "-r",
+      "3",
+      "--seed",
+      "424242"
+    ],
+    "resolved_sources": {
+      "buffer_size": "explicit",
+      "cache_size": "explicit",
+      "workers": "explicit",
+      "iterations": "explicit",
+      "seed": "explicit"
+    }
+  },
+  "resolved_plan": {
+    "valid": true,
+    "reason_code": "valid",
+    "plan_identity": "cpu-bandwidth-work-plan-v1|buffer_size_mb=1|custom_cache_size_kb=16|workers=2|iterations=2",
+    "component_identities": {
+      "version": "cpu-bandwidth-components-v1",
+      "work_plan_version": "cpu-bandwidth-work-plan-v1",
+      "buffer_pattern_version": "cpu-bw-buffer-pattern-v1",
+      "read_checksum_version": "cpu-bw-read-checksum-v1",
+      "run_policy_version": "bounded-loop-snapshots-v1"
+    },
+    "targets": {
+      "main_memory": {
+        "enabled": true,
+        "bytes": "1048576",
+        "effective_workers": 2,
+        "worker_spans": [
+          {
+            "offset_bytes": "0",
+            "span_bytes": "524288"
+          },
+          {
+            "offset_bytes": "524288",
+            "span_bytes": "524288"
+          }
+        ]
+      },
+      "custom": {
+        "enabled": true,
+        "bytes": "16384",
+        "effective_workers": 2,
+        "worker_spans": [
+          {
+            "offset_bytes": "0",
+            "span_bytes": "8192"
+          },
+          {
+            "offset_bytes": "8192",
+            "span_bytes": "8192"
+          }
+        ]
+      }
+    },
+    "resources": {
+      "main_memory": {
+        "src": {
+          "requested_bytes": "1048576",
+          "mapped_bytes": "1048576",
+          "non_cacheable_requested": false,
+          "madvise_advice": 3,
+          "madvise_applied": true,
+          "madvise_errno": 0,
+          "read_only_protected": true,
+          "mprotect_errno": 0
+        },
+        "dst": {
+          "requested_bytes": "1048576",
+          "mapped_bytes": "1048576",
+          "non_cacheable_requested": false,
+          "madvise_advice": 3,
+          "madvise_applied": true,
+          "madvise_errno": 0,
+          "read_only_protected": false,
+          "mprotect_errno": 0
+        }
+      },
+      "custom": {
+        "src": {
+          "requested_bytes": "16384",
+          "mapped_bytes": "16384",
+          "non_cacheable_requested": false,
+          "madvise_advice": 3,
+          "madvise_applied": true,
+          "madvise_errno": 0,
+          "read_only_protected": true,
+          "mprotect_errno": 0
+        },
+        "dst": {
+          "requested_bytes": "16384",
+          "mapped_bytes": "16384",
+          "non_cacheable_requested": false,
+          "madvise_advice": 3,
+          "madvise_applied": true,
+          "madvise_errno": 0,
+          "read_only_protected": false,
+          "mprotect_errno": 0
+        }
+      }
+    },
+    "operation_plans": [
+      {
+        "plan_ref": 0,
+        "target": "main_memory",
+        "operation": "read",
+        "passes": 2,
+        "explicit_iterations": true,
+        "exact_payload_bytes": "2097152",
+        "op_seed_uint64_decimal": "6671583347685617580",
+        "expected_checksum": {
+          "status": "available",
+          "reason_code": "valid",
+          "expected_worker_checksums": [
+            {
+              "worker_index": 0,
+              "state_a_uint64_decimal": "4496712486158770416",
+              "state_b_uint64_decimal": "12710370997518795670",
+              "exact_bytes_read": "1048576",
+              "pass_count_uint64_decimal": "2"
+            },
+            {
+              "worker_index": 1,
+              "state_a_uint64_decimal": "12857017839804703010",
+              "state_b_uint64_decimal": "18341941466583006022",
+              "exact_bytes_read": "1048576",
+              "pass_count_uint64_decimal": "2"
+            }
+          ],
+          "expected_run_checksum": {
+            "state_a_uint64_decimal": "16101959803632328197",
+            "state_b_uint64_decimal": "5885100151264972131"
+          }
+        }
+      },
+      {
+        "plan_ref": 1,
+        "target": "main_memory",
+        "operation": "write",
+        "passes": 2,
+        "explicit_iterations": true,
+        "exact_payload_bytes": "2097152",
+        "op_seed_uint64_decimal": "8725986396241453701",
+        "expected_checksum": {
+          "status": "not_applicable",
+          "reason_code": "not-applicable",
+          "expected_worker_checksums": null,
+          "expected_run_checksum": null
+        }
+      },
+      {
+        "plan_ref": 2,
+        "target": "main_memory",
+        "operation": "copy",
+        "passes": 2,
+        "explicit_iterations": true,
+        "exact_payload_bytes": "4194304",
+        "op_seed_uint64_decimal": "13339320852163713526",
+        "expected_checksum": {
+          "status": "not_applicable",
+          "reason_code": "not-applicable",
+          "expected_worker_checksums": null,
+          "expected_run_checksum": null
+        }
+      },
+      {
+        "plan_ref": 3,
+        "target": "custom",
+        "operation": "read",
+        "passes": 2,
+        "explicit_iterations": true,
+        "exact_payload_bytes": "32768",
+        "op_seed_uint64_decimal": "13288549969772360203",
+        "expected_checksum": {
+          "status": "available",
+          "reason_code": "valid",
+          "expected_worker_checksums": [
+            {
+              "worker_index": 0,
+              "state_a_uint64_decimal": "2549519462541114712",
+              "state_b_uint64_decimal": "12837098236826467256",
+              "exact_bytes_read": "16384",
+              "pass_count_uint64_decimal": "2"
+            },
+            {
+              "worker_index": 1,
+              "state_a_uint64_decimal": "2332905867646097307",
+              "state_b_uint64_decimal": "7060337632601898021",
+              "exact_bytes_read": "16384",
+              "pass_count_uint64_decimal": "2"
+            }
+          ],
+          "expected_run_checksum": {
+            "state_a_uint64_decimal": "16254755348454622381",
+            "state_b_uint64_decimal": "12031479412020914307"
+          }
+        }
+      },
+      {
+        "plan_ref": 4,
+        "target": "custom",
+        "operation": "write",
+        "passes": 2,
+        "explicit_iterations": true,
+        "exact_payload_bytes": "32768",
+        "op_seed_uint64_decimal": "10022386158857547985",
+        "expected_checksum": {
+          "status": "not_applicable",
+          "reason_code": "not-applicable",
+          "expected_worker_checksums": null,
+          "expected_run_checksum": null
+        }
+      },
+      {
+        "plan_ref": 5,
+        "target": "custom",
+        "operation": "copy",
+        "passes": 2,
+        "explicit_iterations": true,
+        "exact_payload_bytes": "65536",
+        "op_seed_uint64_decimal": "17942015275822407765",
+        "expected_checksum": {
+          "status": "not_applicable",
+          "reason_code": "not-applicable",
+          "expected_worker_checksums": null,
+          "expected_run_checksum": null
+        }
+      }
+    ],
+    "frozen_plan_refs": {
+      "main_memory": {
+        "read": 0,
+        "write": 1,
+        "copy": 2
+      },
+      "custom": {
+        "read": 3,
+        "write": 4,
+        "copy": 5
+      }
+    }
+  },
+  "memory_budget": {
+    "resource_rounding_bytes": "0",
+    "transient_peak_bytes": "65536",
+    "setup_peak_bytes": "4096",
+    "runtime_peak_bytes": "2195456",
+    "known_owned_peak_bytes": "2195456",
+    "admitted_budget_bytes": "9270250700",
+    "available_memory_bytes": "11587813376",
+    "allowed_memory_bytes": "9270250700",
+    "used_fallback": false,
+    "valid": true,
+    "reason_code": "within-memory-budget"
+  },
+  "calibration": {
+    "excluded_from_results": true,
+    "attempts": {
+      "main_memory": {
+        "read": [
+          {
+            "attempt_index": 0,
+            "target": "main_memory",
+            "operation": "read",
+            "plan_ref": 0,
+            "purpose": "frozen_measurement_warmup",
+            "duration_quality": "below-target-window",
+            "terminal": true,
+            "valid": true,
+            "reason_code": "valid",
+            "execution": {
+              "status": "valid",
+              "reason_code": "valid",
+              "valid": true,
+              "elapsed_seconds": 2e-05,
+              "timing": {
+                "cpu_raw": {
+                  "start_ticks": "1000000",
+                  "stop_ticks": "1000480",
+                  "delta_ticks": "480",
+                  "timebase_numer": 125,
+                  "timebase_denom": 3
+                }
+              },
+              "requested_workers": 2,
+              "created_workers": 2,
+              "completed_workers": 2,
+              "write_pattern_uint64_decimal": null,
+              "checksum": {
+                "status": "valid",
+                "reason_code": "valid",
+                "checksum_valid": true,
+                "actual_run_checksum": {
+                  "state_a_uint64_decimal": "16101959803632328197",
+                  "state_b_uint64_decimal": "5885100151264972131"
+                }
+              },
+              "validation": {
+                "checks": [
+                  {
+                    "kind": "post-validation-structure",
+                    "applicable": true,
+                    "evaluated": true,
+                    "valid": true,
+                    "reason_code": "valid"
+                  },
+                  {
+                    "kind": "read-checksum",
+                    "applicable": true,
+                    "evaluated": true,
+                    "valid": true,
+                    "reason_code": "valid"
+                  },
+                  {
+                    "kind": "write-final-full-buffer",
+                    "applicable": false,
+                    "evaluated": null,
+                    "valid": null,
+                    "reason_code": "not-applicable"
+                  },
+                  {
+                    "kind": "copy-final-full-buffer",
+                    "applicable": false,
+                    "evaluated": null,
+                    "valid": null,
+                    "reason_code": "not-applicable"
+                  },
+                  {
+                    "kind": "src-readonly-protection",
+                    "applicable": true,
+                    "evaluated": true,
+                    "valid": true,
+                    "reason_code": "valid"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "write": [
+          {
+            "attempt_index": 0,
+            "target": "main_memory",
+            "operation": "write",
+            "plan_ref": 1,
+            "purpose": "frozen_measurement_warmup",
+            "duration_quality": "below-target-window",
+            "terminal": true,
+            "valid": true,
+            "reason_code": "valid",
+            "execution": {
+              "status": "valid",
+              "reason_code": "valid",
+              "valid": true,
+              "elapsed_seconds": 2e-05,
+              "timing": {
+                "cpu_raw": {
+                  "start_ticks": "1000980",
+                  "stop_ticks": "1001460",
+                  "delta_ticks": "480",
+                  "timebase_numer": 125,
+                  "timebase_denom": 3
+                }
+              },
+              "requested_workers": 2,
+              "created_workers": 2,
+              "completed_workers": 2,
+              "write_pattern_uint64_decimal": "8962743273476245361",
+              "checksum": {
+                "status": "not_applicable",
+                "reason_code": "not-applicable",
+                "checksum_valid": null,
+                "actual_run_checksum": null
+              },
+              "validation": {
+                "checks": [
+                  {
+                    "kind": "post-validation-structure",
+                    "applicable": true,
+                    "evaluated": true,
+                    "valid": true,
+                    "reason_code": "valid"
+                  },
+                  {
+                    "kind": "read-checksum",
+                    "applicable": false,
+                    "evaluated": null,
+                    "valid": null,
+                    "reason_code": "not-applicable"
+                  },
+                  {
+                    "kind": "write-final-full-buffer",
+                    "applicable": true,
+                    "evaluated": true,
+                    "valid": true,
+                    "reason_code": "valid"
+                  },
+                  {
+                    "kind": "copy-final-full-buffer",
+                    "applicable": false,
+                    "evaluated": null,
+                    "valid": null,
+                    "reason_code": "not-applicable"
+                  },
+                  {
+                    "kind": "src-readonly-protection",
+                    "applicable": false,
+                    "evaluated": null,
+                    "valid": null,
+                    "reason_code": "not-applicable"
+                  }
+                ]
+              },
+              "attempt_seed_uint64_decimal": "10209487806081079554"
+            }
+          }
+        ],
+        "copy": [
+          {
+            "attempt_index": 0,
+            "target": "main_memory",
+            "operation": "copy",
+            "plan_ref": 2,
+            "purpose": "frozen_measurement_warmup",
+            "duration_quality": "below-target-window",
+            "terminal": true,
+            "valid": true,
+            "reason_code": "valid",
+            "execution": {
+              "status": "valid",
+              "reason_code": "valid",
+              "valid": true,
+              "elapsed_seconds": 2e-05,
+              "timing": {
+                "cpu_raw": {
+                  "start_ticks": "1001960",
+                  "stop_ticks": "1002440",
+                  "delta_ticks": "480",
+                  "timebase_numer": 125,
+                  "timebase_denom": 3
+                }
+              },
+              "requested_workers": 2,
+              "created_workers": 2,
+              "completed_workers": 2,
+              "write_pattern_uint64_decimal": null,
+              "checksum": {
+                "status": "not_applicable",
+                "reason_code": "not-applicable",
+                "checksum_valid": null,
+                "actual_run_checksum": null
+              },
+              "validation": {
+                "checks": [
+                  {
+                    "kind": "post-validation-structure",
+                    "applicable": true,
+                    "evaluated": true,
+                    "valid": true,
+                    "reason_code": "valid"
+                  },
+                  {
+                    "kind": "read-checksum",
+                    "applicable": false,
+                    "evaluated": null,
+                    "valid": null,
+                    "reason_code": "not-applicable"
+                  },
+                  {
+                    "kind": "write-final-full-buffer",
+                    "applicable": false,
+                    "evaluated": null,
+                    "valid": null,
+                    "reason_code": "not-applicable"
+                  },
+                  {
+                    "kind": "copy-final-full-buffer",
+                    "applicable": true,
+                    "evaluated": true,
+                    "valid": true,
+                    "reason_code": "valid"
+                  },
+                  {
+                    "kind": "src-readonly-protection",
+                    "applicable": true,
+                    "evaluated": true,
+                    "valid": true,
+                    "reason_code": "valid"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "custom": {
+        "read": [
+          {
+            "attempt_index": 0,
+            "target": "custom",
+            "operation": "read",
+            "plan_ref": 3,
+            "purpose": "frozen_measurement_warmup",
+            "duration_quality": "below-target-window",
+            "terminal": true,
+            "valid": true,
+            "reason_code": "valid",
+            "execution": {
+              "status": "valid",
+              "reason_code": "valid",
+              "valid": true,
+              "elapsed_seconds": 5e-06,
+              "timing": {
+                "cpu_raw": {
+                  "start_ticks": "1002940",
+                  "stop_ticks": "1003060",
+                  "delta_ticks": "120",
+                  "timebase_numer": 125,
+                  "timebase_denom": 3
+                }
+              },
+              "requested_workers": 2,
+              "created_workers": 2,
+              "completed_workers": 2,
+              "write_pattern_uint64_decimal": null,
+              "checksum": {
+                "status": "valid",
+                "reason_code": "valid",
+                "checksum_valid": true,
+                "actual_run_checksum": {
+                  "state_a_uint64_decimal": "16254755348454622381",
+                  "state_b_uint64_decimal": "12031479412020914307"
+                }
+              },
+              "validation": {
+                "checks": [
+                  {
+                    "kind": "post-validation-structure",
+                    "applicable": true,
+                    "evaluated": true,
+                    "valid": true,
+                    "reason_code": "valid"
+                  },
+                  {
+                    "kind": "read-checksum",
+                    "applicable": true,
+                    "evaluated": true,
+                    "valid": true,
+                    "reason_code": "valid"
+                  },
+                  {
+                    "kind": "write-final-full-buffer",
+                    "applicable": false,
+                    "evaluated": null,
+                    "valid": null,
+                    "reason_code": "not-applicable"
+                  },
+                  {
+                    "kind": "copy-final-full-buffer",
+                    "applicable": false,
+                    "evaluated": null,
+                    "valid": null,
+                    "reason_code": "not-applicable"
+                  },
+                  {
+                    "kind": "src-readonly-protection",
+                    "applicable": true,
+                    "evaluated": true,
+                    "valid": true,
+                    "reason_code": "valid"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "write": [
+          {
+            "attempt_index": 0,
+            "target": "custom",
+            "operation": "write",
+            "plan_ref": 4,
+            "purpose": "frozen_measurement_warmup",
+            "duration_quality": "below-target-window",
+            "terminal": true,
+            "valid": true,
+            "reason_code": "valid",
+            "execution": {
+              "status": "valid",
+              "reason_code": "valid",
+              "valid": true,
+              "elapsed_seconds": 5e-06,
+              "timing": {
+                "cpu_raw": {
+                  "start_ticks": "1003560",
+                  "stop_ticks": "1003680",
+                  "delta_ticks": "120",
+                  "timebase_numer": 125,
+                  "timebase_denom": 3
+                }
+              },
+              "requested_workers": 2,
+              "created_workers": 2,
+              "completed_workers": 2,
+              "write_pattern_uint64_decimal": "7160120184411754859",
+              "checksum": {
+                "status": "not_applicable",
+                "reason_code": "not-applicable",
+                "checksum_valid": null,
+                "actual_run_checksum": null
+              },
+              "validation": {
+                "checks": [
+                  {
+                    "kind": "post-validation-structure",
+                    "applicable": true,
+                    "evaluated": true,
+                    "valid": true,
+                    "reason_code": "valid"
+                  },
+                  {
+                    "kind": "read-checksum",
+                    "applicable": false,
+                    "evaluated": null,
+                    "valid": null,
+                    "reason_code": "not-applicable"
+                  },
+                  {
+                    "kind": "write-final-full-buffer",
+                    "applicable": true,
+                    "evaluated": true,
+                    "valid": true,
+                    "reason_code": "valid"
+                  },
+                  {
+                    "kind": "copy-final-full-buffer",
+                    "applicable": false,
+                    "evaluated": null,
+                    "valid": null,
+                    "reason_code": "not-applicable"
+                  },
+                  {
+                    "kind": "src-readonly-protection",
+                    "applicable": false,
+                    "evaluated": null,
+                    "valid": null,
+                    "reason_code": "not-applicable"
+                  }
+                ]
+              },
+              "attempt_seed_uint64_decimal": "15857173204551025080"
+            }
+          }
+        ],
+        "copy": [
+          {
+            "attempt_index": 0,
+            "target": "custom",
+            "operation": "copy",
+            "plan_ref": 5,
+            "purpose": "frozen_measurement_warmup",
+            "duration_quality": "below-target-window",
+            "terminal": true,
+            "valid": true,
+            "reason_code": "valid",
+            "execution": {
+              "status": "valid",
+              "reason_code": "valid",
+              "valid": true,
+              "elapsed_seconds": 5e-06,
+              "timing": {
+                "cpu_raw": {
+                  "start_ticks": "1004180",
+                  "stop_ticks": "1004300",
+                  "delta_ticks": "120",
+                  "timebase_numer": 125,
+                  "timebase_denom": 3
+                }
+              },
+              "requested_workers": 2,
+              "created_workers": 2,
+              "completed_workers": 2,
+              "write_pattern_uint64_decimal": null,
+              "checksum": {
+                "status": "not_applicable",
+                "reason_code": "not-applicable",
+                "checksum_valid": null,
+                "actual_run_checksum": null
+              },
+              "validation": {
+                "checks": [
+                  {
+                    "kind": "post-validation-structure",
+                    "applicable": true,
+                    "evaluated": true,
+                    "valid": true,
+                    "reason_code": "valid"
+                  },
+                  {
+                    "kind": "read-checksum",
+                    "applicable": false,
+                    "evaluated": null,
+                    "valid": null,
+                    "reason_code": "not-applicable"
+                  },
+                  {
+                    "kind": "write-final-full-buffer",
+                    "applicable": false,
+                    "evaluated": null,
+                    "valid": null,
+                    "reason_code": "not-applicable"
+                  },
+                  {
+                    "kind": "copy-final-full-buffer",
+                    "applicable": true,
+                    "evaluated": true,
+                    "valid": true,
+                    "reason_code": "valid"
+                  },
+                  {
+                    "kind": "src-readonly-protection",
+                    "applicable": true,
+                    "evaluated": true,
+                    "valid": true,
+                    "reason_code": "valid"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "measurements": [
+    {
+      "measurement_id": 0,
+      "plan_ref": 0,
+      "target": "main_memory",
+      "operation": "read",
+      "loop_index": 0,
+      "target_order_position": 0,
+      "operation_order_position": 0,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 2,
+      "completed_exact_payload_bytes": "2097152",
+      "bandwidth_gb_s": 100.663296,
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "requested_workers": 2,
+        "created_workers": 2,
+        "completed_workers": 2,
+        "write_pattern_uint64_decimal": null,
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 2.0833333333333333e-05,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "1004800",
+            "stop_ticks": "1005300",
+            "delta_ticks": "500",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "read-checksum",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "write-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "copy-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "src-readonly-protection",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            }
+          ]
+        }
+      },
+      "checksum": {
+        "status": "valid",
+        "reason_code": "valid",
+        "checksum_valid": true,
+        "actual_worker_checksums": [
+          {
+            "worker_index": 0,
+            "state_a_uint64_decimal": "4496712486158770416",
+            "state_b_uint64_decimal": "12710370997518795670",
+            "exact_bytes_read": "1048576",
+            "pass_count_uint64_decimal": "2"
+          },
+          {
+            "worker_index": 1,
+            "state_a_uint64_decimal": "12857017839804703010",
+            "state_b_uint64_decimal": "18341941466583006022",
+            "exact_bytes_read": "1048576",
+            "pass_count_uint64_decimal": "2"
+          }
+        ],
+        "actual_run_checksum": {
+          "state_a_uint64_decimal": "16101959803632328197",
+          "state_b_uint64_decimal": "5885100151264972131"
+        }
+      }
+    },
+    {
+      "measurement_id": 1,
+      "plan_ref": 1,
+      "target": "main_memory",
+      "operation": "write",
+      "loop_index": 0,
+      "target_order_position": 0,
+      "operation_order_position": 1,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 2,
+      "completed_exact_payload_bytes": "2097152",
+      "bandwidth_gb_s": 100.663296,
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "requested_workers": 2,
+        "created_workers": 2,
+        "completed_workers": 2,
+        "write_pattern_uint64_decimal": "15647248908829705001",
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 2.0833333333333333e-05,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "1005800",
+            "stop_ticks": "1006300",
+            "delta_ticks": "500",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "read-checksum",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "write-final-full-buffer",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "copy-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "src-readonly-protection",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            }
+          ]
+        },
+        "attempt_seed_uint64_decimal": "2000849264977030816"
+      },
+      "checksum": {
+        "status": "not_applicable",
+        "reason_code": "not-applicable",
+        "checksum_valid": null,
+        "actual_worker_checksums": null,
+        "actual_run_checksum": null
+      }
+    },
+    {
+      "measurement_id": 2,
+      "plan_ref": 2,
+      "target": "main_memory",
+      "operation": "copy",
+      "loop_index": 0,
+      "target_order_position": 0,
+      "operation_order_position": 2,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 2,
+      "completed_exact_payload_bytes": "4194304",
+      "bandwidth_gb_s": 100.663296,
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "requested_workers": 2,
+        "created_workers": 2,
+        "completed_workers": 2,
+        "write_pattern_uint64_decimal": null,
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 4.1666666666666665e-05,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "1006800",
+            "stop_ticks": "1007800",
+            "delta_ticks": "1000",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "read-checksum",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "write-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "copy-final-full-buffer",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "src-readonly-protection",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            }
+          ]
+        }
+      },
+      "checksum": {
+        "status": "not_applicable",
+        "reason_code": "not-applicable",
+        "checksum_valid": null,
+        "actual_worker_checksums": null,
+        "actual_run_checksum": null
+      }
+    },
+    {
+      "measurement_id": 3,
+      "plan_ref": 3,
+      "target": "custom",
+      "operation": "read",
+      "loop_index": 0,
+      "target_order_position": 1,
+      "operation_order_position": 0,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 2,
+      "completed_exact_payload_bytes": "32768",
+      "bandwidth_gb_s": 7.86432,
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "requested_workers": 2,
+        "created_workers": 2,
+        "completed_workers": 2,
+        "write_pattern_uint64_decimal": null,
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 4.166666666666667e-06,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "1008300",
+            "stop_ticks": "1008400",
+            "delta_ticks": "100",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "read-checksum",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "write-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "copy-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "src-readonly-protection",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            }
+          ]
+        }
+      },
+      "checksum": {
+        "status": "valid",
+        "reason_code": "valid",
+        "checksum_valid": true,
+        "actual_worker_checksums": [
+          {
+            "worker_index": 0,
+            "state_a_uint64_decimal": "2549519462541114712",
+            "state_b_uint64_decimal": "12837098236826467256",
+            "exact_bytes_read": "16384",
+            "pass_count_uint64_decimal": "2"
+          },
+          {
+            "worker_index": 1,
+            "state_a_uint64_decimal": "2332905867646097307",
+            "state_b_uint64_decimal": "7060337632601898021",
+            "exact_bytes_read": "16384",
+            "pass_count_uint64_decimal": "2"
+          }
+        ],
+        "actual_run_checksum": {
+          "state_a_uint64_decimal": "16254755348454622381",
+          "state_b_uint64_decimal": "12031479412020914307"
+        }
+      }
+    },
+    {
+      "measurement_id": 4,
+      "plan_ref": 4,
+      "target": "custom",
+      "operation": "write",
+      "loop_index": 0,
+      "target_order_position": 1,
+      "operation_order_position": 1,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 2,
+      "completed_exact_payload_bytes": "32768",
+      "bandwidth_gb_s": 7.86432,
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "requested_workers": 2,
+        "created_workers": 2,
+        "completed_workers": 2,
+        "write_pattern_uint64_decimal": "1663405334700286913",
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 4.166666666666667e-06,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "1008900",
+            "stop_ticks": "1009000",
+            "delta_ticks": "100",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "read-checksum",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "write-final-full-buffer",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "copy-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "src-readonly-protection",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            }
+          ]
+        },
+        "attempt_seed_uint64_decimal": "2843682443242441811"
+      },
+      "checksum": {
+        "status": "not_applicable",
+        "reason_code": "not-applicable",
+        "checksum_valid": null,
+        "actual_worker_checksums": null,
+        "actual_run_checksum": null
+      }
+    },
+    {
+      "measurement_id": 5,
+      "plan_ref": 5,
+      "target": "custom",
+      "operation": "copy",
+      "loop_index": 0,
+      "target_order_position": 1,
+      "operation_order_position": 2,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 2,
+      "completed_exact_payload_bytes": "65536",
+      "bandwidth_gb_s": 7.86432,
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "requested_workers": 2,
+        "created_workers": 2,
+        "completed_workers": 2,
+        "write_pattern_uint64_decimal": null,
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 8.333333333333334e-06,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "1009500",
+            "stop_ticks": "1009700",
+            "delta_ticks": "200",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "read-checksum",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "write-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "copy-final-full-buffer",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "src-readonly-protection",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            }
+          ]
+        }
+      },
+      "checksum": {
+        "status": "not_applicable",
+        "reason_code": "not-applicable",
+        "checksum_valid": null,
+        "actual_worker_checksums": null,
+        "actual_run_checksum": null
+      }
+    },
+    {
+      "measurement_id": 6,
+      "plan_ref": 4,
+      "target": "custom",
+      "operation": "write",
+      "loop_index": 1,
+      "target_order_position": 0,
+      "operation_order_position": 0,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 2,
+      "completed_exact_payload_bytes": "32768",
+      "bandwidth_gb_s": 7.5618461538461546,
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "requested_workers": 2,
+        "created_workers": 2,
+        "completed_workers": 2,
+        "write_pattern_uint64_decimal": "150926295801045851",
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 4.333333333333333e-06,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "1010200",
+            "stop_ticks": "1010304",
+            "delta_ticks": "104",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "read-checksum",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "write-final-full-buffer",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "copy-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "src-readonly-protection",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            }
+          ]
+        },
+        "attempt_seed_uint64_decimal": "1747779758178170299"
+      },
+      "checksum": {
+        "status": "not_applicable",
+        "reason_code": "not-applicable",
+        "checksum_valid": null,
+        "actual_worker_checksums": null,
+        "actual_run_checksum": null
+      }
+    },
+    {
+      "measurement_id": 7,
+      "plan_ref": 5,
+      "target": "custom",
+      "operation": "copy",
+      "loop_index": 1,
+      "target_order_position": 0,
+      "operation_order_position": 1,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 2,
+      "completed_exact_payload_bytes": "65536",
+      "bandwidth_gb_s": 7.5618461538461546,
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "requested_workers": 2,
+        "created_workers": 2,
+        "completed_workers": 2,
+        "write_pattern_uint64_decimal": null,
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 8.666666666666666e-06,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "1010804",
+            "stop_ticks": "1011012",
+            "delta_ticks": "208",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "read-checksum",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "write-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "copy-final-full-buffer",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "src-readonly-protection",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            }
+          ]
+        }
+      },
+      "checksum": {
+        "status": "not_applicable",
+        "reason_code": "not-applicable",
+        "checksum_valid": null,
+        "actual_worker_checksums": null,
+        "actual_run_checksum": null
+      }
+    },
+    {
+      "measurement_id": 8,
+      "plan_ref": 3,
+      "target": "custom",
+      "operation": "read",
+      "loop_index": 1,
+      "target_order_position": 0,
+      "operation_order_position": 2,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 2,
+      "completed_exact_payload_bytes": "32768",
+      "bandwidth_gb_s": 7.5618461538461546,
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "requested_workers": 2,
+        "created_workers": 2,
+        "completed_workers": 2,
+        "write_pattern_uint64_decimal": null,
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 4.333333333333333e-06,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "1011512",
+            "stop_ticks": "1011616",
+            "delta_ticks": "104",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "read-checksum",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "write-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "copy-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "src-readonly-protection",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            }
+          ]
+        }
+      },
+      "checksum": {
+        "status": "valid",
+        "reason_code": "valid",
+        "checksum_valid": true,
+        "actual_worker_checksums": [
+          {
+            "worker_index": 0,
+            "state_a_uint64_decimal": "2549519462541114712",
+            "state_b_uint64_decimal": "12837098236826467256",
+            "exact_bytes_read": "16384",
+            "pass_count_uint64_decimal": "2"
+          },
+          {
+            "worker_index": 1,
+            "state_a_uint64_decimal": "2332905867646097307",
+            "state_b_uint64_decimal": "7060337632601898021",
+            "exact_bytes_read": "16384",
+            "pass_count_uint64_decimal": "2"
+          }
+        ],
+        "actual_run_checksum": {
+          "state_a_uint64_decimal": "16254755348454622381",
+          "state_b_uint64_decimal": "12031479412020914307"
+        }
+      }
+    },
+    {
+      "measurement_id": 9,
+      "plan_ref": 1,
+      "target": "main_memory",
+      "operation": "write",
+      "loop_index": 1,
+      "target_order_position": 1,
+      "operation_order_position": 0,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 2,
+      "completed_exact_payload_bytes": "2097152",
+      "bandwidth_gb_s": 96.79163076923078,
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "requested_workers": 2,
+        "created_workers": 2,
+        "completed_workers": 2,
+        "write_pattern_uint64_decimal": "4301802128394808303",
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 2.1666666666666667e-05,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "1012116",
+            "stop_ticks": "1012636",
+            "delta_ticks": "520",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "read-checksum",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "write-final-full-buffer",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "copy-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "src-readonly-protection",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            }
+          ]
+        },
+        "attempt_seed_uint64_decimal": "5011188328249424359"
+      },
+      "checksum": {
+        "status": "not_applicable",
+        "reason_code": "not-applicable",
+        "checksum_valid": null,
+        "actual_worker_checksums": null,
+        "actual_run_checksum": null
+      }
+    },
+    {
+      "measurement_id": 10,
+      "plan_ref": 2,
+      "target": "main_memory",
+      "operation": "copy",
+      "loop_index": 1,
+      "target_order_position": 1,
+      "operation_order_position": 1,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 2,
+      "completed_exact_payload_bytes": "4194304",
+      "bandwidth_gb_s": 96.79163076923078,
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "requested_workers": 2,
+        "created_workers": 2,
+        "completed_workers": 2,
+        "write_pattern_uint64_decimal": null,
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 4.3333333333333334e-05,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "1013136",
+            "stop_ticks": "1014176",
+            "delta_ticks": "1040",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "read-checksum",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "write-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "copy-final-full-buffer",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "src-readonly-protection",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            }
+          ]
+        }
+      },
+      "checksum": {
+        "status": "not_applicable",
+        "reason_code": "not-applicable",
+        "checksum_valid": null,
+        "actual_worker_checksums": null,
+        "actual_run_checksum": null
+      }
+    },
+    {
+      "measurement_id": 11,
+      "plan_ref": 0,
+      "target": "main_memory",
+      "operation": "read",
+      "loop_index": 1,
+      "target_order_position": 1,
+      "operation_order_position": 2,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 2,
+      "completed_exact_payload_bytes": "2097152",
+      "bandwidth_gb_s": 96.79163076923078,
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "requested_workers": 2,
+        "created_workers": 2,
+        "completed_workers": 2,
+        "write_pattern_uint64_decimal": null,
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 2.1666666666666667e-05,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "1014676",
+            "stop_ticks": "1015196",
+            "delta_ticks": "520",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "read-checksum",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "write-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "copy-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "src-readonly-protection",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            }
+          ]
+        }
+      },
+      "checksum": {
+        "status": "valid",
+        "reason_code": "valid",
+        "checksum_valid": true,
+        "actual_worker_checksums": [
+          {
+            "worker_index": 0,
+            "state_a_uint64_decimal": "4496712486158770416",
+            "state_b_uint64_decimal": "12710370997518795670",
+            "exact_bytes_read": "1048576",
+            "pass_count_uint64_decimal": "2"
+          },
+          {
+            "worker_index": 1,
+            "state_a_uint64_decimal": "12857017839804703010",
+            "state_b_uint64_decimal": "18341941466583006022",
+            "exact_bytes_read": "1048576",
+            "pass_count_uint64_decimal": "2"
+          }
+        ],
+        "actual_run_checksum": {
+          "state_a_uint64_decimal": "16101959803632328197",
+          "state_b_uint64_decimal": "5885100151264972131"
+        }
+      }
+    },
+    {
+      "measurement_id": 12,
+      "plan_ref": 2,
+      "target": "main_memory",
+      "operation": "copy",
+      "loop_index": 2,
+      "target_order_position": 0,
+      "operation_order_position": 0,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 2,
+      "completed_exact_payload_bytes": "4194304",
+      "bandwidth_gb_s": 102.71764897959183,
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "requested_workers": 2,
+        "created_workers": 2,
+        "completed_workers": 2,
+        "write_pattern_uint64_decimal": null,
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 4.0833333333333334e-05,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "1015696",
+            "stop_ticks": "1016676",
+            "delta_ticks": "980",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "read-checksum",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "write-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "copy-final-full-buffer",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "src-readonly-protection",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            }
+          ]
+        }
+      },
+      "checksum": {
+        "status": "not_applicable",
+        "reason_code": "not-applicable",
+        "checksum_valid": null,
+        "actual_worker_checksums": null,
+        "actual_run_checksum": null
+      }
+    },
+    {
+      "measurement_id": 13,
+      "plan_ref": 0,
+      "target": "main_memory",
+      "operation": "read",
+      "loop_index": 2,
+      "target_order_position": 0,
+      "operation_order_position": 1,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 2,
+      "completed_exact_payload_bytes": "2097152",
+      "bandwidth_gb_s": 102.71764897959183,
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "requested_workers": 2,
+        "created_workers": 2,
+        "completed_workers": 2,
+        "write_pattern_uint64_decimal": null,
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 2.0416666666666667e-05,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "1017176",
+            "stop_ticks": "1017666",
+            "delta_ticks": "490",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "read-checksum",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "write-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "copy-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "src-readonly-protection",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            }
+          ]
+        }
+      },
+      "checksum": {
+        "status": "valid",
+        "reason_code": "valid",
+        "checksum_valid": true,
+        "actual_worker_checksums": [
+          {
+            "worker_index": 0,
+            "state_a_uint64_decimal": "4496712486158770416",
+            "state_b_uint64_decimal": "12710370997518795670",
+            "exact_bytes_read": "1048576",
+            "pass_count_uint64_decimal": "2"
+          },
+          {
+            "worker_index": 1,
+            "state_a_uint64_decimal": "12857017839804703010",
+            "state_b_uint64_decimal": "18341941466583006022",
+            "exact_bytes_read": "1048576",
+            "pass_count_uint64_decimal": "2"
+          }
+        ],
+        "actual_run_checksum": {
+          "state_a_uint64_decimal": "16101959803632328197",
+          "state_b_uint64_decimal": "5885100151264972131"
+        }
+      }
+    },
+    {
+      "measurement_id": 14,
+      "plan_ref": 1,
+      "target": "main_memory",
+      "operation": "write",
+      "loop_index": 2,
+      "target_order_position": 0,
+      "operation_order_position": 2,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 2,
+      "completed_exact_payload_bytes": "2097152",
+      "bandwidth_gb_s": 102.71764897959183,
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "requested_workers": 2,
+        "created_workers": 2,
+        "completed_workers": 2,
+        "write_pattern_uint64_decimal": "16656449138798948615",
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 2.0416666666666667e-05,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "1018166",
+            "stop_ticks": "1018656",
+            "delta_ticks": "490",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "read-checksum",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "write-final-full-buffer",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "copy-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "src-readonly-protection",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            }
+          ]
+        },
+        "attempt_seed_uint64_decimal": "8768920788362751648"
+      },
+      "checksum": {
+        "status": "not_applicable",
+        "reason_code": "not-applicable",
+        "checksum_valid": null,
+        "actual_worker_checksums": null,
+        "actual_run_checksum": null
+      }
+    },
+    {
+      "measurement_id": 15,
+      "plan_ref": 5,
+      "target": "custom",
+      "operation": "copy",
+      "loop_index": 2,
+      "target_order_position": 1,
+      "operation_order_position": 0,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 2,
+      "completed_exact_payload_bytes": "65536",
+      "bandwidth_gb_s": 8.024816326530612,
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "requested_workers": 2,
+        "created_workers": 2,
+        "completed_workers": 2,
+        "write_pattern_uint64_decimal": null,
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 8.166666666666668e-06,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "1019156",
+            "stop_ticks": "1019352",
+            "delta_ticks": "196",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "read-checksum",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "write-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "copy-final-full-buffer",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "src-readonly-protection",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            }
+          ]
+        }
+      },
+      "checksum": {
+        "status": "not_applicable",
+        "reason_code": "not-applicable",
+        "checksum_valid": null,
+        "actual_worker_checksums": null,
+        "actual_run_checksum": null
+      }
+    },
+    {
+      "measurement_id": 16,
+      "plan_ref": 3,
+      "target": "custom",
+      "operation": "read",
+      "loop_index": 2,
+      "target_order_position": 1,
+      "operation_order_position": 1,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 2,
+      "completed_exact_payload_bytes": "32768",
+      "bandwidth_gb_s": 8.024816326530612,
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "requested_workers": 2,
+        "created_workers": 2,
+        "completed_workers": 2,
+        "write_pattern_uint64_decimal": null,
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 4.083333333333334e-06,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "1019852",
+            "stop_ticks": "1019950",
+            "delta_ticks": "98",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "read-checksum",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "write-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "copy-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "src-readonly-protection",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            }
+          ]
+        }
+      },
+      "checksum": {
+        "status": "valid",
+        "reason_code": "valid",
+        "checksum_valid": true,
+        "actual_worker_checksums": [
+          {
+            "worker_index": 0,
+            "state_a_uint64_decimal": "2549519462541114712",
+            "state_b_uint64_decimal": "12837098236826467256",
+            "exact_bytes_read": "16384",
+            "pass_count_uint64_decimal": "2"
+          },
+          {
+            "worker_index": 1,
+            "state_a_uint64_decimal": "2332905867646097307",
+            "state_b_uint64_decimal": "7060337632601898021",
+            "exact_bytes_read": "16384",
+            "pass_count_uint64_decimal": "2"
+          }
+        ],
+        "actual_run_checksum": {
+          "state_a_uint64_decimal": "16254755348454622381",
+          "state_b_uint64_decimal": "12031479412020914307"
+        }
+      }
+    },
+    {
+      "measurement_id": 17,
+      "plan_ref": 4,
+      "target": "custom",
+      "operation": "write",
+      "loop_index": 2,
+      "target_order_position": 1,
+      "operation_order_position": 2,
+      "status": "measured",
+      "reason_code": "measured",
+      "attempted": true,
+      "completed_passes": 2,
+      "completed_exact_payload_bytes": "32768",
+      "bandwidth_gb_s": 8.024816326530612,
+      "execution": {
+        "status": "valid",
+        "reason_code": "valid",
+        "valid": true,
+        "requested_workers": 2,
+        "created_workers": 2,
+        "completed_workers": 2,
+        "write_pattern_uint64_decimal": "15470834357330263587",
+        "timing": {
+          "evaluated": true,
+          "valid": true,
+          "elapsed_seconds": 4.083333333333334e-06,
+          "diagnostic_elapsed_seconds": null,
+          "cpu_raw": {
+            "start_ticks": "1020450",
+            "stop_ticks": "1020548",
+            "delta_ticks": "98",
+            "timebase_numer": 125,
+            "timebase_denom": 3
+          }
+        },
+        "validation": {
+          "checks": [
+            {
+              "kind": "post-validation-structure",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "read-checksum",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "write-final-full-buffer",
+              "applicable": true,
+              "evaluated": true,
+              "valid": true,
+              "reason_code": "valid"
+            },
+            {
+              "kind": "copy-final-full-buffer",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            },
+            {
+              "kind": "src-readonly-protection",
+              "applicable": false,
+              "evaluated": null,
+              "valid": null,
+              "reason_code": "not-applicable"
+            }
+          ]
+        },
+        "attempt_seed_uint64_decimal": "1880585008680076290"
+      },
+      "checksum": {
+        "status": "not_applicable",
+        "reason_code": "not-applicable",
+        "checksum_valid": null,
+        "actual_worker_checksums": null,
+        "actual_run_checksum": null
+      }
+    }
+  ],
+  "aggregates": {
+    "targets": {
+      "main_memory": {
+        "read": {
+          "accepted_measurement_ids": [
+            0,
+            11,
+            13
+          ],
+          "value": 100.663296,
+          "statistics": {
+            "sample_count": 3,
+            "average": 100.05752524960754,
+            "min": 96.79163076923078,
+            "max": 102.71764897959183,
+            "median": 100.663296,
+            "p90": 102.30677838367346,
+            "p95": 102.51221368163264,
+            "p99": 102.67656191999998,
+            "stddev": 3.00909315390966,
+            "coefficient_of_variation_pct": 3.007363160744837,
+            "median_absolute_deviation": 2.054352979591826
+          },
+          "quality": {
+            "repeatability_assessment_available": true,
+            "run_complete": true,
+            "cv_warning_threshold_pct": 5.0,
+            "cv_warning": false
+          }
+        },
+        "write": {
+          "accepted_measurement_ids": [
+            1,
+            9,
+            14
+          ],
+          "value": 100.663296,
+          "statistics": {
+            "sample_count": 3,
+            "average": 100.05752524960754,
+            "min": 96.79163076923078,
+            "max": 102.71764897959183,
+            "median": 100.663296,
+            "p90": 102.30677838367346,
+            "p95": 102.51221368163264,
+            "p99": 102.67656191999998,
+            "stddev": 3.00909315390966,
+            "coefficient_of_variation_pct": 3.007363160744837,
+            "median_absolute_deviation": 2.054352979591826
+          },
+          "quality": {
+            "repeatability_assessment_available": true,
+            "run_complete": true,
+            "cv_warning_threshold_pct": 5.0,
+            "cv_warning": false
+          }
+        },
+        "copy": {
+          "accepted_measurement_ids": [
+            2,
+            10,
+            12
+          ],
+          "value": 100.663296,
+          "statistics": {
+            "sample_count": 3,
+            "average": 100.05752524960754,
+            "min": 96.79163076923078,
+            "max": 102.71764897959183,
+            "median": 100.663296,
+            "p90": 102.30677838367346,
+            "p95": 102.51221368163264,
+            "p99": 102.67656191999998,
+            "stddev": 3.00909315390966,
+            "coefficient_of_variation_pct": 3.007363160744837,
+            "median_absolute_deviation": 2.054352979591826
+          },
+          "quality": {
+            "repeatability_assessment_available": true,
+            "run_complete": true,
+            "cv_warning_threshold_pct": 5.0,
+            "cv_warning": false
+          }
+        }
+      },
+      "custom": {
+        "read": {
+          "accepted_measurement_ids": [
+            3,
+            8,
+            16
+          ],
+          "value": 7.86432,
+          "statistics": {
+            "sample_count": 3,
+            "average": 7.816994160125589,
+            "min": 7.5618461538461546,
+            "max": 8.024816326530612,
+            "median": 7.86432,
+            "p90": 7.992717061224489,
+            "p95": 8.00876669387755,
+            "p99": 8.0216064,
+            "stddev": 0.23508540264919228,
+            "coefficient_of_variation_pct": 3.0073631607448377,
+            "median_absolute_deviation": 0.16049632653061163
+          },
+          "quality": {
+            "repeatability_assessment_available": true,
+            "run_complete": true,
+            "cv_warning_threshold_pct": 5.0,
+            "cv_warning": false
+          }
+        },
+        "write": {
+          "accepted_measurement_ids": [
+            4,
+            6,
+            17
+          ],
+          "value": 7.86432,
+          "statistics": {
+            "sample_count": 3,
+            "average": 7.816994160125589,
+            "min": 7.5618461538461546,
+            "max": 8.024816326530612,
+            "median": 7.86432,
+            "p90": 7.992717061224489,
+            "p95": 8.00876669387755,
+            "p99": 8.0216064,
+            "stddev": 0.23508540264919228,
+            "coefficient_of_variation_pct": 3.0073631607448377,
+            "median_absolute_deviation": 0.16049632653061163
+          },
+          "quality": {
+            "repeatability_assessment_available": true,
+            "run_complete": true,
+            "cv_warning_threshold_pct": 5.0,
+            "cv_warning": false
+          }
+        },
+        "copy": {
+          "accepted_measurement_ids": [
+            5,
+            7,
+            15
+          ],
+          "value": 7.86432,
+          "statistics": {
+            "sample_count": 3,
+            "average": 7.816994160125589,
+            "min": 7.5618461538461546,
+            "max": 8.024816326530612,
+            "median": 7.86432,
+            "p90": 7.992717061224489,
+            "p95": 8.00876669387755,
+            "p99": 8.0216064,
+            "stddev": 0.23508540264919228,
+            "coefficient_of_variation_pct": 3.0073631607448377,
+            "median_absolute_deviation": 0.16049632653061163
+          },
+          "quality": {
+            "repeatability_assessment_available": true,
+            "run_complete": true,
+            "cv_warning_threshold_pct": 5.0,
+            "cv_warning": false
+          }
+        }
+      }
+    }
+  },
+  "status": "complete",
+  "reason_code": "complete",
+  "results_complete": true,
+  "run_accepted": true,
+  "interpretation": {
+    "dram_residency": "unverified",
+    "cache_residency": "unverified",
+    "non_cacheable_requested": false,
+    "non_cacheable_is_best_effort_madvise": true,
+    "single_pass_xor_collision_caveat": "Per-pass read XOR detects single-bit and slice-address errors, but even-parity identical flips within one pass can cancel in 64-bit XOR.",
+    "write_copy_post_validation_verifies_final_state_not_intermediate_passes": true,
+    "comparability_requires": [
+      "same-methodology-version",
+      "same-frozen-work-plan-and-targets",
+      "same-software-version",
+      "sufficiently-similar-hardware",
+      "sufficiently-similar-thermal-and-power-state"
+    ]
+  },
+  "diagnostic": null,
+  "interruption_requested": false,
+  "operation_order_balance_complete": true,
+  "target_order_balance_complete": false,
+  "seeds": {
+    "base_seed_uint64_decimal": "424242",
+    "source": "user",
+    "buffer_domain_seeds": {
+      "main_memory": "12853032350930100478",
+      "custom": "5364175457813105886",
+      "pre_copy_sentinel_uint64_decimal": "5953240118362669119"
+    }
+  },
+  "counters": {
+    "planned_loops": 3,
+    "attempted_loops": 3,
+    "completed_loops": 3,
+    "planned_measurements": 18,
+    "attempted_measurements": 18,
+    "terminal_measurements": 18,
+    "measured_measurements": 18,
+    "planned_passes": "36",
+    "completed_passes": "36",
+    "planned_exact_payload_bytes": "25559040",
+    "completed_exact_payload_bytes": "25559040"
+  },
+  "checkpoint_lifecycle": {
+    "checkpoint_failed": false,
+    "observation_point": "before-current-snapshot-preparation",
+    "prior_file_writer_attempts": 3,
+    "prior_successful_file_writes": 3,
+    "current_request": "terminal",
+    "current_persistence_success": null,
+    "snapshot_interval_loops": 1,
+    "checkpoint_policy": "bounded-loop-snapshots",
+    "file_checkpoint_failure_is_terminal_and_not_retried": true,
+    "stdout_intermediate_checkpoints_are_lazy": true
+  },
+  "loop_records": [
+    {
+      "loop_index": 0,
+      "planned_order": [
+        {
+          "target": "main_memory",
+          "operation": "read"
+        },
+        {
+          "target": "main_memory",
+          "operation": "write"
+        },
+        {
+          "target": "main_memory",
+          "operation": "copy"
+        },
+        {
+          "target": "custom",
+          "operation": "read"
+        },
+        {
+          "target": "custom",
+          "operation": "write"
+        },
+        {
+          "target": "custom",
+          "operation": "copy"
+        }
+      ],
+      "realized_order": [
+        {
+          "target": "main_memory",
+          "operation": "read"
+        },
+        {
+          "target": "main_memory",
+          "operation": "write"
+        },
+        {
+          "target": "main_memory",
+          "operation": "copy"
+        },
+        {
+          "target": "custom",
+          "operation": "read"
+        },
+        {
+          "target": "custom",
+          "operation": "write"
+        },
+        {
+          "target": "custom",
+          "operation": "copy"
+        }
+      ],
+      "realized_order_count": 6,
+      "measurement_indexes": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    },
+    {
+      "loop_index": 1,
+      "planned_order": [
+        {
+          "target": "custom",
+          "operation": "write"
+        },
+        {
+          "target": "custom",
+          "operation": "copy"
+        },
+        {
+          "target": "custom",
+          "operation": "read"
+        },
+        {
+          "target": "main_memory",
+          "operation": "write"
+        },
+        {
+          "target": "main_memory",
+          "operation": "copy"
+        },
+        {
+          "target": "main_memory",
+          "operation": "read"
+        }
+      ],
+      "realized_order": [
+        {
+          "target": "custom",
+          "operation": "write"
+        },
+        {
+          "target": "custom",
+          "operation": "copy"
+        },
+        {
+          "target": "custom",
+          "operation": "read"
+        },
+        {
+          "target": "main_memory",
+          "operation": "write"
+        },
+        {
+          "target": "main_memory",
+          "operation": "copy"
+        },
+        {
+          "target": "main_memory",
+          "operation": "read"
+        }
+      ],
+      "realized_order_count": 6,
+      "measurement_indexes": [
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loop_index": 2,
+      "planned_order": [
+        {
+          "target": "main_memory",
+          "operation": "copy"
+        },
+        {
+          "target": "main_memory",
+          "operation": "read"
+        },
+        {
+          "target": "main_memory",
+          "operation": "write"
+        },
+        {
+          "target": "custom",
+          "operation": "copy"
+        },
+        {
+          "target": "custom",
+          "operation": "read"
+        },
+        {
+          "target": "custom",
+          "operation": "write"
+        }
+      ],
+      "realized_order": [
+        {
+          "target": "main_memory",
+          "operation": "copy"
+        },
+        {
+          "target": "main_memory",
+          "operation": "read"
+        },
+        {
+          "target": "main_memory",
+          "operation": "write"
+        },
+        {
+          "target": "custom",
+          "operation": "copy"
+        },
+        {
+          "target": "custom",
+          "operation": "read"
+        },
+        {
+          "target": "custom",
+          "operation": "write"
+        }
+      ],
+      "realized_order_count": 6,
+      "measurement_indexes": [
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ]
+    }
+  ],
+  "environment": {
+    "processor_name": "Apple M4",
+    "macos_version": "26.6.2",
+    "performance_core_count": 4,
+    "efficiency_core_count": 6,
+    "logical_core_count": 10,
+    "page_size_bytes": "16384",
+    "l1_data_cache_bytes": "131072",
+    "l2_data_cache_bytes": "16777216",
+    "available_memory_bytes": "11587813376",
+    "available_memory_source": "mach-free-plus-inactive-rounded-mib",
+    "main_thread_qos": {
+      "requested": true,
+      "applied": true,
+      "code": 0
+    },
+    "start": {
+      "thermal_state": "nominal",
+      "low_power_mode_available": true,
+      "low_power_mode_enabled": false,
+      "physical_memory_bytes": "25769803776"
+    },
+    "end": {
+      "thermal_state": "nominal",
+      "low_power_mode_available": true,
+      "low_power_mode_enabled": false,
+      "physical_memory_bytes": "25769803776"
+    }
+  },
+  "quality_warnings": []
+}
