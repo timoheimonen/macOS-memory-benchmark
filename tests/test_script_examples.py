@@ -51,7 +51,7 @@ def load_plotter(path: Path, module_name: str):
     return module
 
 
-def make_full_latency_doc(*, cpu_name: str = "Apple M4", version: str = "0.65.0") -> dict:
+def make_full_latency_doc(*, cpu_name: str = "Apple M4", version: str = "0.66.0") -> dict:
     """Build a complete cpu_latency schema-1 document with L1, L2, and locality comparison."""
 
     doc = json.loads(CPU_LATENCY_FIXTURE.read_text(encoding="utf-8"))
@@ -164,7 +164,7 @@ class PlotterEntryPathTest(unittest.TestCase):
             machine_avg = plotter.load_machine_data(CPU_BANDWIDTH_FIXTURE, lat_path, "average")
 
         self.assertEqual(bw_median["cpu_name"], "Apple M4")
-        self.assertEqual(bw_median["version"], "0.65.0")
+        self.assertEqual(bw_median["version"], "0.66.0")
         self.assertAlmostEqual(bw_median["bw_copy"], 100.663296)
         self.assertAlmostEqual(bw_median["bw_read"], 100.663296)
         self.assertAlmostEqual(bw_median["bw_write"], 100.663296)
@@ -179,7 +179,7 @@ class PlotterEntryPathTest(unittest.TestCase):
         self.assertAlmostEqual(lat_avg["global_random"], 94.0)
 
         self.assertEqual(machine_median["cpu_name"], "Apple M4")
-        self.assertEqual(machine_median["version"], "0.65.0")
+        self.assertEqual(machine_median["version"], "0.66.0")
         self.assertAlmostEqual(machine_median["bw_read"], 100.663296)
         self.assertAlmostEqual(machine_median["global_random"], 94.0)
         self.assertAlmostEqual(machine_avg["l2_lat"], 4.30)
@@ -262,7 +262,7 @@ class PlotterEntryPathTest(unittest.TestCase):
         self.assertEqual(len(categories), 4)
         self.assertEqual(latencies, [1.15, 4.20, 82.0, 94.0])
         self.assertAlmostEqual(locality_delta, 12.0)
-        self.assertEqual(version, "0.65.0")
+        self.assertEqual(version, "0.66.0")
 
         self.assertEqual(avg[2], [1.20, 4.30, 83.0, 94.0])
         self.assertAlmostEqual(avg[3], 11.0)
@@ -321,7 +321,7 @@ CPU Latency Mode (schema v1)
 
         def make_mutations(doc: dict, wrong_mode_name: str):
             accepted = json.loads(json.dumps(doc))
-            accepted["software"]["version"] = "0.66.0"
+            accepted["software"]["version"] = "0.67.0"
 
             wrong_schema = json.loads(json.dumps(doc))
             wrong_schema["schema_version"] = 2
@@ -377,9 +377,9 @@ CPU Latency Mode (schema v1)
             lat_acc_path = root / "lat-accepted.json"
             lat_acc_path.write_text(json.dumps(lat_accepted), encoding="utf-8")
 
-            self.assertEqual(cmp_plotter.load_bandwidth_data(bw_acc_path, "median")["version"], "0.66.0")
-            self.assertEqual(cmp_plotter.load_latency_data(lat_acc_path, "median")["version"], "0.66.0")
-            self.assertEqual(hier_plotter.load_latency_data(lat_acc_path, "median")[-1], "0.66.0")
+            self.assertEqual(cmp_plotter.load_bandwidth_data(bw_acc_path, "median")["version"], "0.67.0")
+            self.assertEqual(cmp_plotter.load_latency_data(lat_acc_path, "median")["version"], "0.67.0")
+            self.assertEqual(hier_plotter.load_latency_data(lat_acc_path, "median")[-1], "0.67.0")
 
             for name, data in bw_invalid.items():
                 path = root / f"bw-{name.replace(' ', '-')}.json"

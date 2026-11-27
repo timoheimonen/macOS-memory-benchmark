@@ -9,8 +9,8 @@ authors:
     family-names: "Heimonen"
     orcid: "https://orcid.org/0009-0004-0023-2407"
 
-version: "0.65.0"
-date-released: 2026-11-26
+version: "0.66.0"
+date-released: 2026-11-27
 
 repository-code: "https://github.com/timoheimonen/macOS-memory-benchmark"
 url: "https://github.com/timoheimonen/macOS-memory-benchmark"

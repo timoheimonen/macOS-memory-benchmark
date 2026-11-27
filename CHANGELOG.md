@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.66.0] - 2026-11-27
 
 ### Added
   - **Standalone `-B` / `--cpu-bandwidth` mode (`src/cpu_bandwidth/`, schema 1)**: Added an independent, exact-whitelist audited CPU bandwidth mode (`mode: "cpu_bandwidth"`, `methodology_version: "cpu-bandwidth-v1-arm64-calibrated-seeded-balanced"`, default `--count 3`) measuring main memory, auto-detected L1/L2, or `--cache-size` targets (with `--buffer-size 0` or `--cache-size 0` selective omission) using persistent `PROT_READ` source mappings, O(1) GF(2) seeded source patterns (`cpu-bw-buffer-pattern-v1`), non-cancelling per-pass read checksums (`cpu-bw-read-checksum-v1`), parallel full-buffer post-validation for `write` and `copy` (`pre_copy_sentinel`), raw Mach timing (`cpu_raw`), bounded loop checkpoints (`K=max(1,ceil(count/8))`), `run_accepted` semantics, and schema-1 sweeps over `buffer-size`, `cache-size`, and `threads`.
