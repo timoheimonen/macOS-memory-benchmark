@@ -13,17 +13,19 @@ This document describes the layout of project files, organized by purpose. It is
    - [documents/ — Project documentation](#documents--project-documentation)
 2. [src/ — Source code](#2-src--source-code)
    - [src/asm/](#21-srcasm--arm64-assembly-kernels)
-   - [src/benchmark/](#22-srcbenchmark--benchmarking-infrastructure)
+   - [src/benchmark/](#22-srcbenchmark--core-infrastructure)
    - [src/core/](#23-srccore--core-utilities)
-   - [src/output/](#24-srcoutput--output-layer)
-   - [src/gpu_bandwidth/](#25-srcgpu_bandwidth--metal-gpu-bandwidth)
-   - [src/llm_memory/](#26-srcllm_memory--synthetic-llm-memory-profile)
-   - [src/pattern_benchmark/](#27-srcpattern_benchmark--pattern-access-benchmarks)
-   - [src/warmup/](#28-srcwarmup--pre-benchmark-warm-up)
-   - [src/utils/](#29-srcutils--shared-utilities)
-   - [src/third_party/](#210-srcthird_party--vendored-dependencies)
+   - [src/cpu_bandwidth/](#24-srccpu_bandwidth--standalone-cpu-bandwidth-mode)
+   - [src/cpu_latency/](#25-srccpu_latency--standalone-cpu-latency-mode)
+   - [src/output/](#26-srcoutput--output-layer)
+   - [src/gpu_bandwidth/](#27-srcgpu_bandwidth--metal-gpu-bandwidth)
+   - [src/llm_memory/](#28-srcllm_memory--synthetic-llm-memory-profile)
+   - [src/pattern_benchmark/](#29-srcpattern_benchmark--pattern-access-benchmarks)
+   - [src/warmup/](#210-srcwarmup--pre-benchmark-warm-up)
+   - [src/utils/](#211-srcutils--shared-utilities)
+   - [src/third_party/](#212-srcthird_party--vendored-dependencies)
 3. [tests/ — Test suite](#3-tests--test-suite)
-4. [results/ — Benchmark result data](#4-results--benchmark-result-data)
+4. [results/ — Result data](#4-results--result-data)
 5. [pictures/ — Documentation images](#5-pictures--documentation-images)
 6. [script-examples/ — Run and plotting helpers](#6-script-examples--run-and-plotting-helpers)
 7. [.github/ — GitHub integration](#7-github--github-integration)
@@ -36,7 +38,7 @@ This document describes the layout of project files, organized by purpose. It is
 
 | File | Purpose |
 |---|---|
-| `main.cpp` | Program entry point; handles bare zero-argument help early before timer creation/mode scan, wraps mode selection and argument parsing in exception boundaries, dispatches dedicated LLM/GPU/core-to-core paths before the general parser, rejects modifier-only invocations with no primary mode before output-session setup, and runs the general standard/pattern/TLB and sweep pipelines; each standalone command boundary owns its output-session lifetime |
+| `main.cpp` | Program entry point; handles bare zero-argument help early before timer creation/mode scan, wraps mode selection and argument parsing in exception boundaries, dispatches standalone CPU bandwidth (`-B`), CPU latency (`-L`), LLM (`-M`), GPU (`-G`), and core-to-core (`-C`) paths before the general parser, rejects modifier-only invocations with no primary mode before output-session setup, and runs the pattern (`-P`), TLB (`-T`), and general sweep pipelines; each standalone command boundary owns its output-session lifetime |
 
 ### Build and tooling
 
@@ -68,8 +70,9 @@ This document describes the layout of project files, organized by purpose. It is
 | `documents/MANUAL.md` | Complete user manual: all CLI flags, modes, output formats, and usage examples |
 | `documents/PARAMETER_MATRIX.md` | Mode/flag compatibility, sweep support, and incompatible-option matrix |
 | `documents/TECHNICAL_SPECIFICATION.md` | Internal architecture, data structures, and implementation decisions |
+| `documents/CPU_BANDWIDTH_WHITEPAPER.md` | Whitepaper: audited standalone CPU bandwidth methodology (`-B`/`--cpu-bandwidth`), O(1) GF(2) read checksums, full-buffer validation, schema 1, and independent verifier |
+| `documents/LATENCY_WHITEPAPER.md` | Whitepaper: audited standalone CPU pointer-chase latency methodology (`-L`/`--cpu-latency`), canonical chain hashing, sample windows, `--compare-locality`, schema 1, and independent verifier |
 | `documents/TLB_ANALYSIS_WHITEPAPER.md` | Whitepaper: current TLB analysis methodology, schema, and interpretation limits |
-| `documents/LATENCY_WHITEPAPER.md` | Whitepaper: cache and memory latency measurement methodology |
 | `documents/CORE_TO_CORE_WHITEPAPER.md` | Whitepaper: calibrated two-thread token-handoff methodology, audit schema, and interpretation limits |
 | `documents/GPU_BANDWIDTH_WHITEPAPER.md` | Whitepaper: Metal compute bandwidth methodology, GPU schema 1, validation, capability limits, and maintenance policy |
 | `documents/LLM_MEMORY_PROFILE_WHITEPAPER.md` | Whitepaper: CPU and capability-gated Metal decode/prefill contiguous/paged methodologies, with exact payload formulas, resources, validation, schema 2, checksum evidence limits, and interpretation limits |
@@ -87,11 +90,11 @@ Headers use include paths relative to `src/`
 
 ### 2.1 src/asm/ — ARM64 assembly kernels
 
-Hand-written AArch64 assembly implementing the hot inner loops that must not be rewritten by the compiler. Each `.s` file corresponds to one access pattern or operation type. Standard, cache, latency, pattern, and core-to-core `extern "C"` declarations live in `asm_functions.h`, while the four LLM assembly entrypoints are declared in `src/llm_memory/llm_executor.h`.
+Hand-written AArch64 assembly implementing the hot inner loops that must not be rewritten by the compiler. Each `.s` file corresponds to one access pattern or operation type. CPU bandwidth, cache, latency, pattern, and core-to-core `extern "C"` declarations live in `asm_functions.h`, while the four LLM assembly entrypoints are declared in `src/llm_memory/llm_executor.h`.
 
 | File | Operation |
 |---|---|
-| `asm_functions.h` | `extern "C"` declarations for standard, cache, latency, pattern, and core-to-core assembly functions |
+| `asm_functions.h` | `extern "C"` declarations for bandwidth, cache, latency, pattern, and core-to-core assembly functions |
 | `memory_copy.s` | Sequential forward memory copy (main-memory, non-temporal stores) |
 | `memory_copy_cache.s` | Sequential forward memory copy (cache-focused) |
 | `memory_copy_random.s` | Random-order memory copy |
@@ -102,8 +105,10 @@ Hand-written AArch64 assembly implementing the hot inner loops that must not be 
 | `memory_read_random.s` | Random-order memory read |
 | `memory_read_reverse.s` | Reverse-order memory read |
 | `memory_read_strided.s` | Phase-rotating strided memory read (generic stride parameter) |
-| `memory_write.s` | Sequential forward memory write (main-memory, non-temporal stores) |
-| `memory_write_cache.s` | Sequential forward memory write (cache-focused) |
+| `memory_write.s` | Sequential forward memory write (main-memory, non-temporal zero stores for patterns/warmup) |
+| `memory_write_cache.s` | Sequential forward memory write (cache-focused zero stores for warmup) |
+| `memory_write_pattern.s` | Sequential forward 64-bit arbitrary-pattern memory write (`stnp` 512B main loop + little-endian scalar tail for `--cpu-bandwidth`) |
+| `memory_write_cache_pattern.s` | Sequential forward 64-bit arbitrary-pattern memory write (`stp` 512B cache loop + little-endian scalar tail for `--cpu-bandwidth`) |
 | `memory_write_random.s` | Random-order memory write |
 | `memory_write_reverse.s` | Reverse-order memory write |
 | `memory_write_strided.s` | Phase-rotating strided memory write (generic stride parameter) |
@@ -116,29 +121,19 @@ Hand-written AArch64 assembly implementing the hot inner loops that must not be 
 
 ---
 
-### 2.2 src/benchmark/ — Benchmarking infrastructure
+### 2.2 src/benchmark/ — Core infrastructure
 
-The benchmark subsystem owns the standard CPU pipeline, standalone TLB analysis, core-to-core analysis, and shared sweep execution. Pattern and GPU measurement pipelines live in dedicated subtrees, while reusable statistics and output helpers live under `src/utils/` and `src/output/`.
+The benchmark subsystem owns shared bandwidth/latency test helpers, standalone TLB analysis, core-to-core analysis, parallel thread dispatch, and shared sweep execution. Standalone CPU bandwidth, CPU latency, pattern, GPU, and LLM pipelines live in their dedicated subtrees, while reusable statistics and output helpers live under `src/utils/` and `src/output/`.
 
-#### Bandwidth and latency tests
+#### Shared kernel dispatch and execution infrastructure
 
 | File | Purpose |
 |---|---|
-| `bandwidth_tests.cpp` | Bandwidth measurement: read, write, and copy for main memory and cache levels |
-| `latency_tests.cpp` | Latency measurement: pointer-chase patterns across buffer sizes |
+| `bandwidth_tests.cpp` | Shared parallel read/write/copy kernel dispatch helpers |
+| `latency_tests.cpp` | Pointer-chase kernel dispatch and sample-window execution helpers |
 | `benchmark_tests.h` | Shared declarations for bandwidth and latency test functions |
-| `benchmark_measurement.h` | Shared status-bearing measurement type and value/unavailable helpers |
-
-#### Execution pipeline
-
-| File | Purpose |
-|---|---|
-| `benchmark_executor.h` / `.cpp` | Executes individual benchmark passes (bandwidth and latency) at each cache/memory level; drives the parallel test framework |
-| `benchmark_runner.h` / `.cpp` | Outer loop: runs multiple benchmark iterations, collects result vectors, and invokes the statistics collector |
-| `benchmark_statistics_collector.h` / `.cpp` | Initializes/preallocates statistics storage and accumulates measured per-loop values and latency samples for later aggregation |
-| `benchmark_work_plan.h` / `.cpp` | Pure standard-benchmark work planning, calibration arithmetic, seed derivation, and cyclic scheduling helpers |
-| `parallel_test_framework.h` | Template-based framework for dispatching multi-threaded benchmark work with synchronized start, cache-line-aligned per-thread state, and macOS QoS thread attributes |
-| `sweep_runner.h` / `.cpp` | Shared deterministic sweep executor, completion classification, retained terminal envelopes, and file/lazy-stdout checkpoint dispatch; provides standard/pattern/TLB entry-point orchestration and is called directly by the core-to-core and LLM sweep runners |
+| `parallel_test_framework.h` | Template-based framework for dispatching multi-threaded benchmark work with synchronized start, `MachTimingSnapshot` capture, cache-line-aligned per-thread state, and macOS QoS thread attributes |
+| `sweep_runner.h` / `.cpp` | Shared deterministic sweep executor, completion classification (`SweepNestedMode::{Patterns,TlbAnalysis,CoreToCore,LlmMemory,CpuBandwidth,CpuLatency}`), retained terminal envelopes, and file/lazy-stdout checkpoint dispatch; provides pattern/TLB entry-point orchestration and is called directly by the CPU bandwidth, CPU latency, core-to-core, and LLM sweep runners |
 
 #### TLB analysis mode
 
@@ -167,21 +162,30 @@ The benchmark subsystem owns the standard CPU pipeline, standalone TLB analysis,
 
 ### 2.3 src/core/ — Core utilities
 
-Core infrastructure for configuration, memory management, macOS system introspection, signal handling, and Mach timing.
+Core infrastructure for shared audit provenance/RNG/checkpoints, configuration, memory management, macOS system introspection, signal handling, and Mach timing.
+
+#### src/core/audit/
+
+| File | Purpose |
+|---|---|
+| `build_manifest.h` / `.cpp` | Builds versioned runtime provenance manifests (`build_runtime_provenance_manifest_json`) from embedded build metadata and `binary_sha256` |
+| `checkpoint_policy.h` | Shared bounded loop checkpoint cadence (`K=max(1,ceil(N/8))`) and `checkpoint_lifecycle` JSON builder used by CPU bandwidth, CPU latency, and LLM modes |
+| `deterministic_rng.h` | Shared `splitmix64_next`, `splitmix64_mix`, and descending `splitmix64-fisher-yates-rejection-v1` permutation helpers |
+| `host_environment.h` / `.mm` | Objective-C++ `NSProcessInfo` thermal/Low Power Mode/physical-memory snapshot (`capture_host_environment()`) and streaming executable SHA-256 (`capture_binary_sha256()`) |
 
 #### src/core/config/
 
 | File | Purpose |
 |---|---|
-| `config.h` | `BenchmarkConfig` structure for standard, pattern, standalone TLB, and their common sweep settings; core-to-core, GPU, and LLM use separate config types |
+| `config.h` | `BenchmarkConfig` structure for pattern, standalone TLB, and their common sweep settings; CPU bandwidth, CPU latency, core-to-core, GPU, and LLM use separate config types |
 | `constants.h` | Named constants for CPU/GPU/LLM memory limits, calibration, grid/dispatch/payload guardrails, buffer sizing, and latency access counts |
 | `version.h` | `SOFTVERSION` macro containing the semantic software-release provenance string |
-| `cli_parser.h` / `.cpp` | Shared descriptor-driven CLI option parser (`parse_cli_options`), centralized error formatter (`format_cli_parse_error`), `cli_program_name`, `extract_long_option_name`, `is_known_cli_value_option`, and LP64-safe `parse_strict_nonnegative_ulong` shared by all six primary modes |
-| `mode_selector.h` / `.cpp` | Pure primary-mode scan and conflict detection before mode-specific parsing; routes standard, pattern, TLB, core-to-core, GPU, and LLM deterministically (including `--mode=value`) while skipping one opaque value token for every known space-separated value-taking option across all six modes |
-| `argument_parser.cpp` | Single-pass descriptor-driven parser for standard, pattern, and standalone TLB options into `BenchmarkConfig` (resets config on entry, supports `--option=value`, accepts `-h`/`--help` in TLB mode, defers OS queries and thread capping until after syntactic parsing/help, and honors `ConfigTestHooks` in TLB mode); core-to-core, GPU, and LLM are pre-routed to dedicated parsers |
-| `config_validator.cpp` | Validates parsed standard, pattern, and TLB configurations; enforces required primary mode, incompatible-option checks (`--patterns`, `--only-bandwidth`, `--only-latency`), direct-vs-`--sweep` conflict checks, deferred thread capping (`warning_threads_capped`), and memory limits |
-| `buffer_calculator.cpp` | Derives buffer sizes for each cache/memory level from the validated configuration and detected system parameters |
-| `sweep_utils.h` / `.cpp` | Shared structural sweep parsing (using centralized `Messages::` reasons) and overflow-safe Cartesian run counting used by standard, pattern, TLB, core-to-core, and LLM sweep parsers and runners |
+| `cli_parser.h` / `.cpp` | Shared descriptor-driven CLI option parser (`parse_cli_options`), centralized error formatter (`format_cli_parse_error`), `cli_program_name`, `extract_long_option_name`, `is_known_cli_value_option`, and LP64-safe `parse_strict_nonnegative_ulong` shared by all seven primary modes |
+| `mode_selector.h` / `.cpp` | Pure primary-mode scan and conflict detection before mode-specific parsing; routes all seven primary modes (`CpuBandwidth`, `CpuLatency`, `Patterns`, `AnalyzeTlb`, `AnalyzeCoreToCore`, `GpuBandwidth`, `LlmMemory`, including `--mode=value`) while skipping one opaque value token for every known space-separated value-taking option across all seven modes |
+| `argument_parser.cpp` | Single-pass descriptor-driven parser for pattern (`-P`/`--patterns`) and standalone TLB (`-T`/`--analyze-tlb`) options into `BenchmarkConfig` (resets config on entry, supports `--option=value`, accepts `-h`/`--help` in TLB mode, defers OS queries and thread capping until after syntactic parsing/help, and honors `ConfigTestHooks` in TLB mode); CPU bandwidth, CPU latency, core-to-core, GPU, and LLM are pre-routed to dedicated parsers |
+| `config_validator.cpp` | Validates parsed pattern and TLB configurations; enforces required primary mode, incompatible-option checks (`--patterns`), direct-vs-`--sweep` conflict checks, deferred thread capping (`warning_threads_capped`), and memory limits |
+| `buffer_calculator.cpp` | Derives buffer sizes from the validated configuration and detected system parameters |
+| `sweep_utils.h` / `.cpp` | Shared structural sweep parsing (using centralized `Messages::` reasons) and overflow-safe Cartesian run counting used by CPU bandwidth, CPU latency, pattern, TLB, core-to-core, and LLM sweep parsers and runners |
 
 #### src/core/signal/
 
@@ -193,7 +197,7 @@ Core infrastructure for configuration, memory management, macOS system introspec
 
 | File | Purpose |
 |---|---|
-| `memory_manager.h` / `.cpp` | Low-level normal and cache-discouraging `mmap` allocation; returns RAII `MmapPtr` owners and exposes a test-only mmap-family provider seam |
+| `memory_manager.h` / `.cpp` | Low-level normal and cache-discouraging `mmap` allocation, `AllocatedBufferEvidence` (`madvise`/`mprotect` errno/status), `allocate_buffer_with_evidence`, `protect_buffer_read_only_with_evidence`, RAII `MmapPtr` owners, and a test-only mmap-family provider seam |
 | `buffer_manager.h` | Defines the phase-local `BenchmarkBuffers` and command-local `PatternBuffers` RAII owners |
 | `buffer_allocator.h` / `.cpp` | Atomically allocates the pattern source/destination pair and performs overflow-safe peak-concurrent memory accounting |
 | `buffer_initializer.h` / `.cpp` | Initializes deterministic pattern source data and the zeroed pattern destination before execution |
@@ -211,20 +215,53 @@ Core infrastructure for configuration, memory management, macOS system introspec
 
 | File | Purpose |
 |---|---|
-| `timer.h` / `.cpp` | High-resolution Mach timer with tick/timebase conversion, retained original start/stop/delta snapshots, and a deterministic clock/timebase provider seam |
+| `timer.h` / `.cpp` | High-resolution Mach timer with tick/timebase conversion, retained original start/stop/delta `MachTimingSnapshot` records, and a deterministic clock/timebase provider seam |
 
 ---
 
-### 2.4 src/output/ — Output layer
+### 2.4 src/cpu_bandwidth/ — Standalone CPU bandwidth mode
 
-This subsystem contains shared console messages, standard-benchmark formatters, descriptive-statistics rendering, and JSON serialization. Mode-specific output orchestration can remain beside the corresponding benchmark mode, while user-facing message text is centralized under `messages/`.
+Standalone `-B`/`--cpu-bandwidth` schema-1 implementation (`mode: "cpu_bandwidth"`, `methodology_version: "cpu-bandwidth-v1-arm64-calibrated-seeded-balanced"`), completely decoupled from legacy `BenchmarkConfig`.
+
+| File | Purpose |
+|---|---|
+| `cpu_bandwidth.h` / `.cpp` | Dedicated `CpuBandwidthConfig`, exact 12-option whitelist parser (`cli_parser.h`), target-omission/sweep validation, QoS/signal scope, output-session ownership, and command boundary (`run_cpu_bandwidth_mode`) |
+| `cpu_bandwidth_work_plan.h` / `.cpp` | Target activation (`main_memory`, auto `l1`/`l2`, `custom`), 64-byte worker slice partitioning (`partition_cpu_bandwidth_64b`), SplitMix64 seed derivation, calibration arithmetic, strict `memory_budget` preflight, and `cpu-bandwidth-work-plan-v1` identity |
+| `cpu_bandwidth_oracle.h` / `.cpp` | O(1) GF(2) `src` buffer generator/oracle (`cpu-bw-buffer-pattern-v1`), non-cancelling per-pass read checksum oracle (`cpu-bw-read-checksum-v1`), worker checksum fold, and unique odd `write_pattern` / `pre_copy_sentinel` derivations |
+| `cpu_bandwidth_executor.h` / `.cpp` | Persistent `src`/`dst` mappings, `mprotect(PROT_READ)` on `src`, synchronized worker team barrier + `MachTimingSnapshot`, `memory_write{_cache}_pattern_loop_asm` dispatch, and cold parallel full-buffer `write`/`copy` post-validation (`validation.checks[]`) |
+| `cpu_bandwidth_runner.h` / `.cpp` | Excluded calibration + atomic plan freeze, cyclic Latin-square target/operation schedule, `operation_order_balance_complete` / `target_order_balance_complete`, `K=max(1,ceil(N/8))` bounded checkpoints, and descriptive statistics |
+| `cpu_bandwidth_json.h` / `.cpp` | Schema-1 `cpu_bandwidth` JSON builder (`build_cpu_bandwidth_json`), conservative output-peak estimator, and quality warning collector |
+| `cpu_bandwidth_output.h` / `.cpp` | `-B`/`--cpu-bandwidth` CLI help, configuration banner, and human-readable console summary (`P50`, `min`, `max`, `CV`, `MAD`, `n`) |
+| `cpu_bandwidth_sweep_runner.h` / `.cpp` | Cartesian sweeps over `buffer-size`, `cache-size`, and `threads` using the schema-1 sweep envelope (`SweepNestedMode::CpuBandwidth`) |
+
+---
+
+### 2.5 src/cpu_latency/ — Standalone CPU latency mode
+
+Standalone `-L`/`--cpu-latency` schema-1 implementation (`mode: "cpu_latency"`, `methodology_version: "cpu-latency-v1-arm64-calibrated-seeded-balanced"`), completely decoupled from legacy `BenchmarkConfig`.
+
+| File | Purpose |
+|---|---|
+| `cpu_latency.h` / `.cpp` | Dedicated `CpuLatencyConfig`, exact 16-option whitelist parser (`cli_parser.h`), stride/locality/`--compare-locality`/sweep validation, QoS/signal scope, output-session ownership, and command boundary (`run_cpu_latency_mode`) |
+| `cpu_latency_work_plan.h` / `.cpp` | Target activation (`l1`, `l2`, `custom`, `main_memory`), `--compare-locality` eligibility, SplitMix64 domain seeds, calibration arithmetic, strict `memory_budget` preflight, and `cpu-latency-work-plan-v1` identity |
+| `cpu_latency_chain.h` / `.cpp` | `splitmix64-fisher-yates-rejection-v1` pointer-chain generator (`auto`, `global-random`, `random-box`, `same-random-in-box`, `diff-random-in-box`), canonical `indices[0] == 0` rotation, `chain_permutation_sha256`, and single Hamiltonian-cycle prevalidation |
+| `cpu_latency_executor.h` / `.cpp` | Buffer mapping, chain population + `mprotect(PROT_READ)`, `memory_latency_chase_asm` execution with `MachTimingSnapshot`, `main-final-pointer` verification, and separate continuous sample-window pass with per-window end-pointer checks (`validation.checks[]`) |
+| `cpu_latency_runner.h` / `.cpp` | Excluded calibration + atomic plan freeze, optional 3-round/loop paired `--compare-locality` (`locality_16k` vs `locality_global`), cyclic target rotation, `pooled_sample_distribution`, `K=max(1,ceil(N/8))` bounded checkpoints, and descriptive statistics |
+| `cpu_latency_json.h` / `.cpp` | Schema-1 `cpu_latency` JSON builder (`build_cpu_latency_json`), conservative output-peak estimator, and quality warning collector |
+| `cpu_latency_output.h` / `.cpp` | `-L`/`--cpu-latency` CLI help, configuration banner, and human-readable console summary (`P50`, `min`, `max`, `CV`, `MAD`, `n`, `PooledSamples`, `Locality Comparison`) |
+| `cpu_latency_sweep_runner.h` / `.cpp` | Cartesian sweeps over `buffer-size`, `cache-size`, `latency-tlb-locality-kb`, `latency-stride-bytes`, and `latency-chain-mode` using the schema-1 sweep envelope (`SweepNestedMode::CpuLatency`) |
+
+---
+
+### 2.6 src/output/ — Output layer
+
+This subsystem contains shared console messages, shared CLI help/banner formatters, descriptive-statistics rendering, and JSON serialization for pattern, TLB, and shared session output. Mode-specific output orchestration resides inside each standalone mode (`src/cpu_bandwidth/`, `src/cpu_latency/`, `src/gpu_bandwidth/`, `src/llm_memory/`), while user-facing message text is centralized under `messages/`.
 
 #### src/output/console/
 
 | File | Purpose |
 |---|---|
-| `output_printer.h` / `.cpp` | Prints standard CLI help/banner text, configuration and cache information, and status-aware per-loop standard benchmark results |
-| `statistics.h` / `.cpp` | Coordinates standard multi-loop summary selection, diagnostics, and console output using the shared calculator and renderer |
+| `output_printer.h` / `.cpp` | Prints general CLI help/banner text, pattern configuration/cache information, and pattern benchmark console output |
 | `statistics_renderer.h` / `.cpp` | Renders descriptive-statistics summaries in the canonical field order with shared precision, indentation, and diagnostic controls |
 
 ##### src/output/console/messages/
@@ -243,7 +280,6 @@ All user-facing text strings are centralized here. Each `.cpp` file implements a
 | `info_messages.cpp` | General informational messages |
 | `pattern_messages.cpp` | Pattern benchmark descriptive labels |
 | `program_messages.cpp` | Program banner, usage, and version text |
-| `results_messages.cpp` | Benchmark result formatting strings |
 | `statistics_messages.cpp` | Statistical output labels (e.g., `"Average:"`, `"Median (P50):"`, `"Stddev:"`) |
 | `warning_messages.cpp` | Non-fatal warning messages |
 
@@ -251,17 +287,16 @@ All user-facing text strings are centralized here. Each `.cpp` file implements a
 
 | File | Purpose |
 |---|---|
-| `json_output_api.h` | Public standard/pattern payload builders and the shared atomic-file writer interface; this C++ API is distinct from the process contract in `API.md` |
-| `json_output.cpp` | Builds standard/pattern root payloads, adds timestamp/version metadata, and retains file-save adapters; direct command dispatch can reuse the prebuilt object through `JsonOutputSession` |
-| `json_output_session.h` / `.cpp` | Classifies raw output targets, applies mode-specific file-path policy, lazily dispatches checkpoints, routes command-scoped human stdout, and emits checked final JSON through the retained original stdout buffer; result-producing direct modes and supported sweeps (including CPU and Metal LLM sweeps) use it, along with the direct LLM file-checkpoint/final-stdout lifecycle |
+| `json_output_api.h` | Public pattern payload builders and the shared atomic-file writer interface; this C++ API is distinct from the process contract in `API.md` |
+| `json_output.cpp` | Builds pattern root payloads, adds timestamp/version metadata, and retains file-save adapters; direct command dispatch can reuse the prebuilt object through `JsonOutputSession` |
+| `json_output_session.h` / `.cpp` | Classifies raw output targets, applies mode-specific file-path policy, lazily dispatches checkpoints, routes command-scoped human stdout, and emits checked final JSON through the retained original stdout buffer; all result-producing direct modes and supported sweeps use it |
 | `builder.cpp` | Builds common mode configuration metadata, including resolved chain, seed, calibration, scheduling, and worker policies |
-| `standard.cpp` | Active standard schema-3 serializer for completion state, loop measurements, and main/cache aggregates |
-| `patterns.cpp` | Serializes pattern benchmark results |
+| `patterns.cpp` | Serializes pattern benchmark schema-3 results |
 | `file_writer.cpp` | Atomically writes the completed JSON document to the requested output path, creating parent directories as needed |
 
 ---
 
-### 2.5 src/gpu_bandwidth/ — Metal GPU bandwidth
+### 2.7 src/gpu_bandwidth/ — Metal GPU bandwidth
 
 Standalone GPU schema 1 implementation. The pure C++ planner/runner/result model is isolated from the private
 Objective-C++ Metal backend so deterministic unit tests do not require GPU work.
@@ -278,7 +313,7 @@ Objective-C++ Metal backend so deterministic unit tests do not require GPU work.
 
 ---
 
-### 2.6 src/llm_memory/ — Synthetic LLM memory profile
+### 2.8 src/llm_memory/ — Synthetic LLM memory profile
 
 Standalone schema-2 implementation with eight active backend/phase/layout profiles: four CPU profiles and four
 capability-gated Metal profiles spanning decode/prefill and contiguous/paged KV. Pure logical phase planning,
@@ -304,11 +339,11 @@ hot kernels. Capability failures remain explicit, and no unsupported Metal reque
 | `llm_json.h` / `.cpp` | Ordered LLM schema-2 builder and conservative output-peak estimator (including nested `collect_json_for_sweep` runs); projects canonical plans and document-local references, expected versus observed checksums, named validation checks, accepted measurement IDs, raw timing, build provenance, backend/resource evidence, nullable states, and checkpoint writer observations |
 | `llm_validation.h` | Fixed, allocation-free structure/write/padding observation slots with independent applicability, evaluation, validity, and stable reasons for existing cold validation walks |
 | `llm_output.h` / `.cpp` | Human-readable work-unit/model-payload/accounted geometry, Metal device/resource/task evidence, scenario headlines, interpretation limits, and evidence-backed quality warnings through centralized message helpers |
-| `llm_environment.h` / `.mm` | Objective-C-free host snapshot, macOS thermal-state/Low Power Mode and physical-memory capture, and streaming SHA-256 of the executable file on the cold command path |
+| `llm_environment.h` | Thin compatibility forwarding header delegating host environment and executable SHA-256 capture to `src/core/audit/host_environment.h` |
 
 ---
 
-### 2.7 src/pattern_benchmark/ — Pattern access benchmarks
+### 2.9 src/pattern_benchmark/ — Pattern access benchmarks
 
 Benchmarks characterizing memory access patterns: sequential forward, sequential reverse, strided, and random. Results expose how access regularity and stride distance affect effective payload bandwidth.
 
@@ -327,7 +362,7 @@ Benchmarks characterizing memory access patterns: sequential forward, sequential
 
 ---
 
-### 2.8 src/warmup/ — Pre-benchmark warm-up
+### 2.10 src/warmup/ — Pre-benchmark warm-up
 
 Warm-up passes reduce selected cold-start effects before timing. Main-memory bandwidth warm-up is bounded, cache
 bandwidth warm-up covers the full target buffer, and latency warm-up page-touches without pre-traversing the chain.
@@ -343,13 +378,13 @@ bandwidth warm-up covers the full target buffer, and latency warm-up page-touche
 
 ---
 
-### 2.9 src/utils/ — Shared utilities
+### 2.11 src/utils/ — Shared utilities
 
 | File | Purpose |
 |---|---|
-| `benchmark.h` | Convenience umbrella header for commonly used standard-benchmark, timing, memory, output, assembly, and warm-up interfaces |
+| `benchmark.h` | Convenience umbrella header for commonly used timing, memory, output, assembly, and warm-up interfaces |
 | `utils.h` / `.cpp` | Shared thread-joining helpers and the TTY-aware stderr progress spinner used by benchmark modes |
-| `json_utils.h` / `.cpp` | JSON helper functions shared between the TLB, core-to-core, and standard output serializers |
+| `json_utils.h` / `.cpp` | JSON helper functions shared between the TLB, core-to-core, and pattern output serializers |
 | `cyclic_order.h` / `.cpp` | Shared deterministic cyclic ordering used by CPU and GPU planners |
 | `seed_utils.h` / `.cpp` | Shared SplitMix64 derivation and generate-once seed helper with deterministic provider seam |
 | `hash_utils.h` / `.cpp` | CommonCrypto-based one-shot, incremental, and allocation-free SHA-256 helpers for MSL source, layout/identity evidence, and executable-file provenance |
@@ -358,7 +393,7 @@ bandwidth warm-up covers the full target buffer, and latency warm-up page-touche
 
 ---
 
-### 2.10 src/third_party/ — Vendored dependencies
+### 2.12 src/third_party/ — Vendored dependencies
 
 | File | Purpose |
 |---|---|
@@ -368,22 +403,37 @@ bandwidth warm-up covers the full target buffer, and latency warm-up page-touche
 
 ## 3. tests/ — Test suite
 
-GoogleTest-based unit and integration tests are supplemented by Python example and LLM verifier tests.
+GoogleTest-based unit and integration tests are supplemented by Python example, LLM verifier, CPU verifier, and E2E acceptance tests.
 `make test-script-examples` exercises the current JSON-reading examples directly. `make test-llm-verifier` checks the
 independent LLM verifier across schema-2 artifacts and schema-1 LLM sweep envelopes, numeric goldens, semantic mutations,
-and build provenance. `make test-all` runs both after all GTest cases pass. Python 3 is required; `jq` is optional, and only its dedicated test branch is skipped when it is not
-installed. All test `.cpp` and `.mm` files are picked up automatically by the Makefile. Tests named `*Integration*` are excluded from
+and build provenance. `make test-cpu-verifiers` checks the independent CPU bandwidth and CPU latency verifiers across
+schema-1 fixtures, O(1) vs brute-force differential tests, all chain policies, sweep envelopes, and semantic mutations.
+`make test-all` runs all three Python gates (`test-script-examples`, `test-llm-verifier`, `test-cpu-verifiers`) after all
+GTest cases pass, while `tests/test_cpu_e2e_acceptance.py` provides standalone Tier 1–4 executable acceptance coverage.
+Python 3 is required; `jq` is optional, and only its dedicated test branch is skipped when it is not installed. All test
+`.cpp` and `.mm` files are picked up automatically by the Makefile. Tests named `*Integration*` are excluded from
 `make test` (unit-only) and run through the integration or all-test targets.
 
 | File | Suite name | Coverage focus |
 |---|---|---|
+| `test_audit_primitives.cpp` | `AuditPrimitivesTest` | Shared `src/core/audit/*` primitives: `SplitMix64` / `splitmix64-fisher-yates-rejection-v1`, bounded loop checkpoint cadence (`K=max(1,ceil(N/8))`), host environment, and `build_manifest` provenance |
 | `test_cli_parser.cpp` | `CliParserTest` | Shared descriptor-driven CLI option parsing (`--option=value`, opaque values, arity, missing/unexpected/unknown errors, single-dash rejection), `cli_program_name`, `format_cli_parse_error`, `extract_long_option_name`, `is_known_cli_value_option`, and LP64-safe `parse_strict_nonnegative_ulong` |
-| `test_config.cpp` | `ConfigTest` | General and TLB descriptor-driven CLI/sweep parsing (`--option=value`, duplicate flags, `--analyze-tlb --help`, LP64 `--buffer-size`, config reset, TLB `ConfigTestHooks`), validation (no-mode errors, `--patterns`/`--only-bandwidth`/`--only-latency` incompatibilities, direct+sweep conflicts, deferred thread capping), defaults, and derived buffer/access math |
+| `test_config.cpp` | `ConfigTest` | Pattern and TLB descriptor-driven CLI/sweep parsing (`--option=value`, duplicate flags, `--analyze-tlb --help`, LP64 `--buffer-size`, config reset, TLB `ConfigTestHooks`), validation (no-mode errors, `--patterns` incompatibilities, direct+sweep conflicts, deferred thread capping), defaults, and derived buffer/access math |
 | `test_signal_handler.cpp` | `BenchmarkSignalMaskGuardTest` | Exact thread-mask restoration, caller-preserved blocked signals, and nested scope ownership |
 | `test_messages.cpp` | `Messages*Test` | Exact help, CLI error/reason, and formatted console message contracts |
 | `test_memory_utils.cpp` | `MemoryUtilsTest` | Memory helpers: pointer-chase chain construction and verification |
-| `test_memory_manager.cpp` | `MemoryManagerTest` | Injected mmap/madvise policy, failures, and exact RAII unmapping |
+| `test_memory_manager.cpp` | `MemoryManagerTest` | Injected mmap/madvise/mprotect policy, `AllocatedBufferEvidence`, failures, and exact RAII unmapping |
 | `test_numeric_utils.cpp` | `NumericUtilsTest` | Overflow-safe arithmetic, duration calibration, pilot counts, and quantization boundaries |
+| `test_cpu_bandwidth_config.cpp` | `CpuBandwidthConfigTest` | Standalone `-B`/`--cpu-bandwidth` exact 12-option whitelist parsing, strict ranges (`-i 1..1000000000`, `-b 0` / `-k 0` selective omission), `--sweep` key validation/conflicts, and `-h` help isolation |
+| `test_cpu_bandwidth_work_plan.cpp` | `CpuBandwidthWorkPlanTest` | Target activation (`main_memory`, `l1`, `l2`, `custom`), 64-byte worker slice partitioning, SplitMix64 domain/op seeds, calibration math, strict `memory_budget` preflight, and guardrails |
+| `test_cpu_bandwidth_oracle.cpp` | `CpuBandwidthOracleTest`, `CpuBandwidthOracleIntegrationTest` | O(1) GF(2) `src` buffer pattern, O(1) vs byte/pass reference `pass_xor` and `cpu-bw-read-checksum-v1` differential checks, worker fold, and unique odd write/sentinel seeds |
+| `test_cpu_bandwidth_executor_runner.cpp` | `CpuBandwidthExecutorRunnerTest`, `CpuBandwidthModeIntegrationTest` | Persistent `PROT_READ` `src` mappings, parallel team sync + `MachTimingSnapshot`, cold full-buffer `write`/`copy` validation (`validation.checks[]`), cyclic target/op order, bounded `K=max(1,ceil(N/8))` checkpoints, and `run_accepted` |
+| `test_cpu_bandwidth_json_and_sweep.cpp` | `CpuBandwidthJsonAndSweepTest` | Schema-1 `cpu_bandwidth` JSON structure, decimal-string integers, `build_manifest`, `checkpoint_lifecycle`, and schema-1 `buffer-size`/`cache-size`/`threads` sweep envelopes |
+| `test_cpu_latency_config.cpp` | `CpuLatencyConfigTest` | Standalone `-L`/`--cpu-latency` exact 16-option whitelist parsing, `-n 0`, `-i 1..1000000000`, stride/locality/`--compare-locality` rules, `--sweep` key validation/conflicts, and `-h` help isolation |
+| `test_cpu_latency_work_plan.cpp` | `CpuLatencyWorkPlanTest` | Target activation (`l1`, `l2`, `custom`, `main_memory`), `--compare-locality` eligibility, SplitMix64 domain seeds, calibration math, and strict `memory_budget` preflight |
+| `test_cpu_latency_chain.cpp` | `CpuLatencyChainTest` | All four chain modes (`global-random`, `random-box`, `same-random-in-box`, `diff-random-in-box`), canonical `indices[0] == 0` rotation, `chain_permutation_sha256`, and single Hamiltonian-cycle prevalidation |
+| `test_cpu_latency_executor_runner.cpp` | `CpuLatencyExecutorRunnerTest`, `CpuLatencyModeIntegrationTest` | `mprotect(PROT_READ)` chain protection, `memory_latency_chase_asm` execution with `MachTimingSnapshot`, `main-final-pointer` and `sample-window-end-pointers`, paired `--compare-locality` rounds, `pooled_sample_distribution`, and `run_accepted` |
+| `test_cpu_latency_json_and_sweep.cpp` | `CpuLatencyJsonAndSweepTest` | Schema-1 `cpu_latency` JSON structure, `locality_comparison` aggregates, `pooled_sample_distribution`, and schema-1 `buffer-size`/`cache-size`/`latency-tlb-locality-kb`/`latency-stride-bytes`/`latency-chain-mode` sweep envelopes |
 | `test_llm_memory_config.cpp` | `LlmMemoryConfigTest`, `LlmMemoryConfigIntegrationTest` | Exact standalone decode/prefill parsing (including `--option=value`, paged prefill, phase/layout rules and stable reasons), strict decimal errors, raw output values, help isolation, worker/seed resolution, geometry/work-limit preflight, incompatible options, repeatable LLM `--sweep` parsing/expansion/conflicts/preflight, and `run_llm_memory_collect`/sweep runner behavior |
 | `test_llm_memory_work_plan.cpp` | `LlmMemoryWorkPlanTest`, `LlmMemoryWorkPlanSystemCallsTest` | Production checked decode/prefill geometry and payloads, physical/padding/table/lookup/accounted math including paged-prefill `N+2*M`, deterministic permutation/hash, CPU token/block ownership, Metal cyclic block-owner scheduling and component identities, memory budget, descriptor/range/layout invariants, worker reduction, scenario caps/calibration, and cyclic order |
 | `test_llm_memory_executor.cpp` | `LlmMemoryExecutorTest` | CPU phase/layout dispatch, atomic mapping/table-preparation failure seams, contiguous and paged decode/prefill descriptor materialization, independent checksums, padding canaries, synchronized timing, QoS, cancellation, and fake-kernel validation |
@@ -394,32 +444,32 @@ installed. All test `.cpp` and `.mm` files are picked up automatically by the Ma
 | `test_llm_memory_kernels.cpp` | `LlmMemoryKernelIntegrationTest` | Real contiguous/paged decode/prefill ARM64 descriptor/kernel scenarios, paged tails/lookups, full-prompt writes, exact partial tiled scans, checksum, padding, worker-count, and AAPCS64 coverage |
 | `test_llm_metal_backend.cpp` | `LlmMetalBackendTest`, `LlmMetalBackendIntegrationTest`, `LlmMetalBackendFailureInjectionIntegrationTest` | Pure capability, contiguous/paged segmentation, argument-buffer, decode/prefill ABIs, source provenance, phase-aware checksum/reason mapping, paged-prefill `N+2*M`, cyclic no-duplication ownership and per-threadgroup accounted-byte evidence, plus real-device selected-profile compilation, Tier-2 slots, private table/K/V initialization, exact-tail decode, full-prompt/tiled-prefix prefill, final-ordinal write/padding detection, interruption/failure cleanup, and idempotent release |
 | `test_buffer_manager.cpp` | `BufferManagerTest` | Pattern mapping policy, atomic allocation cleanup, initialized content, validation, and peak accounting |
-| `test_benchmark_executor.cpp` | `BenchmarkExecutorTest` | Injected phase-preparation failures, continuous latency sampling, and hardware executor contracts |
-| `test_benchmark_runner.cpp` | `BenchmarkStatisticsCollectorTest`, `BenchmarkRunnerTest` | Status-bearing aggregation, schema-3 retained snapshots, checkpointing, interruption, and runner exception/failure seams |
-| `test_benchmark_work_plan.cpp` | `BenchmarkWorkPlanTest` | Exact payload/access planning, calibration, cyclic order, seed derivation, and duration classification |
 | `test_gpu_bandwidth.cpp` | `GpuBandwidthParserTest`, `GpuMemoryBudgetTest`, `GpuRunnerTest`, `GpuJsonTest` | Strict standalone parsing (`--option=value`, LP64 `--buffer-size`, explicit offending-token diagnostics), memory budgets, fake-backend calibration/execution/failure/interruption and file/stdout checkpoint semantics, counters, and schema-1 serialization |
 | `test_gpu_work_plan.cpp` | `GpuWorkPlanTest`, `GpuTimedAccumulatorOracleTest` | Cyclic order, seed domains, pass/payload caps, calibration, vector/tail/grid geometry, frozen identities, and timed-accumulator oracle behavior |
 | `test_gpu_metal_backend.cpp` | `GpuMetalBackendIntegrationTest` | Real-Metal capability/runtime compile, private/shared tracked resources, read/write/copy/tail correctness, timestamps, validation, and byte readback |
-| `test_mode_selector.cpp` | `ModeSelectorTest` | All six primary modes and aliases, complete pairwise conflict order, `--mode=value` routing, null/`argc` safety, and opaque flag-shaped values skipped across all known space-separated value-taking options |
+| `test_mode_selector.cpp` | `ModeSelectorTest` | All seven primary modes (`-B`, `-L`, `-P`, `-T`, `-C`, `-G`, `-M`) and aliases, complete pairwise conflict order, `--mode=value` routing, null/`argc` safety, and opaque flag-shaped values skipped across all known space-separated value-taking options |
 | `test_hash_utils.cpp` | `HashUtilsTest` | CommonCrypto SHA-256 standard vectors and source-provenance helper behavior |
 | `test_analysis.cpp` | `AnalysisTest` | Injected TLB coordination, counters/status, boundary detection, validation, and paired analysis |
-| `test_json_schema.cpp` | `JsonSchemaTest` | Current standard schema-3 output structure, completion fields, and other mode schema contracts |
+| `test_json_schema.cpp` | `JsonSchemaTest` | Pattern schema-3, TLB schema-4, core-to-core schema-2, and sweep schema-1 output contracts |
+| `test_cpu_bandwidth_verifier.py` | Independent CPU bandwidth verifier | O(1) vs brute-force differential goldens, schema-1 fixture verification, sweep envelope checks, `--binary` / `--require-raw-timing`, and semantic/checksum/timing mutations |
+| `test_cpu_latency_verifier.py` | Independent CPU latency verifier | Chain-oracle goldens (all 4 policies + canonical rotation), schema-1 fixture verification, `--compare-locality`, `--max-chain-nodes`, sweep envelope checks, and semantic mutations |
+| `test_cpu_e2e_acceptance.py` | Tier 1–4 CPU E2E acceptance | Live-binary Tier 1–4 acceptance tests for `-B`/`--cpu-bandwidth` and `-L`/`--cpu-latency` verified with `verify_cpu_bandwidth_result.py` and `verify_cpu_latency_result.py` |
 | `test_llm_result_verifier.py` | Independent LLM verifier | Eight current schema-2 profiles, schema-1 LLM sweep envelope verification and mutations, arithmetic goldens, status/population and semantic mutations, bounded input, and build provenance |
-| `test_script_examples.py` | Python script-example entry test | Compatible standard schema-3/methodology inputs, provenance-version handling, completion and field-shape checks, and metric extraction for the bundled standard-memory examples, including the optional jq-backed shell path when jq is installed |
+| `test_script_examples.py` | Python script-example entry test | Compatible `cpu_bandwidth` / `cpu_latency` schema-1 inputs, `run_accepted` and provenance-version handling, derived `--compare-locality` plotting tests, and metric extraction for the bundled `script-examples/` workflows, including the optional jq-backed shell path when jq is installed |
 | `test_json_output_session.cpp` | `JsonOutputTargetTest`, `JsonOutputSessionTest` | Exact sentinel/path classification, lazy checkpoint dispatch, atomic-file parity, stdout routing/restoration, and stream failure containment |
 | `test_json_utils.cpp` | `JsonUtilsTest`, `JsonFileWriterTest` | UTC timestamp/statistics and atomic writer success/failure contracts |
 | `test_output_printer.cpp` | `OutputPrinterTest`, `OutputPrinterCustomCacheUnitsTest` | Status-aware partial output, mode/cache composition, and custom-cache size-unit boundaries |
-| `test_sweep_runner.cpp` | `SweepRunnerTest` | Current-only nested standard schema-3, pattern, TLB, core-to-core, and LLM schema-2 completion classification, pre-init failure and preparation-interruption handling, complete/partial/interrupted/failed attempt accounting, schema-1 envelopes, and checkpoint cadence/failure handling |
+| `test_sweep_runner.cpp` | `SweepRunnerTest` | Current-only nested `cpu_bandwidth`, `cpu_latency`, pattern, TLB, core-to-core, and LLM schema-2 completion classification, pre-init failure and preparation-interruption handling, complete/partial/interrupted/failed attempt accounting, schema-1 envelopes, and checkpoint cadence/failure handling |
 | `test_sweep_utils.cpp` | `SweepUtilsTest` | Shared sweep parsing, empty-dimension behavior, and overflow-safe Cartesian counts |
 | `test_pattern_validation.cpp` | `PatternValidationTest` | Pattern benchmark parameter validation |
 | `test_pattern_benchmark.cpp` | `PatternBenchmarkTest` | Pattern execution and statistics |
 | `test_pattern_work_plan.cpp` | `PatternWorkPlanTest` | Strided phases, worker reduction, random partitions, exact payload work, and calibration |
+| `test_pattern_write_kernels.cpp` | `PatternWriteKernelTest` | ARM64 `memory_write_pattern_loop_asm` and `memory_write_cache_pattern_loop_asm` arbitrary 64-bit pattern fill, little-endian tail bytes, and guard-canary preservation |
 | `test_core_to_core_messages.cpp` | `CoreToCoreMessagesTest` | Core-to-core console message strings |
 | `test_core_to_core_cli.cpp` | `CoreToCoreCliTest` | Core-to-core CLI argument parsing (`--option=value`, duplicate flags, direct-vs-sweep conflicts, unified duplicate sweep-key diagnostics, config reset, and `argc == 0` safety) |
 | `test_core_to_core_runner.cpp` | `CoreToCoreRunnerTest` | Calibration, work planning, cyclic scenario order, pooled sample ranges, and initiator-startup failure cleanup |
-| `test_executable_cli.cpp` | `ExecutableCliIntegrationTest` | Executable-level CLI routing, current standard schema-3 direct/sweep payloads, split stdout/stderr capture, bounded child execution, sentinel artifact rules, explicit and automatic-calibration GPU/pattern contracts, bounded contiguous/paged direct and sweep LLM file/stdout/checkpoint contracts (CPU and Metal), and TLB/core-to-core end-to-end coverage |
-| `test_standard_kernels.cpp` | `StandardKernelIntegrationTest`, `PatternKernelIntegrationTest` | Real ARM64 standard/pattern kernel ABI, tails, boundaries, checksums, and multi-worker execution |
-| `test_statistics.cpp` | `StatisticsTest` | Standard multi-loop summary composition, mode filtering, loop/sample population separation, and rendered values |
+| `test_executable_cli.cpp` | `ExecutableCliIntegrationTest` | Executable-level CLI routing, `-B`/`--cpu-bandwidth` and `-L`/`--cpu-latency` schema-1 direct/sweep payloads, split stdout/stderr capture, bounded child execution, sentinel artifact rules, explicit and automatic-calibration GPU/pattern contracts, bounded contiguous/paged direct and sweep LLM file/stdout/checkpoint contracts (CPU and Metal), and TLB/core-to-core end-to-end coverage |
+| `test_standard_kernels.cpp` | `StandardKernelIntegrationTest`, `PatternKernelIntegrationTest` | Real ARM64 read/write/copy/latency/pattern kernel ABI, tails, boundaries, checksums, and multi-worker execution |
 | `test_descriptive_statistics.cpp` | `DescriptiveStatisticsTest` | Canonical shared percentiles, deviation, CV, and MAD contracts |
 | `test_statistics_renderer.cpp` | `StatisticsRendererTest` | Shared console-summary ordering, precision, indentation, and diagnostics |
 | `test_timer.cpp` | `HighResTimerTest` | Deterministic Mach-time conversion, original boundary snapshots, creation failures, seconds/nanoseconds results, and tick wraparound |
@@ -430,14 +480,14 @@ installed. All test `.cpp` and `.mm` files are picked up automatically by the Ma
 | `test_tlb_sweep_planner.cpp` | `TlbSweepPlannerTest` | Page-aligned base/refinement planning, stride bounds, deduplication, and source tracking |
 | `test_utils.cpp` | `SeedUtilsTest`, `ProgressSpinnerTest` | Zero-seed fallback and enabled/disabled spinner rendering/cleanup |
 
-### tests/fixtures/ — Script-example and LLM verifier input fixtures
+### tests/fixtures/ — Script-example and verifier input fixtures
 
 | File | Purpose |
 |---|---|
-| `standard-schema-v3-complete-current.json` | Minimized structurally faithful current full standard result for the two plotter JSON entry paths |
-| `standard-schema-v3-custom-complete-current.json` | Minimized structurally faithful current custom-cache standard result for shell jq/Python extraction and stride/TLB summaries |
+| `cpu-bandwidth-schema-v1-complete-current.json` | Complete `-B`/`--cpu-bandwidth` schema-1 fixture covering main memory + custom cache bandwidth, GF(2) oracle/write-pattern checks, and raw Mach timing (`test_cpu_bandwidth_verifier.py` and `test_script_examples.py`) |
+| `cpu-latency-schema-v1-complete-current.json` | Complete `-L`/`--cpu-latency` schema-1 fixture covering custom cache + main memory latency, canonical pointer-chain permutation hashes, final-pointer checks, and `pooled_sample_distribution` (`test_cpu_latency_verifier.py` and `test_script_examples.py`) |
 | `llm-schema-v2/` | Eight captured CPU/Metal × decode/prefill × contiguous/paged schema-2 profiles plus `unsupported.json` for independent verifier coverage |
-| `README.md` | Records source HEAD, capture commands, reduction policy, example/verifier ownership, and fixture refresh policy |
+| `README.md` | Records source HEAD, capture commands, example/verifier ownership, and fixture refresh policy |
 
 Volatile source/test counts and the authoritative generated inventory are maintained in `DRY_CHECK.md`.
 
@@ -445,23 +495,22 @@ Volatile source/test counts and the authoritative generated inventory are mainta
 
 ### Shared test helper headers
 
-Four shared helper headers support deterministic setup and output capture across the test suite:
+Three shared helper headers support deterministic setup and output capture across the test suite:
 
 | File | Purpose |
 |---|---|
 | `test_config_helpers.h` | Provides `initialize_system_info(BenchmarkConfig&)` and `allocate_and_initialize_pattern_buffers(const BenchmarkConfig&, PatternBuffers&)` for shared system and pattern-buffer setup |
-| `test_statistics_helpers.h` | Provides `empty_values()`, `capture_main_bandwidth()`, and `capture_auto_tlb_breakdown()` in `namespace test_statistics_helpers` for `StatisticsTest` output capture |
-| `test_memory_system_calls.h` | Provides deterministic mmap/madvise/munmap state and a resetting fixture for allocation tests |
+| `test_memory_system_calls.h` | Provides deterministic mmap/madvise/mprotect/munmap state and a resetting fixture for allocation tests |
 | `test_timer_system_calls.h` | Provides deterministic Mach absolute-time hooks and a scope-bound reset guard for timer-dependent unit tests |
 
 ---
 
-## 4. results/ — Benchmark result data
+## 4. results/ — Result data
 
 Historical JSON, CSV, and text output from benchmark runs on specific hardware, organized by software-version
 subdirectory. The files are retained as examples and historical schema evidence; they are not baselines for the current
 methodology unless explicitly identified as such. Historical standard JSON is not an input to current bundled
-standard-result consumers; separately governed TLB tooling retains its documented legacy-input policy.
+CPU result consumers; separately governed TLB tooling retains its documented legacy-input policy.
 
 ```
 results/
@@ -517,25 +566,30 @@ Tracked PNG chart archive generated from benchmark result data. Several files ar
 
 ## 6. script-examples/ — Run and plotting helpers
 
-Example shell workflows and Python/Matplotlib plotters for tracked benchmark outputs. The four standard-memory examples
-accept compatible producer releases rather than requiring an exact software version. Each JSON-reading entry point
-checks for a non-empty provenance version, standard mode, schema 3, methodology
-`benchmark-v2-calibrated-seeded-balanced`, completion state, and the shapes of the fields it consumes before reading
-those metric paths. Standard schema 2, unversioned historical layouts, alternative modes, and other methodology
-identities are not translated by those four examples. Separately governed mode-specific tools retain only the history
-policy documented in their own row below.
+Example shell workflows, independent Python verifiers, and Python/Matplotlib plotters for tracked benchmark outputs.
+The four CPU benchmark script-examples accept compatible producer releases rather than requiring an exact software
+version. Each JSON-reading entry point checks for a non-empty `software.version` provenance string, `schema_version == 1`,
+`mode` (`"cpu_bandwidth"` or `"cpu_latency"`), the exact methodology identity
+(`cpu-bandwidth-v1-arm64-calibrated-seeded-balanced` or `cpu-latency-v1-arm64-calibrated-seeded-balanced`),
+`status == "complete"`, `results_complete == true`, `run_accepted == true`, and the shapes of the fields it consumes
+before reading those metric paths. Legacy standard schema 3/2, unversioned historical layouts, alternative modes, and
+other methodology identities are not translated by those four examples. Separately governed mode-specific tools retain
+only the history policy documented in their own row below.
 
 | File | Purpose |
 |---|---|
+| `cpu_verify_common.py` | Shared strict JSON, SplitMix64/Fisher–Yates RNG, Mach timing, statistics, audit, memory-budget, and sweep envelope primitives (Python 3 stdlib only) for the CPU verifiers |
+| `verify_cpu_bandwidth_result.py` | Bounded standalone verifier for `-B`/`--cpu-bandwidth` schema-1 artifacts and schema-1 `cpu_bandwidth` sweep envelopes; checks O(1) GF(2) read checksums, write/copy validation, raw Mach timing, and `run_accepted` |
+| `verify_cpu_latency_result.py` | Bounded standalone verifier for `-L`/`--cpu-latency` schema-1 artifacts and schema-1 `cpu_latency` sweep envelopes; checks canonical chain permutation SHA-256 digests, final-pointer/sample-window end nodes, `--compare-locality`, raw Mach timing, and `run_accepted` |
 | `verify_llm_result.py` | Bounded standalone verifier for single LLM schema-2 artifacts and schema-1 LLM sweep envelopes; separate consistency, acceptance, and timing/build evidence levels |
 | `llm_verify_oracles.py` | Independent CPU and Metal arithmetic/checksum reconstruction for the verifier |
 | `llm_verify_profiles.py` | Supported LLM component identities for the eight verifier profiles |
 | `final_output.txt` | Small bundled sample of pooled latency statistics for `plot_cache_percentiles.py`; regenerated by `latency_test_script.sh` |
-| `latency_test_script.sh` | Sweeps custom cache size and configured latency-locality windows, writes per-run JSON, and extracts current pooled sample statistics into `final_output.txt` using jq when available or Python 3 otherwise |
-| `latency_test_script_stride_tlb.sh` | Sweeps cache size, configured locality, and latency stride; uses embedded Python 3 to read current pooled sample statistics, retains per-run JSON, and requires one complete CSV row per planned run |
-| `plot_M4vsM5_benchmark_comparison.py` | Compares effective payload bandwidth and latency from two explicitly supplied current standard schema-3 JSON files |
+| `latency_test_script.sh` | Runs `--cpu-latency` across custom cache sizes and configured latency-locality windows, writes per-run JSON, and extracts `pooled_sample_distribution.statistics` into `final_output.txt` using jq when available or Python 3 otherwise |
+| `latency_test_script_stride_tlb.sh` | Runs `--cpu-latency` across cache size, configured locality, and latency stride; uses embedded Python 3 to read `pooled_sample_distribution.statistics`, `resolved_plan.chain_identities.custom.node_count`, and `environment.page_size_bytes`, retains per-run JSON, and requires one complete CSV row per planned run |
+| `plot_M4vsM5_benchmark_comparison.py` | Compares effective payload bandwidth and latency from four explicitly supplied schema-1 JSON files (`--m4-bandwidth-file`, `--m4-latency-file`, `--m5-bandwidth-file`, `--m5-latency-file`; default `--metric median`) |
 | `plot_analyzetlb.py` | Plots standalone TLB locality trends, including the paired spread/packed delta in current schemas and supported legacy data |
-| `plot_benchmark-memory-latency-hierarchy.py` | Plots memory-hierarchy latency from an explicit current standard schema-3 JSON or console-text statistics input using the current producer's labels |
+| `plot_benchmark-memory-latency-hierarchy.py` | Plots memory-hierarchy latency (`--metric` defaults to `median`) from an explicit `cpu_latency` schema-1 JSON generated with `--compare-locality`, or from live `-L --compare-locality` console text (`--metric median` only) |
 | `plot_cache_percentiles.py` | Plots a selected pooled latency statistic by cache size and configured locality from `final_output.txt` |
 | `plot_cache_percentiles_stride_tlb.py` | Plots a selected pooled latency statistic from the stride/locality sweep CSV, with optional stride and locality filters |
 

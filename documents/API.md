@@ -15,9 +15,12 @@ transport. GPU schema 1 remains a direct-only mode and does not support sweeps.
 
 | Command | Real JSON file | Exact `--output -` stdout transport |
 |---|---:|---:|
-| Direct `--benchmark` | Yes | Yes |
+| Direct `--cpu-bandwidth` | Yes | Yes |
+| `--cpu-bandwidth --sweep ...` | Yes | Yes |
+| Direct `--cpu-latency` | Yes | Yes |
+| `--cpu-latency --sweep ...` | Yes | Yes |
 | Direct `--patterns` | Yes | Yes |
-| Standard or pattern `--sweep` | Yes | Yes |
+| `--patterns --sweep ...` | Yes | Yes |
 | Direct `--analyze-tlb` | Yes | Yes |
 | `--analyze-tlb --sweep ...` | Yes | Yes |
 | Direct `--analyze-core2core` | Yes | Yes |
@@ -26,8 +29,9 @@ transport. GPU schema 1 remains a direct-only mode and does not support sweeps.
 | Direct `--llm-memory` | Yes | Yes |
 | `--llm-memory --sweep ...` | Yes | Yes |
 
-GPU schema 1 is a direct-only mode and does not support sweeps. LLM sweeps use the shared schema-1 sweep envelope with
-`base_mode: "llm_memory"` and embed each run's complete schema-2 `llm_memory` payload under `runs[].result`.
+GPU schema 1 is a direct-only mode and does not support sweeps. CPU bandwidth, CPU latency, and LLM sweeps all use the
+shared schema-1 sweep envelope (`base_mode`: `"cpu_bandwidth"`, `"cpu_latency"`, or `"llm_memory"`) and embed each run's
+complete nested payload under `runs[].result`.
 
 ## Invocation and stream contract
 
@@ -35,13 +39,13 @@ For any result-producing direct benchmark command, or a supported parameter swee
 `-` selects stdout JSON:
 
 ```bash
-memory_benchmark --benchmark --only-bandwidth --count 5 --buffer-size 512 --output -
+memory_benchmark --cpu-bandwidth --count 5 --buffer-size 512 --output -
 ```
 
 For example, a sweep emits one final envelope rather than one document per attempted run:
 
 ```bash
-memory_benchmark --benchmark --only-latency --sweep buffer-size=256,512 --output -
+memory_benchmark --cpu-latency --sweep buffer-size=256,512 --output -
 ```
 
 A direct GPU command uses the same stream transport with its existing top-level schema 1 payload:
@@ -115,7 +119,7 @@ resource, or task failures produce terminal `failed`/`invalid` evidence and neve
 
 The sentinel is classified from the raw option value before path normalization. Long value-taking options accept both
 space-separated (`--output -`, `--buffer-size 512`) and inline (`--output=-`, `--output=`, `--buffer-size=512`,
-`--sweep=buffer-size=128,256`) syntax across all six modes, while boolean and primary-mode flags reject inline values
+`--sweep=buffer-size=128,256`) syntax across all seven modes, while boolean and primary-mode flags reject inline values
 and single-dash short options remain space-separated one-character flags:
 
 - `--output -` (or `--output=-`) selects stdout JSON;
@@ -135,14 +139,14 @@ After successful parsing and mode selection, a supported machine-output command 
 
 Argument parsing and preflight validation can fail before a result state exists. Those failures return a non-zero process
 status, write a concise single-line centralized diagnostic (`Error: ...`) to stderr without dumping full usage text, and
-leave stdout empty. Passing modifier options without a primary mode flag (for example `--only-bandwidth`, `--seed 42`, or
+leave stdout empty. Passing modifier options without a primary mode flag (for example `--buffer-size 512`, `--seed 42`, or
 `--threads 1`) likewise fails before output-session creation with a non-zero status, empty stdout, and a centralized
 stderr error; only bare `memory_benchmark` with no arguments prints help to stdout and exits `0`. Help is deliberately
-human-facing and is accepted uniformly across all six primary modes, including `--analyze-tlb --help`: `-h`/`--help`
+human-facing and is accepted uniformly across all seven primary modes, including `--analyze-tlb --help`: `-h`/`--help`
 still runs full syntactic, whitelist, duplicate, missing-value, and value-parse validation first, then prints normal help
 to stdout and exits `0` before required-option checks, semantic validation, OS queries, timer creation, seed generation,
 or output-session setup. `--output - --help` (and `--help --output -` or `--output=- --help`) remains human-facing help
-to stdout and does not promise JSON across all six modes.
+to stdout and does not promise JSON across all seven modes.
 
 Some runtime setup failures also occur before a schema-valid payload exists. The general command's or any sweep runner's
 early timer-creation failure, TLB setup, memory-budget, or allocation failures before analysis-state initialization, a GPU
@@ -169,28 +173,28 @@ does not install a process-wide `SIGPIPE` policy.
 
 ## Checkpoints and final snapshots
 
-Real file targets retain their existing persistence behavior:
+Real file targets retain their mode-specific persistence behavior:
 
-- standard commands atomically checkpoint after completed loop-state changes and write their normal terminal result;
+- direct `--cpu-bandwidth`, `--cpu-latency`, and `--llm-memory` commands atomically snapshot bounded completed-loop
+  progress and command terminal as specified below;
 - pattern, TLB, and core-to-core commands write one terminal payload through the shared atomic file writer;
 - parameter sweeps atomically checkpoint their combined envelope after each attempted run and also checkpoint a terminal
   zero-attempt envelope when the run plan is empty or interruption is observed before a run;
 - GPU mode retains its mode-specific terminal-measurement and failure checkpoints;
-- direct LLM mode atomically snapshots bounded completed-loop progress and command terminal as specified below;
 - a temporary `<target>.tmp` file is replaced atomically, and a failed replacement preserves the preceding destination
   when possible.
 
-Stdout is final-only. Intermediate standard, sweep and GPU checkpoint requests are successful lazy no-ops: their
-payload builders are not invoked, while all logical state changes, stop observations, counters, cleanup, and final result
-construction still occur. LLM skips intermediate snapshot preparation on stdout but preserves task-boundary stop observations.
-The command serializes one terminal snapshot after orchestration finishes. Stdout is not JSON Lines and never contains
-a sequence of checkpoint documents.
+Stdout is final-only. Intermediate sweep and GPU checkpoint requests are successful lazy no-ops: their payload builders
+are not invoked, while all logical state changes, stop observations, counters, cleanup, and final result construction
+still occur. Direct CPU bandwidth, CPU latency, and LLM modes skip intermediate snapshot preparation on stdout while
+preserving task-boundary stop observations. The command serializes one terminal snapshot after orchestration finishes.
+Stdout is not JSON Lines and never contains a sequence of checkpoint documents.
 
-For direct LLM file targets, let `N=planned_loops` and `K=max(1,ceil(N/8))`, calculated without addition overflow. File
-targets write progress after every Kth fully completed loop, at most eight times, and one command-terminal snapshot on
-success, graceful interruption or representable failure. The current cadence gives at most 4/7/9 normal
-snapshots for N=3/12/48. One late command exception after successful terminal persistence may write one corrective
-failure snapshot; a failed checkpoint is terminal and never retried or followed by a disguised final write.
+For direct CPU bandwidth, CPU latency, and LLM file targets, let `N=planned_loops` and `K=max(1,ceil(N/8))`, calculated
+without addition overflow. File targets write progress after every Kth fully completed loop, at most eight times, and
+one command-terminal snapshot on success, graceful interruption or representable failure. The current cadence gives at
+most 4/7/9 normal snapshots for N=3/12/48. One late command exception after successful terminal persistence may write one
+corrective failure snapshot; a failed checkpoint is terminal and never retried or followed by a disguised final write.
 
 An abrupt exit can lose up to `3K` truly completed measurement attempts after the last successful snapshot, including
 while its replacement is in progress. Unstarted tail placeholders do not count toward this bound. Before the first
@@ -221,13 +225,14 @@ contract version 1 first appears in software version `0.62.0`.
 
 | Payload | Schema authority | A command result is complete only when |
 |---|---|---|
-| Current standard | `configuration.mode == "benchmark" && configuration.benchmark_schema_version == 3` | `status == "complete" && results_complete == true && conclusions_valid == true && configuration.output_file is a string` |
+| CPU bandwidth | `mode == "cpu_bandwidth" && schema_version == 1` | `methodology_version == "cpu-bandwidth-v1-arm64-calibrated-seeded-balanced"`, `component_identities` match, `status == "complete"`, `results_complete == true`, `run_accepted == true`, `configuration.output_file` is a string, and every planned measurement is `measured` |
+| CPU latency | `mode == "cpu_latency" && schema_version == 1` | `methodology_version == "cpu-latency-v1-arm64-calibrated-seeded-balanced"`, `component_identities` match, `status == "complete"`, `results_complete == true`, `run_accepted == true`, `configuration.output_file` is a string, and every planned measurement is `measured` |
 | Patterns | `configuration.pattern_schema_version == 3` | `status == "complete" && results_complete == true` |
 | TLB | `configuration.schema_version == 4` | `tlb_analysis.status == "complete" && tlb_analysis.conclusions_valid == true` |
 | Core-to-core | `configuration.schema_version == 2` | `core_to_core_latency.status == "complete" && core_to_core_latency.measurements_complete == true` |
 | GPU | `schema_version == 1` | `status == "complete" && results_complete == true && conclusions_valid == true` |
 | LLM memory profile | `mode == "llm_memory" && schema_version == 2` | Requested backend/phase/layout match, methodology and run-policy match the exact identities, `status == "complete"`, `results_complete == true`, `run_accepted == true`, and every planned measurement is `measured` |
-| General CPU sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true` |
+| CPU bandwidth / CPU latency / pattern / TLB sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true` |
 | Core-to-core sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true` |
 | LLM memory sweep | `configuration.sweep_schema_version == 1` | `status == "complete" && conclusions_valid == true` |
 
@@ -237,28 +242,32 @@ that equality separately as a defensive producer-consistency check, but it is no
 predicate.
 
 Each `runs[].result` in a sweep retains its nested mode's own schema-version field and completeness contract. Nested
-standard classification recognizes only current schema 3 with `configuration.mode == "benchmark"` plus typed
-`results_complete`, `conclusions_valid`, and `configuration.output_file` fields; standard schema 2 and every other
-standard schema version are unsupported. Nested LLM-memory classification recognizes only schema 2 with
-`mode == "llm_memory"`, requiring `status == "complete"`, `results_complete == true`, `run_accepted == true`, and every
-planned entry in `measurements[]` having `status == "measured"` before incrementing `completed_runs`; nested
-`status == "unsupported"` maps to a failed sweep attempt while retaining the schema-2 payload, pre-initialization
-failures record `result: null` with the specific stable `status_reason`, and an interruption during pre-runner
-work-plan/table preparation or backend resource preparation records `status: "interrupted"`,
-`status_reason: "preparation-interrupted"`, `result: null`, and exit status `0`.
+CPU bandwidth classification recognizes only `mode == "cpu_bandwidth"` with `schema_version == 1`, requiring
+`status == "complete"`, `results_complete == true`, `run_accepted == true`, `configuration.output_file == ""`, and every
+planned measurement `status == "measured"`. Nested CPU latency classification recognizes only `mode == "cpu_latency"`
+with `schema_version == 1` under the same completion and `run_accepted == true` rules (including all paired
+`locality_comparison.rounds[]` when `compare_locality` is true). Legacy standard schema-3 and schema-2 payloads are
+removed and unsupported. Nested LLM-memory classification recognizes only schema 2 with `mode == "llm_memory"`,
+requiring `status == "complete"`, `results_complete == true`, `run_accepted == true`, and every planned entry in
+`measurements[]` having `status == "measured"` before incrementing `completed_runs`; nested `status == "unsupported"` maps
+to a failed sweep attempt while retaining the nested payload, pre-initialization failures record `result: null` with the
+specific stable `status_reason`, and an interruption during pre-runner work-plan/table preparation or backend resource
+preparation records `status: "interrupted"`, `status_reason: "preparation-interrupted"`, `result: null`, and exit
+status `0`.
 Complete, partial, interrupted, and failed current evidence remains
 classifiable and retained rather than being discarded by the complete-result consumer boundary. A non-zero nested
 execution that initialized a result remains in the envelope: its attempt is failed, but the payload is not replaced by
 a generic diagnostic. In particular, nested TLB `tlb_analysis.status == "error"` maps to a failed sweep attempt without
 adding a `tlb_analysis.status_reason` field.
 
-Command completeness does not make every optional metric available. A selected standard measurement must have its
-mode-specific measured/quality state and a non-null value. A pattern measurement may be intentionally `skipped` while
+Command completeness does not make every optional metric available. A selected CPU bandwidth or CPU latency target metric
+must have its measured/accepted state, a non-null aggregate `value`, and (for `--compare-locality`) non-null
+`aggregates.locality_comparison`. A pattern measurement may be intentionally `skipped` while
 the command remains complete; consumers of a particular pattern metric must require `status == "measured"` and a
 non-null value. TLB consumers must also honor the selected detection/evidence fields. Core-to-core affinity-scenario
-conclusions additionally require `affinity_hint_comparison_interpretable == true`. A position-balanced GPU comparison
-additionally requires `operation_order_balance_complete == true`; consumers of an operation also require a measured,
-non-null value and its applicable validation/quality fields.
+conclusions additionally require `affinity_hint_comparison_interpretable == true`. Position-balanced comparisons
+additionally require `operation_order_balance_complete == true` (in `cpu_bandwidth` and `gpu_bandwidth`) and
+`target_order_balance_complete == true` (in `cpu_bandwidth` and `cpu_latency`).
 
 LLM schema 2 replaces the unpublished schema-1 contract without compatibility aliases or a fallback reader. It has top-level `mode: "llm_memory"`, `schema_version: 2`, and exact
 `backend`, `phase`, `kv_layout`, and `methodology_version` selectors. Methodology is derived as
@@ -678,24 +687,13 @@ establish a machine or methodology performance difference.
 `kv-working-set-cache-dominant`, and `<scenario>-duration-<quality>`. The main-thread token requires QoS to have been
 requested and not applied; absence of a warning is not proof of DRAM residency or scheduler placement.
 
-Current standard schema-3 payloads require `configuration.output_file` to be a string and preserve the raw target token:
-stdout therefore records `"-"`, while file targets retain spellings such as `./-`, `-T`, or `--cache-size` rather than a
-normalized path. A current standard result nested in a sweep records an empty string because the envelope owns
-persistence and nested file writes are disabled. Schema 3 requires boolean `results_complete` and `conclusions_valid`;
-the producer makes `conclusions_valid` true exactly when `results_complete` is true, while consumers must still check
-the explicit status and both booleans shown in the table.
+CPU bandwidth (`mode: "cpu_bandwidth"`, `schema_version: 1`, `methodology_version: "cpu-bandwidth-v1-arm64-calibrated-seeded-balanced"`) and CPU latency (`mode: "cpu_latency"`, `schema_version: 1`, `methodology_version: "cpu-latency-v1-arm64-calibrated-seeded-balanced"`) both preserve raw `configuration.output_file` (so stdout records `"-"`, while file targets retain spellings such as `./-` or `-T`) and exact `configuration.argv`. A nested CPU bandwidth or CPU latency sweep result records `configuration.output_file: ""` because the enclosing schema-1 sweep envelope owns persistence and nested file writes are disabled. Both modes publish `build_manifest`, `memory_budget`, `resolved_plan`, `calibration`, `measurements`, `aggregates`, `status`, `reason_code`, `results_complete`, `run_accepted`, `interpretation`, `seeds`, `counters`, `checkpoint_lifecycle`, `loop_records`, `environment`, and `quality_warnings`.
 
-The bundled standard-memory example scripts accept compatible producer releases. Before reading their standard
-schema-3 metric paths, they require `configuration.mode == "benchmark"`, schema 3, methodology
-`benchmark-v2-calibrated-seeded-balanced`, the completion fields above, and the expected types for every consumed
-field. They retain a non-empty top-level `version` string as release provenance, but exact software-version equality is
-not an acceptance condition. The examples do not translate released standard schema 2, unversioned historical
-standard JSON layouts, or other methodology identities through a metric-shape fallback.
+In both CPU schema-1 modes, `results_complete` requires every planned measurement to be `measured`, and `run_accepted` additionally requires `status == "complete"`, `!checkpoint_failed`, valid `execution.timing.cpu_raw` / `elapsed_seconds`, valid checksum/pointer-chain/cold-validation `checks[]`, and (for `--cpu-latency --compare-locality`) all `3 * loop_count` paired comparison rounds measured. Both modes share the same `K=max(1,ceil(count/8))` bounded atomic file checkpoint cadence (`run_policy_version: "bounded-loop-snapshots-v1"`).
 
-Graceful interruption or runtime failure after a representable result state has been initialized emits the available
-partial, interrupted, error, or failed JSON snapshot. The execution status and payload are independent: a non-zero status
-must not cause a caller to discard evidence without parsing it. Exit status zero is used for human help, complete
-execution, and established graceful-interruption paths; it alone does not prove that JSON conclusions are complete.
+The bundled `script-examples/` scripts accept compatible producer releases. Before reading their CPU bandwidth or CPU latency schema-1 metric paths, they require `schema_version == 1`, the expected `mode` (`"cpu_bandwidth"` or `"cpu_latency"`) and `methodology_version`, non-empty `software.version` (retained as provenance only), string `configuration.output_file`, `status == "complete"`, `results_complete == true`, `run_accepted == true`, and the expected types for every consumed field. They do not translate legacy standard schema-3/2 or unversioned historical layouts.
+
+Graceful interruption or runtime failure after a representable result state has been initialized emits the available partial, interrupted, error, or failed JSON snapshot. The execution status and payload are independent: a non-zero status must not cause a caller to discard evidence without parsing it. Exit status zero is used for human help, complete execution, and established graceful-interruption paths; it alone does not prove that JSON conclusions are complete.
 
 ## LLM schema-1 to schema-2 field map
 
@@ -834,7 +832,44 @@ cannot replace kernel qualification tests, prove executed instructions or establ
 `make test-llm-verifier` runs independent small arithmetic goldens, all eight captured current profile fixtures,
 status fixtures, schema-1 LLM sweep verification (complete/incomplete envelopes, multi-axis order independence, shared
 sweep work budget, single binary hashing, and envelope/splicing mutations), malformed input, and specific artifact
-mutations. `make test-all` includes this separate gate alongside the existing standard-memory script-example gate.
+mutations. `make test-all` includes this gate alongside `test-script-examples` and `test-cpu-verifiers`.
+
+## Independent CPU artifact verifiers
+
+`python3 script-examples/verify_cpu_bandwidth_result.py result.json` and
+`python3 script-examples/verify_cpu_latency_result.py result.json` independently verify direct schema-1 `cpu_bandwidth`
+and `cpu_latency` artifacts as well as schema-1 sweep envelopes (`configuration.mode == "sweep"`,
+`configuration.sweep_schema_version == 1`, `configuration.base_mode` in `{"cpu_bandwidth", "cpu_latency"}`) using Python 3
+standard-library arithmetic only (`script-examples/cpu_verify_common.py`). Both tools accept optional `--binary PATH`
+(streaming SHA-256 against `build_manifest.binary_sha256` without executing the binary) and `--require-raw-timing`
+(requiring `execution.timing.cpu_raw` ticks and matching timebase), while `verify_cpu_latency_result.py` also accepts
+`--max-chain-nodes N` (default `8,388,608`).
+
+- **`verify_cpu_bandwidth_result.py`**: Reconstructs target selection (`main_memory`, `l1`, `l2`, `custom`), 64-byte worker
+  partitions, SplitMix64 target/op/write-pattern/pre-copy-sentinel seeds, O(1) GF(2) read-pass XORs (`cpu-bw-buffer-pattern-v1`,
+  covering both SIMD vector spans and `<32B` scalar tails) and non-cancelling per-worker/folded run checksums
+  (`cpu-bw-read-checksum-v1`), unique odd `write_pattern` and `pre_copy_sentinel` derivations, `cpu_raw` durations, rates,
+  `validation.checks[]` slots (`post-validation-structure`, `read-checksum`, `write-final-full-buffer`,
+  `copy-final-full-buffer`, `src-readonly-protection`), cyclic Latin-square target/op order, accepted populations,
+  linearly interpolated statistics, `memory_budget`, `checkpoint_lifecycle`, and `run_accepted`.
+- **`verify_cpu_latency_result.py`**: Reconstructs target selection (`l1`, `l2`, `custom`, `main_memory`), SplitMix64 +
+  descending Fisher–Yates rejection chains (`splitmix64-fisher-yates-rejection-v1`) across all four policies with
+  canonical `indices[0] == 0` rotation and `chain_permutation_sha256`, `main-final-pointer`, sample-window `sample_delta_ticks`
+  and `end_node_indices` (`indices[cum_steps % N]`), `pooled_sample_distribution`, optional paired `--compare-locality`
+  (`locality_16k` vs `locality_global` rounds and `locality_latency_delta_ns = median(global) - median(16k)`),
+  `validation.checks[]`, `cpu_raw` durations, cyclic target order, statistics, and `run_accepted`.
+- **Exit codes, JSON verdict, and bounds**: Shared limits are 64 MiB UTF-8 JSON, depth 64, 1,000,000 JSON nodes, and
+  1,000,000 oracle/shuffle work steps across single artifacts and sweeps. Exit `0` indicates `artifact_consistent: true`
+  and `run_accepted: true`; exit `1` indicates inconsistency or a consistently described unaccepted artifact; exit `2`
+  indicates an unsupported schema/methodology, resource bound, or missing required evidence (`artifact_consistent: null`).
+  Both scripts emit a single sorted JSON verdict line matching the LLM verifier envelope (`artifact_consistent`,
+  `run_accepted`, `reason_code`, `checks.{checksum,timing,build}`, `oracle_work_used`, plus `artifact_kind: "cpu_bandwidth_sweep"`
+  or `"cpu_latency_sweep"`, `planned_runs`, `completed_runs`, `verified_runs`, and `run_verdicts` for sweeps).
+- **`make test-cpu-verifiers`**: Exercises `tests/test_cpu_bandwidth_verifier.py` and `tests/test_cpu_latency_verifier.py`
+  covering O(1) vs brute-force differential tests, all chain modes, schema-1 fixtures, `--compare-locality`, `--max-chain-nodes`,
+  sweep verification, `--binary` / `--require-raw-timing`, and semantic/checksum/timing/mutation rejections. See
+  [CPU Bandwidth Whitepaper](CPU_BANDWIDTH_WHITEPAPER.md) and [Latency Whitepaper](LATENCY_WHITEPAPER.md) for the exact
+  mathematical specifications.
 
 ## Consumer acceptance procedure
 
@@ -875,14 +910,21 @@ accept(document)
 Shell capture example:
 
 ```bash
-memory_benchmark --benchmark --only-bandwidth --buffer-size 512 --count 5 --seed 42 --output - \
-  >benchmark.json 2>benchmark.log
-jq -e '.configuration.mode == "benchmark" and
-       .configuration.benchmark_schema_version == 3 and
-       .configuration.methodology_version == "benchmark-v2-calibrated-seeded-balanced" and
+memory_benchmark --cpu-bandwidth --buffer-size 512 --count 3 --seed 42 --output - \
+  >cpu_bandwidth.json 2>cpu_bandwidth.log
+jq -e '.schema_version == 1 and .mode == "cpu_bandwidth" and
+       .methodology_version == "cpu-bandwidth-v1-arm64-calibrated-seeded-balanced" and
        (.configuration.output_file | type) == "string" and
        .status == "complete" and .results_complete == true and
-       .conclusions_valid == true' benchmark.json
+       .run_accepted == true' cpu_bandwidth.json
+
+memory_benchmark --cpu-latency --buffer-size 512 --count 3 --seed 42 --output - \
+  >cpu_latency.json 2>cpu_latency.log
+jq -e '.schema_version == 1 and .mode == "cpu_latency" and
+       .methodology_version == "cpu-latency-v1-arm64-calibrated-seeded-balanced" and
+       (.configuration.output_file | type) == "string" and
+       .status == "complete" and .results_complete == true and
+       .run_accepted == true' cpu_latency.json
 
 memory_benchmark --patterns --buffer-size 512 --count 5 --seed 42 --output - \
   >patterns.json 2>patterns.log
@@ -957,31 +999,33 @@ separate. Require the successful producer process outcome before applying `jq -e
 
 ## Compatibility policy
 
-- `version`, the GPU `software_version` field, and LLM `software` identity identify the application release; none is a
-  result schema version or compatibility selector. Consumers may retain and display this provenance independently of
-  schema and methodology acceptance.
-- Current standard schema 3, pattern schema 3, TLB schema 4, core-to-core schema 2, GPU schema 1, and LLM schema 2 remain
-  authoritative at their existing locations. The schema field is intentionally not normalized across these established
-  payloads.
+- `version`, the GPU `software_version` field, and CPU bandwidth/latency/LLM `software.version` identify the application
+  release; none is a result schema version or compatibility selector. Consumers may retain and display this provenance
+  independently of schema and methodology acceptance.
+- CPU bandwidth schema 1, CPU latency schema 1, pattern schema 3, TLB schema 4, core-to-core schema 2, GPU schema 1, and
+  LLM schema 2 remain authoritative at their existing locations. The schema field is intentionally not normalized across
+  these established payloads.
 - LLM schema 2 deliberately replaces the unpublished schema-1 shape and changes methodology selectors. The concrete
   field map describes relocation and changed acceptance; no automatic v1 reader, alias or migration layer is provided.
   Future removal/rename/type/meaning changes require schema-version review.
-- Bundled standard-memory examples accept compatible software releases only when standard mode, schema 3, the exact
-  methodology identity, completion state, and consumed field shapes match. They retain software-version provenance but
-  provide no translation layer for released standard schema 2, unversioned historical standard JSON layouts, or other
-  methodology identities.
-- General, core-to-core, and LLM sweep envelopes use `configuration.sweep_schema_version == 1`; nested results keep their
-  independent mode schema versions.
+- Bundled `script-examples/` scripts accept compatible software releases only when CPU bandwidth (`mode == "cpu_bandwidth"`,
+  `schema_version == 1`, `cpu-bandwidth-v1-arm64-calibrated-seeded-balanced`) or CPU latency (`mode == "cpu_latency"`,
+  `schema_version == 1`, `cpu-latency-v1-arm64-calibrated-seeded-balanced`), `status == "complete"`, `results_complete == true`,
+  `run_accepted == true`, and consumed field shapes match. They retain `software.version` as provenance only and provide no
+  translation layer for legacy standard schema-3/2, unversioned historical JSON layouts, or other methodology identities.
+- CPU bandwidth, CPU latency, general (pattern/TLB), core-to-core, and LLM sweep envelopes use
+  `configuration.sweep_schema_version == 1`; nested results keep their independent mode schema versions.
 - Additive optional fields may remain within a schema version only when old consumers can safely ignore them.
 - Removing or renaming a field, changing its type, or changing its meaning requires a mode schema-version bump.
 - A methodology change that affects comparison requires the mode's methodology-version mechanism even when JSON shape
   is unchanged.
 - A transport change alone does not change the measurement schema.
 - Schema-location normalization belongs in client code; this API does not move existing version fields.
-- Direct standard, GPU, and LLM payloads retain raw `configuration.output_file`. With stdout transport it is the original
-  target token `"-"`, not a filesystem path; `./-`, flag-shaped names, and every other non-empty non-sentinel value retain
-  their file meaning. Nested standard and nested LLM sweep payloads record `configuration.output_file: ""` because the
-  sweep envelope owns persistence. GPU and LLM additionally retain their exact captured `argv`.
+- Direct CPU bandwidth, CPU latency, GPU, and LLM payloads retain raw `configuration.output_file`. With stdout transport
+  it is the original target token `"-"`, not a filesystem path; `./-`, flag-shaped names, and every other non-empty
+  non-sentinel value retain their file meaning. Nested CPU bandwidth, CPU latency, and LLM sweep payloads record
+  `configuration.output_file: ""` because the sweep envelope owns persistence. All four additionally retain their exact
+  captured `argv`.
 
 ## Benchmark process policy
 

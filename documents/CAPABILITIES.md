@@ -8,9 +8,9 @@ Bandwidth is reported as **effective workload payload divided by measured time**
 
 | Capability | What it measures | What it does not establish |
 |---|---|---|
-| CPU bandwidth (`--benchmark`) | Effective read, write, and copy payload rate for cache-sized or main-memory-sized working sets | Physical DRAM traffic, cache residency, or memory-controller utilization |
+| CPU bandwidth (`--cpu-bandwidth`) | Effective read, write, and copy payload rate for main-memory or cache-sized working sets | Physical DRAM traffic, cache residency, or memory-controller utilization |
 | GPU bandwidth (`--gpu-bandwidth`) | Effective Metal compute-kernel payload rate using GPU timestamps | Verified DRAM residency, separate VRAM performance, or CPU-to-GPU transfer rate |
-| Latency (`--benchmark`) | Dependent pointer-chase load-to-use latency | Bulk bandwidth or an isolated TLB/page-walk cost |
+| CPU latency (`--cpu-latency`) | Dependent pointer-chase load-to-use latency | Bulk bandwidth or an isolated TLB/page-walk cost |
 | Access patterns (`--patterns`) | Payload-rate sensitivity to access order, regularity, and virtual stride | Which single cache, prefetch, translation, or scheduling mechanism caused a difference |
 | TLB analysis (`--analyze-tlb`) | Paired spread/packed latency deltas and empirical boundary estimates | Guaranteed architectural TLB sizes or direct DRAM latency |
 | Core-to-core (`--analyze-core2core`) | Effective round-trip time of a repeated two-thread acquire/release token exchange under scheduler hints | Isolated physical cache-line migration or coherence-path latency, exact physical-core placement, or a definitive topology map |
@@ -19,13 +19,15 @@ Bandwidth is reported as **effective workload payload divided by measured time**
 
 ## CPU Memory and Cache Bandwidth
 
-Standard `--benchmark` mode measures ARM64 read, write, and copy throughput. Targets include a large-buffer main-memory working set, automatically detected L1- and L2-sized working sets, and a custom cache-sized target selected with `--cache-size`. `--only-bandwidth` omits latency work.
+Standalone `-B`/`--cpu-bandwidth` mode (`mode: "cpu_bandwidth"`, schema 1, `cpu-bandwidth-v1-arm64-calibrated-seeded-balanced`) measures ARM64 read, write (`stnp`/`stp` pattern kernels), and copy throughput. Active targets include main memory, automatically detected L1 and L2 working sets, or a custom cache-sized target selected with `--cache-size`; `--buffer-size 0` or `--cache-size 0` selectively omits a target while requiring at least one active target.
 
-Buffer size, worker count, loop count, and work can be controlled. When `--iterations` is omitted, excluded calibration work selects the measured pass count; an explicit value fixes the work. Repeated loops reuse the resolved plan and rotate enabled phases and operation order to distribute position effects.
+Buffer size, worker count, loop count (default `3`), seed, and work can be controlled. When `--iterations` is omitted, excluded calibration work targets 150 ms per operation; an explicit value fixes the pass count (`1..1,000,000,000`). Repeated loops reuse frozen plans and rotate active targets and `read`/`write`/`copy` operation order in a cyclic Latin-square schedule to distribute position effects.
 
-Large-buffer bandwidth defaults to all detected CPU cores. Cache bandwidth defaults to one worker unless `--threads` is specified. Worker QoS is a best-effort macOS scheduler hint, not physical-core pinning.
+Large-buffer main-memory bandwidth defaults to all detected logical CPU cores, while cache targets default to one worker unless `--threads` is specified (explicit `--threads` applies to every active target and is capped per target by available workers and 64-byte slice divisibility). Worker QoS is a best-effort macOS scheduler hint, not physical-core pinning.
 
-These results are useful for comparing thread scaling, operation types, working-set sizes, machines, and software revisions under matched conditions. Read, write, and copy values are effective payload rates. In particular, copy payload accounting describes logical workload bytes rather than observed traffic on a physical bus.
+Before timing starts, `src` mappings are filled using an O(1) GF(2) seeded pattern (`cpu-bw-buffer-pattern-v1`) and protected read-only via `mprotect(PROT_READ)`. Timed read passes evaluate a non-cancelling per-pass checksum (`cpu-bw-read-checksum-v1`) checked against an independent closed-form oracle, while write and copy attempts undergo cold parallel full-buffer post-validation after timing stops (`pre_copy_sentinel` before copy prevents stale destination bytes from passing). Measurements record original Mach ticks (`cpu_raw`), bounded loop checkpoints (`K=max(1,ceil(count/8))`), and separate `results_complete` and `run_accepted` predicates. See the [CPU Bandwidth Whitepaper](CPU_BANDWIDTH_WHITEPAPER.md) for the complete mathematical, validation, and schema specification.
+
+These results are useful for comparing thread scaling, operation types, working-set sizes, machines, and software revisions under matched conditions. Read, write, and copy values are effective payload rates. In particular, copy payload accounting describes logical workload bytes (`2 * passes * bytes`) rather than observed traffic on a physical bus.
 
 ## Metal GPU Memory Bandwidth
 
@@ -203,17 +205,18 @@ validation boundaries, and interpretation.
 
 ## Memory and Cache Latency
 
-Standard latency tests use dependent pointer-chase chains: each load determines the address of the next. This serial dependency suppresses memory-level parallelism and measures load-to-use latency rather than throughput.
+Standalone `-L`/`--cpu-latency` mode (`mode: "cpu_latency"`, schema 1, `cpu-latency-v1-arm64-calibrated-seeded-balanced`, default `--count 3`) uses single-threaded dependent pointer-chase chains: each load determines the address of the next. This serial dependency suppresses memory-level parallelism and measures load-to-use latency rather than throughput.
 
-Latency can target large-memory, detected cache-sized, or custom cache-sized working sets. Custom stride and locality experiments are part of this capability:
+Latency targets detected L1 and L2 cache-sized working sets (or `--cache-size`) and main memory (`--buffer-size 0` or `--cache-size 0` selectively omits a target while requiring at least one active target). Chains are built deterministically via `splitmix64-fisher-yates-rejection-v1`, cyclically rotated so `indices[0] == 0`, hashed into `chain_permutation_sha256`, prevalidated as a single Hamiltonian cycle, and protected with `mprotect(PROT_READ)`. Custom stride and locality experiments are part of this capability:
 
-- `--latency-stride-bytes` controls the virtual distance between chain nodes.
+- `--latency-stride-bytes` controls the 8-byte-aligned virtual distance between chain nodes.
 - `--latency-tlb-locality-kb` controls the locality window used to build the chain.
-- `--latency-chain-mode` selects the chain-ordering policy.
+- `--latency-chain-mode` selects the chain-ordering policy (`auto`, `global-random`, `random-box`, `same-random-in-box`, or `diff-random-in-box`).
+- `--iterations` sets a fixed number of complete chain cycles (`1..1,000,000,000`); omission calibrates toward 250 ms (`[100 ms, 300 ms]`).
 
-Each per-loop headline value comes from one retained continuous pointer-chase timing pass. A separate sample pass runs by default with 1,000 windows; `--latency-samples` controls that positive window count. Sample windows continue from the preceding window's terminal pointer and form a distribution that neither defines nor weights the headline.
+Each per-loop headline value comes from one retained continuous pointer-chase timing pass returning to node `0` (`main-final-pointer`). A separate sample pass runs by default with 1,000 windows (`--latency-samples 0` disables sampling); sample windows continue from the preceding window's terminal pointer, verify every window's exact end node, and form a `pooled_sample_distribution` that neither defines nor weights the headline.
 
-When locality is not explicitly selected, the standard benchmark also performs a paired 16 KiB-locality versus global-random comparison. Its delta combines cache, address-locality, and translation effects; it is not an isolated page-table-walk cost or a TLB-capacity result. A seed reproduces chain and schedule identity, not identical timings. See the [Latency Whitepaper](LATENCY_WHITEPAPER.md) for construction and timing details.
+Explicitly passing `--compare-locality` (which requires `--buffer-size > 0` and `--latency-stride-bytes <= 8192`) runs 3 paired comparison rounds per loop before target measurements comparing a 16 KiB `random-box` chain against a `global-random` chain. Its delta (`median(global) - median(16k)`) combines cache, address-locality, and translation effects; it is not an isolated page-table-walk cost or a TLB-capacity result. A seed reproduces chain and schedule identity, not identical timings. See the [Latency Whitepaper](LATENCY_WHITEPAPER.md) for construction, validation, and timing details.
 
 ## Access-Pattern Analysis
 
@@ -245,32 +248,29 @@ See the [Core-to-Core Whitepaper](CORE_TO_CORE_WHITEPAPER.md) for the assembly p
 
 ## Parameter Sweeps and JSON Evidence
 
-Built-in sweeps execute supported parameter lists without shell orchestration. Full `--benchmark` mode can sweep buffer
-size, cache size, thread count, stride, locality, and chain mode; `--benchmark --only-bandwidth` and `--patterns` can
-sweep buffer size and thread count; and `--benchmark --only-latency` can sweep buffer size, cache size, stride,
-locality, and chain mode (not thread count). TLB mode supports its stride, chain-mode, and density controls;
-core-to-core mode supports loop count and sample depth; LLM-memory mode supports `context-tokens` (decode),
-`prompt-tokens` and `attention-query-tile-tokens` (prefill), and `kv-block-tokens` (paged KV).
-Multiple sweep options form a Cartesian product, and combined output requires `--output`. GPU schema 1
-does not support sweeps.
+Built-in sweeps execute supported parameter lists without shell orchestration. `--cpu-bandwidth` can sweep `buffer-size`, `cache-size`, and `threads`; `--cpu-latency` can sweep `buffer-size`, `cache-size`, `latency-tlb-locality-kb`, `latency-stride-bytes`, and `latency-chain-mode` (not `threads`); `--patterns` can sweep `buffer-size` and `threads`; `--analyze-tlb` supports `latency-stride-bytes`, `latency-chain-mode`, and `tlb-density`; `--analyze-core2core` supports `count` and `latency-samples`; and `--llm-memory` supports `context-tokens` (decode), `prompt-tokens` and `attention-query-tile-tokens` (prefill), and `kv-block-tokens` (paged KV).
+Multiple sweep options form a Cartesian product, and combined output requires `--output`. GPU schema 1 does not support sweeps.
 
 JSON is designed as auditable evidence, not merely a list of numbers. It preserves the resolved configuration, work and seed identity, measurements, statistics, status, and enough completion information to distinguish complete, partial, interrupted, and unavailable results. Missing measurements are nullable rather than represented by numeric zero.
 
 Every result-producing direct mode and supported sweep reserves the exact target `--output -` for
 machine-readable output: stdout contains one final JSON document and the post-parse human transcript is routed to
 stderr. An empty output value disables JSON for a direct command but is missing/invalid for a sweep. Every other
-non-empty value is a file target, including `./-` and flag-shaped names such as `-G`. File output is atomic; standard
-commands, sweeps, GPU, and LLM retain their mode-specific checkpoints, while stdout remains final-only. GPU stdout
-retains logical checkpoint transitions without intermediate serialization; LLM stdout skips intermediate snapshot
-preparation while preserving task-boundary stop observations. The
-current support matrix and process acceptance procedure are in the [Machine-Readable CLI API](API.md).
+non-empty value is a file target, including `./-` and flag-shaped names such as `-G`. File output is atomic; CPU
+bandwidth, CPU latency, GPU, LLM, and sweep files retain their mode-specific checkpoints, while stdout remains
+final-only. Direct CPU bandwidth, CPU latency, and LLM stdout skip intermediate snapshot preparation while preserving
+task-boundary stop observations; GPU stdout retains logical checkpoint transitions without intermediate serialization.
+The current support matrix and process acceptance procedure are in the [Machine-Readable CLI API](API.md).
 
-Current standard results use schema 3, which requires `configuration.mode: "benchmark"`, a string
-`configuration.output_file`, plus boolean `results_complete` and `conclusions_valid`. Bundled standard-memory examples
-accept compatible producer releases after validating standard mode, schema 3, methodology
-`benchmark-v2-calibrated-seeded-balanced`, completion state, and consumed field shapes. Software version is retained
-only as provenance. They do not translate released standard schema 2, unversioned historical standard JSON layouts, or
-other methodology identities.
+CPU bandwidth (`-B`) and CPU latency (`-L`) results use schema version `1` (`mode: "cpu_bandwidth"` with
+`methodology_version: "cpu-bandwidth-v1-arm64-calibrated-seeded-balanced"`, and `mode: "cpu_latency"` with
+`methodology_version: "cpu-latency-v1-arm64-calibrated-seeded-balanced"`), preserving raw `configuration.output_file`,
+`build_manifest`, `cpu_raw` Mach tick evidence, `checkpoint_lifecycle`, `results_complete`, and `run_accepted`. Both
+modes are independently verifiable (direct or schema-1 sweep envelopes) with `script-examples/verify_cpu_bandwidth_result.py`
+and `script-examples/verify_cpu_latency_result.py` (`make test-cpu-verifiers`). Bundled `script-examples/` scripts
+accept compatible producer releases after validating schema 1, mode, methodology identity, `status == "complete"`,
+`results_complete == true`, `run_accepted == true`, and consumed field shapes, retaining `software.version` as provenance
+only without translating legacy standard JSON layouts.
 
 Sweep output retains completed evidence even when a later run stops. Consumers should check the mode-specific status and completeness indicators before using aggregate conclusions. Exact schemas, checkpoint behavior, and inspection examples are in the [User Manual](MANUAL.md#json-output-format) and [Technical Specification](TECHNICAL_SPECIFICATION.md#18-json-output-contract).
 
@@ -289,7 +289,7 @@ Results depend on scheduling, background load, thermals, power management, worki
 For example:
 
 ```bash
-caffeinate -i -d memory_benchmark --benchmark --count 10 --buffer-size 1024 --output baseline.json
+caffeinate -i -d memory_benchmark --cpu-bandwidth --count 10 --buffer-size 1024 --output baseline.json
 ```
 
 For a direct machine-consumer run:

@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+  - **Standalone `-B` / `--cpu-bandwidth` mode (`src/cpu_bandwidth/`, schema 1)**: Added an independent, exact-whitelist audited CPU bandwidth mode (`mode: "cpu_bandwidth"`, `methodology_version: "cpu-bandwidth-v1-arm64-calibrated-seeded-balanced"`, default `--count 3`) measuring main memory, auto-detected L1/L2, or `--cache-size` targets (with `--buffer-size 0` or `--cache-size 0` selective omission) using persistent `PROT_READ` source mappings, O(1) GF(2) seeded source patterns (`cpu-bw-buffer-pattern-v1`), non-cancelling per-pass read checksums (`cpu-bw-read-checksum-v1`), parallel full-buffer post-validation for `write` and `copy` (`pre_copy_sentinel`), raw Mach timing (`cpu_raw`), bounded loop checkpoints (`K=max(1,ceil(count/8))`), `run_accepted` semantics, and schema-1 sweeps over `buffer-size`, `cache-size`, and `threads`.
+  - **Standalone `-L` / `--cpu-latency` mode (`src/cpu_latency/`, schema 1)**: Added an independent, exact-whitelist audited CPU pointer-chasing latency mode (`mode: "cpu_latency"`, `methodology_version: "cpu-latency-v1-arm64-calibrated-seeded-balanced"`, default `--count 3`) supporting fixed complete chain cycles (`-i/--iterations`), `-n/--latency-samples` (including `0` to disable), SplitMix64 + descending rejection Fisher–Yates chain generation with canonical `indices[0] == 0` rotation and `chain_permutation_sha256`, Hamiltonian cycle prevalidation, `mprotect(PROT_READ)` chain protection, main and sample-window end-pointer verification, explicit paired `--compare-locality` (`16 KiB random-box` vs `global-random`), raw Mach timing, and schema-1 sweeps over `buffer-size`, `cache-size`, `latency-tlb-locality-kb`, `latency-stride-bytes`, and `latency-chain-mode`.
+  - **Shared audit primitives (`src/core/audit/`) and pattern-write ARM64 kernels**: Extracted `host_environment`, `build_manifest` (via `build-support/generate_provenance.py`), `checkpoint_policy`, and `deterministic_rng` (`splitmix64-fisher-yates-rejection-v1`) into `src/core/audit/` alongside `MachTimingSnapshot` propagation and `AllocatedBufferEvidence`. Added `src/asm/memory_write_pattern.s` (`stnp`) and `src/asm/memory_write_cache_pattern.s` (`stp`) for arbitrary 64-bit write patterns without modifying `--patterns` kernels.
+  - **Independent CPU verifiers and acceptance tests**: Added `script-examples/cpu_verify_common.py`, `script-examples/verify_cpu_bandwidth_result.py`, `script-examples/verify_cpu_latency_result.py`, unit/mutation suites (`tests/test_cpu_bandwidth_verifier.py`, `tests/test_cpu_latency_verifier.py`), schema-1 fixtures, Tier 1–4 acceptance tests (`tests/test_cpu_e2e_acceptance.py`), and `make test-cpu-verifiers` in `make test-all`.
+  - **CPU Bandwidth Whitepaper and synchronized reference documentation**: Added `documents/CPU_BANDWIDTH_WHITEPAPER.md`, rewrote `documents/LATENCY_WHITEPAPER.md` to match the audited methodology standard, and updated `README.md`, `documents/API.md`, `documents/PARAMETER_MATRIX.md`, `documents/MANUAL.md`, `documents/CAPABILITIES.md`, `documents/TECHNICAL_SPECIFICATION.md`, `documents/PROJECT_STRUCTURE.md`, and `.github/ISSUE_TEMPLATE/bug_report.md`.
+
+### Changed
+  - **Primary mode split (`--benchmark` -> `--cpu-bandwidth` and `--cpu-latency`)**: Updated `main.cpp` and `mode_selector.cpp` to route seven mutually exclusive primary modes (`-B`/`--cpu-bandwidth`, `-L`/`--cpu-latency`, `-P`/`--patterns`, `-T`/`--analyze-tlb`, `-C`/`--analyze-core2core`, `-G`/`--gpu-bandwidth`, `-M`/`--llm-memory`).
+  - **Migrated `script-examples/` to schema 1**: Updated `latency_test_script.sh`, `latency_test_script_stride_tlb.sh`, `plot_benchmark-memory-latency-hierarchy.py`, `plot_M4vsM5_benchmark_comparison.py`, and `tests/test_script_examples.py` to consume `-B`/`-L` flags, `cpu_bandwidth` / `cpu_latency` schema-1 JSON, and `run_accepted`.
+
+### Removed
+  - **Legacy `--benchmark` mode and standard schema 3**: Removed `--benchmark`, `-W`/`--only-bandwidth`, legacy `--only-latency`, legacy `src/benchmark/benchmark_*`, `standard.cpp`, `statistics.*`, `results_messages.cpp`, legacy benchmark/statistics tests, and `tests/fixtures/standard-schema-v3-*.json` without legacy aliases or schema-3 compatibility shims.
+
 ## [0.65.0] - 2026-11-26
 
 ### Added
