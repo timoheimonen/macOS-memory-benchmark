@@ -31,15 +31,6 @@
 #include <string>
 #include <unistd.h>
 
-namespace {
-
-ProgressSpinner& shared_progress_spinner() {
-  static ProgressSpinner spinner;
-  return spinner;
-}
-
-}  // namespace
-
 ProgressSpinner::ProgressSpinner()
     : ProgressSpinner(std::cerr, isatty(STDERR_FILENO) == 1) {}
 
@@ -76,14 +67,6 @@ void ProgressSpinner::clear() {
 
   output_ << '\r' << std::string(rendered_width_, ' ') << '\r' << std::flush;
   rendered_width_ = 0;
-}
-
-void show_progress() {
-  shared_progress_spinner().tick("Running tests...");
-}
-
-void clear_progress() {
-  shared_progress_spinner().clear();
 }
 
 // --- Thread Utility Functions ---

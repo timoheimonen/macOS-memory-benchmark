@@ -33,7 +33,7 @@
 //   * Reverse SIMD chunks start at dst + byteCount - 32*k, so their base offset
 //     modulo 8 equals (byteCount & 7). Rotating pattern64 right by (byteCount & 7) * 8
 //     bits aligns every 32B/64B/128B/256B/512B store with dst[i] for any byteCount.
-//   * Main loop label is 64-byte aligned to match memory_write_reverse_loop_asm.
+//   * Main loop label is 64-byte aligned (`.p2align 6`).
 //   * No internal barriers (dsb/isb); timing barriers remain caller's responsibility.
 // -----------------------------------------------------------------------------
 

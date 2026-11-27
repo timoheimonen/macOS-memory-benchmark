@@ -71,14 +71,4 @@ class ProgressSpinner {
  */
 void join_threads(std::vector<std::thread>& threads);
 
-/**
- * @brief Show progress indicator (spinner)
- *
- * Displays a simple spinner animation to indicate progress.
- */
-void show_progress();
-
-/** @brief Clear the shared progress indicator, if it has been rendered. */
-void clear_progress();
-
 #endif  // UTILS_H

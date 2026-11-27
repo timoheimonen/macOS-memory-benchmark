@@ -25,7 +25,6 @@
 
 #include "messages_api.h"
 #include <sstream>
-#include <iomanip>
 
 namespace Messages {
 
@@ -49,99 +48,6 @@ std::string config_license() {
          "but WITHOUT ANY WARRANTY; without even the implied warranty of\n"
          "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n"
          "See <https://www.gnu.org/licenses/> for more details.\n";
-}
-
-std::string config_buffer_size(double buffer_size_mib, unsigned long buffer_size_mb) {
-  std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2);
-  oss << "Buffer Size (per buffer): " << buffer_size_mib << " MiB (" << buffer_size_mb << " MB requested/capped)";
-  return oss.str();
-}
-
-std::string config_total_allocation(double total_mib) {
-  std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2);
-  oss << "Peak Concurrent Allocation: ~" << total_mib << " MiB";
-  return oss.str();
-}
-
-std::string config_iterations(int iterations) {
-  std::ostringstream oss;
-  oss << "Iterations (per R/W/Copy test per loop): " << iterations;
-  return oss.str();
-}
-
-std::string config_loop_count(int loop_count) {
-  std::ostringstream oss;
-  oss << "Loop Count (total benchmark repetitions): " << loop_count;
-  return oss.str();
-}
-
-std::string config_non_cacheable(bool use_non_cacheable) {
-  std::ostringstream oss;
-  oss << "Non-Cacheable Memory Hints: " << (use_non_cacheable ? "Enabled" : "Disabled");
-  return oss.str();
-}
-
-std::string config_latency_stride(size_t stride_bytes) {
-  std::ostringstream oss;
-  oss << "Latency Stride: " << stride_bytes << " B";
-  return oss.str();
-}
-
-std::string config_latency_chain_mode(const std::string& mode_name) {
-  return "Latency Chain Mode: " + mode_name;
-}
-
-std::string config_latency_tlb_locality(size_t locality_bytes) {
-  std::ostringstream oss;
-  oss << "Latency TLB Locality: ";
-  if (locality_bytes == 0) {
-    oss << "Global random";
-    return oss.str();
-  }
-
-  oss << std::fixed << std::setprecision(2);
-  if (locality_bytes < 1024) {
-    oss << locality_bytes << " B";
-  } else if (locality_bytes < 1024 * 1024) {
-    oss << (locality_bytes / 1024.0) << " KB";
-  } else {
-    oss << (locality_bytes / (1024.0 * 1024.0)) << " MB";
-  }
-  return oss.str();
-}
-
-std::string config_processor_name(const std::string& cpu_name) {
-  return "\nProcessor Name: " + cpu_name;
-}
-
-std::string config_processor_name_error() {
-  return "Could not retrieve processor name.";
-}
-
-std::string config_performance_cores(int perf_cores) {
-  std::ostringstream oss;
-  oss << "  Performance Cores: " << perf_cores;
-  return oss.str();
-}
-
-std::string config_efficiency_cores(int eff_cores) {
-  std::ostringstream oss;
-  oss << "  Efficiency Cores: " << eff_cores;
-  return oss.str();
-}
-
-std::string config_total_cores(int num_threads) {
-  std::ostringstream oss;
-  oss << "  Total CPU Cores Detected: " << num_threads;
-  return oss.str();
-}
-
-std::string config_benchmark_threads(int num_threads) {
-  std::ostringstream oss;
-  oss << "  Benchmark Threads Requested: " << num_threads;
-  return oss.str();
 }
 
 } // namespace Messages

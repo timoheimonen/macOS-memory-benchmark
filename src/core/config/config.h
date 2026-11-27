@@ -23,12 +23,9 @@
  * to parse command-line arguments and validate configuration settings.
  *
  * This module uses various constants from constants.h including:
- * - Memory limits (MEMORY_LIMIT_FACTOR, FALLBACK_TOTAL_LIMIT_MB, MINIMUM_LIMIT_MB_PER_BUFFER)
  * - Cache size validation (MIN_CACHE_SIZE_KB, MAX_CACHE_SIZE_KB)
  * - Size conversion (BYTES_PER_KB, BYTES_PER_MB)
- * - Buffer sizing factors (L1_BUFFER_SIZE_FACTOR, L2_BUFFER_SIZE_FACTOR)
- * - Latency test parameters (LATENCY_STRIDE_BYTES, BASE_LATENCY_ACCESSES,
- *   L1_LATENCY_ACCESSES, L2_LATENCY_ACCESSES, CUSTOM_LATENCY_ACCESSES)
+ * - Latency test parameters (LATENCY_STRIDE_BYTES, DEFAULT_LATENCY_TLB_LOCALITY_KB)
  *
  * @see constants.h for detailed constant definitions and values.
  */
@@ -105,6 +102,11 @@ struct ConfigTestHooks {
 
 void set_config_test_hooks(const ConfigTestHooks* hooks);
 const ConfigTestHooks* get_config_test_hooks();
+
+/**
+ * @brief Return the effective OS page size in bytes for config validation.
+ * @return Injected test-hook page size when active and non-zero, otherwise the host system page size.
+ */
 size_t get_config_page_size_bytes();
 
 /**
@@ -137,11 +139,11 @@ const char* strict_unsigned_decimal_error_reason(StrictIntegerParseStatus status
 
 /**
  * @struct BenchmarkConfig
- * @brief Configuration structure containing all benchmark settings
+ * @brief Configuration structure containing standalone TLB and preflight settings
  *
- * This structure holds all configuration parameters for running benchmarks,
- * including user-provided settings, calculated buffer sizes, system information,
- * and various flags.
+ * This structure holds configuration parameters for standalone TLB analysis
+ * and general preflight parsing, including user-provided settings, detected
+ * system information, and various flags.
  */
 struct BenchmarkConfig {
   // User-provided settings
@@ -157,18 +159,6 @@ struct BenchmarkConfig {
   TlbSweepDensity tlb_sweep_density = TlbSweepDensity::Medium;  ///< Standard profile for standalone --analyze-tlb
   uint64_t tlb_seed = 0;  ///< Reproducible standalone TLB planner/chain seed
   
-  // Calculated sizes
-  size_t buffer_size = 0;        ///< Final buffer size in bytes (calculated from buffer_size_mb)
-  size_t l1_buffer_size = 0;     ///< L1 cache buffer size in bytes
-  size_t l2_buffer_size = 0;     ///< L2 cache buffer size in bytes
-  size_t custom_buffer_size = 0; ///< Custom cache buffer size in bytes
-  
-  // Access counts
-  size_t lat_num_accesses = 0;    ///< Main memory latency test access count (calculated)
-  size_t l1_num_accesses = 0;     ///< L1 cache latency test access count (set from constants)
-  size_t l2_num_accesses = 0;     ///< L2 cache latency test access count (set from constants)
-  size_t custom_num_accesses = 0; ///< Custom cache latency test access count (set from constants)
-  
   // System info
   std::string cpu_name;          ///< CPU model name
   std::string macos_version;     ///< macOS version string (e.g., "14.2.1")
@@ -178,7 +168,6 @@ struct BenchmarkConfig {
   size_t l1_cache_size = 0;      ///< L1 cache size in bytes
   size_t l2_cache_size = 0;      ///< L2 cache size in bytes
   size_t custom_cache_size_bytes = 0;  ///< Custom cache size in bytes
-  unsigned long max_total_allowed_mb = 0;  ///< Maximum total memory allowed in MB (80% of available)
   
   // Flags
   bool use_custom_cache_size = false;  ///< Whether to use custom cache size
@@ -228,9 +217,6 @@ struct BenchmarkConfig {
  * @see Constants::MIN_CACHE_SIZE_KB
  * @see Constants::MAX_CACHE_SIZE_KB
  * @see Constants::BYTES_PER_KB
- * @see Constants::L1_LATENCY_ACCESSES
- * @see Constants::L2_LATENCY_ACCESSES
- * @see Constants::CUSTOM_LATENCY_ACCESSES
  */
 int parse_arguments(int argc, char* argv[], BenchmarkConfig& config);
 
@@ -243,34 +229,9 @@ int parse_arguments(int argc, char* argv[], BenchmarkConfig& config);
  * performs necessary adjustments (e.g., rounding buffer sizes).
  * @see Constants::MEMORY_LIMIT_FACTOR
  * @see Constants::FALLBACK_TOTAL_LIMIT_MB
- * @see Constants::MINIMUM_LIMIT_MB_PER_BUFFER
  * @see Constants::DEFAULT_BUFFER_SIZE_MB
  * @see Constants::BYTES_PER_MB
  */
 int validate_config(BenchmarkConfig& config);
-
-/**
- * @brief Calculate cache buffer sizes based on cache sizes and constraints
- * @param[in,out] config Reference to BenchmarkConfig structure
- *
- * Calculates appropriate buffer sizes for L1, L2, and custom cache tests
- * based on detected cache sizes and configuration constraints.
- * @see Constants::L1_BUFFER_SIZE_FACTOR
- * @see Constants::L2_BUFFER_SIZE_FACTOR
- * @see Constants::LATENCY_STRIDE_BYTES
- * @see Constants::BYTES_PER_KB
- */
-void calculate_buffer_sizes(BenchmarkConfig& config);
-
-/**
- * @brief Calculate latency test access counts based on buffer sizes
- * @param[in,out] config Reference to BenchmarkConfig structure
- *
- * Calculates the number of pointer-chasing accesses to perform for each
- * latency test based on the corresponding buffer sizes.
- * @see Constants::BASE_LATENCY_ACCESSES
- * @see Constants::DEFAULT_BUFFER_SIZE_MB
- */
-void calculate_access_counts(BenchmarkConfig& config);
 
 #endif // CONFIG_H

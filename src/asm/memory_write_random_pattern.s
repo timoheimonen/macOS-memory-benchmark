@@ -31,8 +31,7 @@
 // Clobbers:
 //   x4-x6, q0-q1 (caller-saved only; preserves AAPCS64 callee-saved)
 // Implementation Notes:
-//   * Single-iteration loop mirrors memory_write_random_loop_asm (do not unroll
-//     without re-baselining random benchmark modes).
+//   * Single-iteration loop (do not unroll without re-baselining random benchmark modes).
 //   * No internal barriers (dsb/isb); timing barriers remain caller's responsibility.
 // -----------------------------------------------------------------------------
 

@@ -35,35 +35,9 @@ const std::string& warning_prefix() {
   return msg;
 }
 
-const std::string& warning_cannot_get_memory() {
-  static const std::string msg = "Cannot get available memory. Using fallback limit.";
-  return msg;
-}
-
-std::string warning_buffer_size_exceeds_limit(unsigned long requested_mb, unsigned long limit_mb) {
-  std::ostringstream oss;
-  oss << "Requested buffer size (" << requested_mb << " MB) > limit ("
-      << limit_mb << " MB). Using limit.";
-  return oss.str();
-}
-
 std::string warning_qos_failed(int code) {
   std::ostringstream oss;
   oss << "Failed to set QoS class for main thread (code: " << code << ")";
-  return oss.str();
-}
-
-std::string warning_qos_failed_worker_thread(int code) {
-  std::ostringstream oss;
-  oss << "Failed to set QoS class for warmup worker thread (code: " << code << ")";
-  return oss.str();
-}
-
-std::string warning_qos_failed_benchmark_worker(const std::string& worker_name,
-                                                int code) {
-  std::ostringstream oss;
-  oss << "Failed to set QoS class for " << worker_name
-      << " benchmark worker thread (code: " << code << ")";
   return oss.str();
 }
 
@@ -126,13 +100,6 @@ const std::string& warning_l2_cache_size_detection_failed_m2_m3_m4_m5() {
 const std::string& warning_l2_cache_size_detection_failed_generic() {
   static const std::string msg = "Could not detect L2 cache size, using generic fallback: 16 MB";
   return msg;
-}
-
-std::string warning_threads_capped(int requested, int max_cores) {
-  std::ostringstream oss;
-  oss << "Requested threads (" << requested << ") exceeds maximum available cores ("
-      << max_cores << "). Using " << max_cores << " threads.";
-  return oss.str();
 }
 
 std::string warning_benchmark_high_cv(const std::string& metric_name,

@@ -44,7 +44,6 @@ void expect_exact_messages(const std::vector<MessageCase>& cases) {
 TEST(MessagesErrorTest, ValidationErrorsHaveExactOutput) {
   expect_exact_messages({
       {"buffer calculation", Messages::error_buffer_size_calculation(1024), "Buffer size calculation error (1024 MB)."},
-      {"buffer too small", Messages::error_buffer_size_too_small(1024), "Final buffer size (1024 bytes) is too small."},
       {"cache size", Messages::error_cache_size_invalid(16, 524288, 512),
        "cache-size invalid (must be between 16 KB and 524288 KB (512 MB))"},
       {"iterations negative", Messages::error_iterations_invalid(-5, 1, 2147483647),
@@ -98,8 +97,6 @@ TEST(MessagesErrorTest, ValidationErrorsHaveExactOutput) {
       {"invalid iterations", Messages::error_invalid_value("--iterations", "abc", "must be a number"),
        "Invalid value for --iterations: abc (must be a number)"},
       {"mmap source", Messages::error_mmap_failed("src_buffer"), "mmap failed for src_buffer"},
-      {"benchmark loop 1", Messages::error_benchmark_loop(1, "memory error"),
-       "Error during benchmark loop 1: memory error"},
       {"qos code 1", Messages::warning_qos_failed(1), "Failed to set QoS class for main thread (code: 1)"},
       {"missing parameter", Messages::error_sweep_requires_parameter(),
        "--sweep requires at least one parameter specification"},
@@ -630,39 +627,6 @@ TEST(MessagesFormattingTest, ConfigBannerHasExactOutput) {
        "but WITHOUT ANY WARRANTY; without even the implied warranty of\n"
        "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n"
        "See <https://www.gnu.org/licenses/> for more details.\n"},
-  });
-}
-
-TEST(MessagesFormattingTest, ScalarConfigMessagesHaveExactOutput) {
-  expect_exact_messages({
-      {"iterations", Messages::config_iterations(1000), "Iterations (per R/W/Copy test per loop): 1000"},
-      {"loop count", Messages::config_loop_count(5), "Loop Count (total benchmark repetitions): 5"},
-      {"latency stride", Messages::config_latency_stride(136), "Latency Stride: 136 B"},
-      {"latency chain mode", Messages::config_latency_chain_mode("random-in-box-random-box"),
-       "Latency Chain Mode: random-in-box-random-box"},
-      {"processor name", Messages::config_processor_name("Apple M1"), "\nProcessor Name: Apple M1"},
-      {"performance cores", Messages::config_performance_cores(8), "  Performance Cores: 8"},
-      {"efficiency cores", Messages::config_efficiency_cores(2), "  Efficiency Cores: 2"},
-      {"total cores", Messages::config_total_cores(10), "  Total CPU Cores Detected: 10"},
-      {"benchmark threads", Messages::config_benchmark_threads(4), "  Benchmark Threads Requested: 4"},
-      {"buffer size", Messages::config_buffer_size(1024.5, 1024),
-       "Buffer Size (per buffer): 1024.50 MiB (1024 MB requested/capped)"},
-      {"allocation", Messages::config_total_allocation(3072.75), "Peak Concurrent Allocation: ~3072.75 MiB"},
-      {"non-cacheable enabled", Messages::config_non_cacheable(true), "Non-Cacheable Memory Hints: Enabled"},
-      {"non-cacheable disabled", Messages::config_non_cacheable(false), "Non-Cacheable Memory Hints: Disabled"},
-      {"global locality", Messages::config_latency_tlb_locality(0), "Latency TLB Locality: Global random"},
-      {"locality window", Messages::config_latency_tlb_locality(16 * 1024), "Latency TLB Locality: 16.00 KB"},
-  });
-}
-
-TEST(MessagesFormattingTest, CacheSizesHaveExactUnitsAndScope) {
-  expect_exact_messages({
-      {"custom bytes", Messages::cache_size_custom(512), "  Custom Cache Size: 512 B"},
-      {"custom KB", Messages::cache_size_custom(256 * 1024), "  Custom Cache Size: 256.00 KB"},
-      {"custom MB", Messages::cache_size_custom(2 * 1024 * 1024), "  Custom Cache Size: 2.00 MB"},
-      {"L1 KB", Messages::cache_size_l1(128 * 1024), "  L1 Cache Size: 128.00 KB (per P-core)"},
-      {"L1 MB", Messages::cache_size_l1(1024 * 1024), "  L1 Cache Size: 1.00 MB (per P-core)"},
-      {"L2 MB", Messages::cache_size_l2(4 * 1024 * 1024), "  L2 Cache Size: 4.00 MB (per P-core cluster)"},
   });
 }
 

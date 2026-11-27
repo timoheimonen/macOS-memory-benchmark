@@ -37,6 +37,7 @@
 #include "core/config/constants.h"
 #include "core/config/mode_selector.h"
 #include "core/config/sweep_utils.h"
+#include "core/system/page_size.h"
 #include "core/system/system_info.h"
 #include "output/console/messages/messages_api.h"
 #include "output/console/output_printer.h"
@@ -127,6 +128,14 @@ void set_config_test_hooks(const ConfigTestHooks* hooks) {
 const ConfigTestHooks* get_config_test_hooks() {
   const ConfigTestHookState& state = config_test_hook_state();
   return state.active ? &state.hooks : nullptr;
+}
+
+size_t get_config_page_size_bytes() {
+  const ConfigTestHooks* hooks = get_config_test_hooks();
+  if (hooks != nullptr && hooks->page_size_bytes != 0) {
+    return hooks->page_size_bytes;
+  }
+  return get_system_page_size_bytes();
 }
 
 namespace {
@@ -734,11 +743,6 @@ int parse_general_arguments(int argc, char* argv[], BenchmarkConfig& config) {
     config.l1_cache_size = use_injected_system_info ? test_hooks->l1_cache_size : get_l1_cache_size();
     config.l2_cache_size = use_injected_system_info ? test_hooks->l2_cache_size : get_l2_cache_size();
   }
-
-  // Set default access counts from constants.
-  config.l1_num_accesses = Constants::L1_LATENCY_ACCESSES;
-  config.l2_num_accesses = Constants::L2_LATENCY_ACCESSES;
-  config.custom_num_accesses = Constants::CUSTOM_LATENCY_ACCESSES;
 
   // Preserve requested thread count without warning; validate_config() handles capping.
   if (has_requested_threads) {

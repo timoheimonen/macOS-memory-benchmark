@@ -69,20 +69,6 @@ extern "C" {
     uint64_t memory_read_cache_loop_asm(const void* src, size_t byteCount);
     
     /**
-     * @brief Optimized memory write loop (assembly)
-     * @param dst Destination buffer pointer
-     * @param byteCount Number of bytes to write
-     */
-    void memory_write_loop_asm(void* dst, size_t byteCount);
-
-    /**
-     * @brief Optimized cache-focused memory write loop (assembly)
-     * @param dst Destination buffer pointer
-     * @param byteCount Number of bytes to write
-     */
-    void memory_write_cache_loop_asm(void* dst, size_t byteCount);
-
-    /**
      * @brief Optimized 64-bit pattern memory write loop (assembly, non-temporal)
      * @param dst Destination buffer pointer
      * @param byteCount Number of bytes to write
@@ -141,13 +127,6 @@ extern "C" {
     uint64_t memory_read_reverse_loop_asm(const void* src, size_t byteCount);
     
     /**
-     * @brief Optimized reverse sequential memory write loop (assembly)
-     * @param dst Destination buffer pointer
-     * @param byteCount Number of bytes to write
-     */
-    void memory_write_reverse_loop_asm(void* dst, size_t byteCount);
-
-    /**
      * @brief Optimized 64-bit pattern reverse sequential memory write loop (assembly, non-temporal)
      * @param dst Destination buffer pointer
      * @param byteCount Number of bytes to write
@@ -175,12 +154,6 @@ extern "C" {
      */
     uint64_t memory_read_strided_phased_loop_asm(const void* src, size_t byteCount, size_t stride,
                                                   size_t passes, size_t initial_phase);
-
-    /**
-     * @brief Execute complete strided write passes while rotating the 32-byte phase
-     */
-    void memory_write_strided_phased_loop_asm(void* dst, size_t byteCount, size_t stride,
-                                               size_t passes, size_t initial_phase);
 
     /**
      * @brief Execute complete strided 64-bit pattern write passes while rotating the 32-byte phase
@@ -211,14 +184,6 @@ extern "C" {
      */
     uint64_t memory_read_random_loop_asm(const void* src, const size_t* indices, size_t num_accesses);
     
-    /**
-     * @brief Optimized random access memory write loop (assembly)
-     * @param dst Destination buffer pointer
-     * @param indices Array of byte offsets for random access
-     * @param num_accesses Number of random accesses to perform
-     */
-    void memory_write_random_loop_asm(void* dst, const size_t* indices, size_t num_accesses);
-
     /**
      * @brief Optimized random access 64-bit pattern memory write loop (assembly, non-temporal)
      * @param dst Destination buffer pointer

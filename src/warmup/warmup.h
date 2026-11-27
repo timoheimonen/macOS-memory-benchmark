@@ -19,43 +19,13 @@
  * @author Timo Heimonen <timo.heimonen@proton.me>
  * @date 2025
  *
- * This header provides functions to warm up memory and caches before running
- * benchmarks. Warming up ensures consistent performance measurements by
- * pre-loading data into memory and caches.
+ * This header provides page-prefaulting warmup functions before running
+ * latency benchmarks.
  */
 #ifndef WARMUP_H
 #define WARMUP_H
 
-#include <atomic>
 #include <cstddef>
-#include <cstdint>
-
-// --- Basic Warmup Functions ---
-/**
- * @brief Warms up memory by reading from the buffer using multiple threads.
- * @param buffer Pointer to the buffer to warm up
- * @param size Size of the buffer in bytes
- * @param num_threads Number of threads to use for warmup
- * @param dummy_checksum Atomic checksum accumulator (used to prevent optimization)
- */
-void warmup_read(void* buffer, size_t size, int num_threads, std::atomic<uint64_t>& dummy_checksum);
-
-/**
- * @brief Warms up memory by writing to the buffer using multiple threads.
- * @param buffer Pointer to the buffer to warm up
- * @param size Size of the buffer in bytes
- * @param num_threads Number of threads to use for warmup
- */
-void warmup_write(void* buffer, size_t size, int num_threads);
-
-/**
- * @brief Warms up memory by copying data between buffers using multiple threads.
- * @param dst Pointer to the destination buffer
- * @param src Pointer to the source buffer
- * @param size Size of the buffers in bytes
- * @param num_threads Number of threads to use for warmup
- */
-void warmup_copy(void* dst, void* src, size_t size, int num_threads);
 
 // --- Latency Warmup Functions ---
 /**
@@ -65,32 +35,5 @@ void warmup_copy(void* dst, void* src, size_t size, int num_threads);
  * @note Uses single-threaded page prefaulting to ensure pages are resident in memory
  */
 void warmup_latency(void* buffer, size_t buffer_size);
-
-// --- Cache Warmup Functions ---
-/**
- * @brief Warms up cache bandwidth test by reading from the buffer.
- * @param src_buffer Pointer to the source buffer
- * @param size Size of the buffer in bytes
- * @param num_threads Number of threads to use for warmup
- * @param dummy_checksum Atomic checksum accumulator (used to prevent optimization)
- */
-void warmup_cache_read(void* src_buffer, size_t size, int num_threads, std::atomic<uint64_t>& dummy_checksum);
-
-/**
- * @brief Warms up cache bandwidth test by writing to the buffer.
- * @param dst_buffer Pointer to the destination buffer
- * @param size Size of the buffer in bytes
- * @param num_threads Number of threads to use for warmup
- */
-void warmup_cache_write(void* dst_buffer, size_t size, int num_threads);
-
-/**
- * @brief Warms up cache bandwidth test by copying data between buffers.
- * @param dst Pointer to the destination buffer
- * @param src Pointer to the source buffer
- * @param size Size of the buffers in bytes
- * @param num_threads Number of threads to use for warmup
- */
-void warmup_cache_copy(void* dst, void* src, size_t size, int num_threads);
 
 #endif // WARMUP_H

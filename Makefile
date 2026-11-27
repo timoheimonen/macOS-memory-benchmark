@@ -62,7 +62,7 @@ ASM_SRCS := $(sort $(wildcard $(SRC_DIR)/asm/*.s))
 # Object files (derived from source files, maintaining directory structure)
 # main.cpp -> main.o
 # src/timer.cpp -> src/timer.o
-# memory_copy.s / memory_read.s / memory_write.s / memory_latency.s -> *.o
+# memory_copy.s / memory_read.s / memory_write_pattern.s / memory_latency.s -> *.o
 OBJ_FILES := $(ALL_CPP_SRCS:.cpp=.o) $(OBJCXX_SRCS:.mm=.o) $(ASM_SRCS:.s=.o)
 
 # Target executable name

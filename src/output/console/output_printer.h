@@ -19,16 +19,11 @@
  * @author Timo Heimonen <timo.heimonen@proton.me>
  * @date 2026
  *
- * This header provides functions for printing benchmark configuration, results,
- * and usage information to the console.
+ * This header provides functions for printing general CLI help and the shared
+ * runtime banner to the console.
  */
 #ifndef OUTPUT_PRINTER_H
 #define OUTPUT_PRINTER_H
-
-#include <cstddef>  // size_t
-#include <string>   // std::string
-
-struct BenchmarkConfig;
 
 // --- Output/Printing Functions ---
 /**
@@ -41,35 +36,5 @@ void print_help(const char* prog_name);
  * @brief Print the shared runtime version, copyright, and GPL banner.
  */
 void print_runtime_banner();
-
-/**
- * @brief Print benchmark setup details
- * @param buffer_size Buffer size in bytes
- * @param buffer_size_mb Buffer size in megabytes
- * @param total_allocation_bytes Peak concurrently allocated bytes across enabled benchmark phases
- * @param iterations Number of iterations
- * @param loop_count Number of loops
- * @param use_non_cacheable Whether best-effort cache-discouraging allocation hints were requested
- * @param latency_stride_bytes Stride used by latency pointer chains
- * @param latency_chain_mode_name Chain construction mode used by latency pointer chains
- * @param latency_tlb_locality_bytes TLB-locality window for latency chains (0 = global random)
- * @param cpu_name CPU name
- * @param perf_cores Number of performance cores
- * @param eff_cores Number of efficiency cores
- * @param num_threads Number of threads
- */
-void print_configuration(size_t buffer_size, size_t buffer_size_mb, size_t total_allocation_bytes, int iterations,
-                          int loop_count, bool use_non_cacheable, size_t latency_stride_bytes,
-                          const std::string& latency_chain_mode_name, size_t latency_tlb_locality_bytes,
-                          const std::string& cpu_name, int perf_cores, int eff_cores, int num_threads);
-
-/**
- * @brief Print cache size information
- * @param l1_cache_size L1 cache size in bytes
- * @param l2_cache_size L2 cache size in bytes
- * @param use_custom_cache_size Whether custom cache size is used
- * @param custom_cache_size_bytes Custom cache size in bytes
- */
-void print_cache_info(size_t l1_cache_size, size_t l2_cache_size, bool use_custom_cache_size, size_t custom_cache_size_bytes);
 
 #endif // OUTPUT_PRINTER_H
