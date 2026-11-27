@@ -104,8 +104,8 @@ pipeline, and uses the numbered pipeline below for `-T`/`--analyze-tlb` and TLB 
    buffer for final JSON.
 4. Validate configuration (`validate_config`) while the supported machine-output routing is active (including
    direct-vs-`--sweep` conflict checks and memory limits).
-5. Create high-resolution total-execution timer (when needed for execution) and calculate derived sizes and counts (`calculate_buffer_sizes`, `calculate_access_counts`, `calculate_total_allocation_bytes`).
-6. Print resolved configuration and cache info.
+5. Create high-resolution total-execution timer (when needed for execution).
+6. Print the shared runtime banner and TLB run/resource summary.
 7. Raise main thread QoS (`QOS_CLASS_USER_INTERACTIVE`) best-effort.
 8. Execute standalone TLB analysis or TLB sweeps via `src/benchmark/tlb_*` and `sweep_runner.cpp`.
 9. Print summary results.
@@ -465,24 +465,15 @@ GPU validation is separate from `config_validator.cpp`:
 - Device initialization is unsupported without a default Metal device, unified memory, or Apple7-family capability.
   Unknown future device names are not rejected when required capabilities succeed.
 
-## 7. Size and Access Derivation
+## 7. Access Derivation
 
-### 7.1 Buffer sizing (`buffer_calculator.cpp`)
-
-- Main buffer size is derived from `buffer_size_mb`.
-- L1/L2/custom cache test buffers use factor constants currently set to `1.0`.
-- Cache buffers are rounded to active latency stride granularity (`latency_stride_bytes`, default `256`) and minimum constraints.
-- Minimum practical lower bound includes page-size enforcement.
-- `--cache-size 0` (in allowed mode) produces zero custom cache buffer.
-
-### 7.2 Latency access counts
+### 7.1 Latency access counts
 
 - `cpu_latency_runner` runs an excluded whole-chain pilot (`kMinPilotAccesses = 16,384` minimum), calibrates complete
   chain cycles toward `0.250s` (`[0.100s, 0.300s]`, max `2` corrections, minimum `16` complete chain cycles when
   permitted by `kCpuLatencyMaxAccesses = 4,000,000,000`), freezes `target_plans[]`, and reuses the frozen plan across
   outer loops.
 - `--buffer-size 0` omits `main_memory` in `--cpu-bandwidth` and `--cpu-latency`.
-- `calculate_access_counts` in `buffer_calculator.cpp` remains for shared `BenchmarkConfig` fallback fields.
 
 ## 8. Memory Allocation and Initialization
 
@@ -624,16 +615,13 @@ The `LatencyChainMode` enum (from `src/core/memory/memory_utils.h`) defines four
 
 ## 10. Warmup Subsystem
 
-Warmup functions (`src/warmup`) run before measured tests.
+Warmup functions (`src/warmup`) run before measured TLB latency tests.
 
-- Main-memory bandwidth warmups are multi-threaded and use the adaptive byte limit
-  `min(buffer_size, max(64 MiB, 10% of buffer_size))` from `warmup_internal.h`.
-- Cache-bandwidth warmups are multi-threaded and touch the full cache-sized buffer.
-- Latency warmups are single-threaded page-prefault passes that read and write one byte per native page; they do not
-  execute the pointer chain.
+- Latency warmups (`warmup_latency` in `src/warmup/latency_warmup.cpp`) are single-threaded page-prefault passes that
+  read and write one byte per native page; they do not execute the pointer chain.
 - `-B`, `-L`, and `-P` do not call `src/warmup/`; instead they run excluded `calibration_shape_warmup`, optional
   `single_unit_confirmation_warmup`, and `frozen_measurement_warmup` directly through their own executors before loop `0`.
-- Worker and/or single-thread warmups attempt high QoS class best-effort.
+- Single-thread latency warmup attempts high QoS class (`QOS_CLASS_USER_INTERACTIVE`) best-effort.
 
 ## 11. CPU Bandwidth Execution (`src/cpu_bandwidth/*`)
 
@@ -1107,10 +1095,10 @@ used by benchmark/warmup code, while the four LLM assembly entrypoints (`llm_dec
 `llm_decode_memory_paged_asm`, `llm_prefill_memory_asm`, and `llm_prefill_memory_paged_asm`) are declared with
 `extern "C"` in `src/llm_memory/llm_executor.h`:
 
-- Main-memory kernels: `memory_read_loop_asm` (4 NEON XOR lanes folded to `x0` + `<32B` byte tail), `memory_write_pattern_loop_asm` (`stnp` 64-bit arbitrary pattern fill + little-endian scalar tail for `--cpu-bandwidth` and `--patterns`), `memory_write_loop_asm` (non-temporal zero fill for warmup), and `memory_copy_loop_asm`.
-- Cache kernels: `memory_read_cache_loop_asm`, `memory_write_cache_pattern_loop_asm` (`stp` 64-bit arbitrary pattern fill + little-endian scalar tail for `--cpu-bandwidth`), `memory_write_cache_loop_asm`, and `memory_copy_cache_loop_asm` (`stnp` `>=32B` + `str` `<32B`).
+- Main-memory kernels: `memory_read_loop_asm` (4 NEON XOR lanes folded to `x0` + `<32B` byte tail), `memory_write_pattern_loop_asm` (`stnp` 64-bit arbitrary pattern fill + little-endian scalar tail for `--cpu-bandwidth` and `--patterns`), and `memory_copy_loop_asm`.
+- Cache kernels: `memory_read_cache_loop_asm`, `memory_write_cache_pattern_loop_asm` (`stp` 64-bit arbitrary pattern fill + little-endian scalar tail for `--cpu-bandwidth`), and `memory_copy_cache_loop_asm` (`stnp` `>=32B` + `str` `<32B`).
 - Latency kernel: pointer-chase loop.
-- Pattern kernels: sequential forward (`memory_read_loop_asm`, `memory_write_pattern_loop_asm`, `memory_copy_loop_asm`), reverse (`memory_read_reverse_loop_asm`, `memory_write_reverse_pattern_loop_asm`, `memory_copy_reverse_loop_asm`), parameterized phased strided entrypoints (`memory_read_strided_phased_loop_asm`, `memory_write_strided_phased_pattern_loop_asm`, `memory_copy_strided_phased_loop_asm`) accepting stride, pass count, and initial 32-byte phase, and random (`memory_read_random_loop_asm`, `memory_write_random_pattern_loop_asm`, `memory_copy_random_loop_asm`). The 64 B, 4096 B, 16384 B, and 2 MiB patterns use the same phased strided API. Legacy zero-fill `memory_write_{reverse,strided,random}.s` remain untouched for kernel tests.
+- Pattern kernels: sequential forward (`memory_read_loop_asm`, `memory_write_pattern_loop_asm`, `memory_copy_loop_asm`), reverse (`memory_read_reverse_loop_asm`, `memory_write_reverse_pattern_loop_asm`, `memory_copy_reverse_loop_asm`), parameterized phased strided entrypoints (`memory_read_strided_phased_loop_asm`, `memory_write_strided_phased_pattern_loop_asm`, `memory_copy_strided_phased_loop_asm`) accepting stride, pass count, and initial 32-byte phase, and random (`memory_read_random_loop_asm`, `memory_write_random_pattern_loop_asm`, `memory_copy_random_loop_asm`). The 64 B, 4096 B, 16384 B, and 2 MiB patterns use the same phased strided API.
 - Core-to-core kernels: initiator and responder round-trip loops.
 
 Design intent:
@@ -1744,16 +1732,13 @@ file. Verification does not prove original process success, physical traffic, or
   - `src/core/config/mode_selector.cpp`
   - `src/core/config/argument_parser.cpp`
   - `src/core/config/config_validator.cpp`
-  - `src/core/config/buffer_calculator.cpp`
   - `src/core/config/sweep_utils.cpp`
 - Memory allocation/init:
   - `src/core/memory/memory_manager.cpp`
   - `src/core/memory/memory_utils.cpp`
 - Shared benchmark infrastructure and sweeps:
   - `src/benchmark/sweep_runner.cpp`
-  - `src/benchmark/bandwidth_tests.cpp`
   - `src/benchmark/latency_tests.cpp`
-  - `src/benchmark/parallel_test_framework.h`
 - Standalone TLB planning and scheduling:
   - `src/benchmark/tlb_sweep_planner.cpp`
   - `src/benchmark/tlb_measurement_scheduler.cpp`

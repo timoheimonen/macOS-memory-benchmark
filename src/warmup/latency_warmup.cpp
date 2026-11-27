@@ -18,9 +18,28 @@
  * @brief Latency test warmup functions
  */
 
+#include <iostream>
+
+#include <mach/mach.h>
+#include <pthread/qos.h>
+
 #include "core/system/page_size.h"
+#include "output/console/messages/messages_api.h"
 #include "warmup/warmup.h"
-#include "warmup/warmup_internal.h"
+
+namespace {
+
+template<typename Op>
+void warmup_single(Op operation) {
+  // Set QoS for single-threaded warmup operations to ensure highest priority
+  kern_return_t qos_ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+  if (qos_ret != KERN_SUCCESS) {
+    std::cerr << Messages::warning_prefix() << Messages::warning_qos_failed(qos_ret) << std::endl;
+  }
+  operation();
+}
+
+}  // namespace
 
 /**
  * @brief Warms up memory for latency test by page prefaulting (single thread).

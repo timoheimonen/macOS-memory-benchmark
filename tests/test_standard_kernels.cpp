@@ -11,14 +11,12 @@
 #include <unistd.h>
 
 #include <array>
-#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <vector>
 
 #include "asm/asm_functions.h"
 #include "benchmark/benchmark_tests.h"
-#include "benchmark/parallel_test_framework.h"
 #include "core/config/constants.h"
 #include "core/memory/memory_utils.h"
 #include "core/timing/timer.h"
@@ -118,7 +116,6 @@ uint64_t expected_random_checksum(const unsigned char* data,
 }
 
 using ReadKernel = uint64_t (*)(const void*, size_t);
-using WriteKernel = void (*)(void*, size_t);
 using CopyKernel = void (*)(void*, const void*, size_t);
 
 void verify_read_kernel_boundaries(ReadKernel kernel) {
@@ -136,19 +133,6 @@ void verify_read_kernel_boundaries(ReadKernel kernel) {
         << "size=" << size;
     EXPECT_TRUE(std::equal(before.begin(), before.end(), source.payload()))
         << "size=" << size;
-  }
-}
-
-void verify_write_kernel_boundaries(WriteKernel kernel) {
-  for (size_t size : kTailSizes) {
-    GuardedMapping destination(size);
-    ASSERT_TRUE(destination.valid());
-    std::memset(destination.payload(), 0xa5, size);
-    kernel(destination.payload(), size);
-    for (size_t index = 0; index < size; ++index) {
-      EXPECT_EQ(destination.payload()[index], 0u)
-          << "size=" << size << " index=" << index;
-    }
   }
 }
 
@@ -198,28 +182,6 @@ void verify_reverse_read_kernel_boundaries(ReadKernel kernel) {
     EXPECT_TRUE(std::equal(payload_before.begin(), payload_before.end(),
                            source.payload()))
         << "size=" << size;
-  }
-}
-
-void verify_reverse_write_kernel_boundaries(WriteKernel kernel) {
-  for (size_t size : kTailSizes) {
-    GuardedMapping destination(size);
-    ASSERT_TRUE(destination.valid());
-    std::memset(destination.accessible_begin(), 0xd3,
-                destination.prefix_size());
-    std::memset(destination.payload(), 0xa5, size);
-    const std::vector<unsigned char> prefix_before(
-        destination.accessible_begin(), destination.payload());
-
-    kernel(destination.payload(), size);
-
-    EXPECT_TRUE(std::equal(prefix_before.begin(), prefix_before.end(),
-                           destination.accessible_begin()))
-        << "size=" << size;
-    for (size_t index = 0; index < size; ++index) {
-      EXPECT_EQ(destination.payload()[index], 0u)
-          << "size=" << size << " index=" << index;
-    }
   }
 }
 
@@ -276,10 +238,6 @@ TEST(PatternKernelIntegrationTest, ReverseReadHonorsTailsGuardsAndChecksum) {
   verify_reverse_read_kernel_boundaries(memory_read_reverse_loop_asm);
 }
 
-TEST(PatternKernelIntegrationTest, ReverseWriteHonorsExactGuardedBoundaries) {
-  verify_reverse_write_kernel_boundaries(memory_write_reverse_loop_asm);
-}
-
 TEST(PatternKernelIntegrationTest, ReverseCopyHonorsExactGuardedBoundaries) {
   verify_reverse_copy_kernel_boundaries(memory_copy_reverse_loop_asm);
 }
@@ -308,30 +266,6 @@ TEST(PatternKernelIntegrationTest, RandomReadHonorsIndicesLastAccessAndChecksum)
                          source.payload()));
   EXPECT_EQ(memory_read_random_loop_asm(source.payload(), indices.data(), 0),
             0u);
-}
-
-TEST(PatternKernelIntegrationTest, RandomWriteTouchesOnlySelectedAccesses) {
-  constexpr size_t kPayloadSize = 160;
-  const std::vector<size_t> indices = {0, 64, 128};
-  GuardedMapping destination(kPayloadSize);
-  ASSERT_TRUE(destination.valid());
-  std::memset(destination.accessible_begin(), 0xd3,
-              destination.prefix_size());
-  std::memset(destination.payload(), 0xa5, kPayloadSize);
-  const std::vector<unsigned char> prefix_before(
-      destination.accessible_begin(), destination.payload());
-
-  memory_write_random_loop_asm(destination.payload(), indices.data(),
-                               indices.size());
-
-  EXPECT_TRUE(std::equal(prefix_before.begin(), prefix_before.end(),
-                         destination.accessible_begin()));
-  for (size_t index = 0; index < kPayloadSize; ++index) {
-    const bool selected = index < 32 || (index >= 64 && index < 96) ||
-                          (index >= 128 && index < 160);
-    EXPECT_EQ(destination.payload()[index], selected ? 0u : 0xa5u)
-        << "index=" << index;
-  }
 }
 
 TEST(PatternKernelIntegrationTest, RandomCopyTouchesOnlySelectedAccesses) {
@@ -376,11 +310,6 @@ TEST(PatternKernelIntegrationTest, RandomCopyTouchesOnlySelectedAccesses) {
   }
 }
 
-TEST(StandardKernelIntegrationTest, MainAndCacheWritesHonorExactBoundaries) {
-  verify_write_kernel_boundaries(memory_write_loop_asm);
-  verify_write_kernel_boundaries(memory_write_cache_loop_asm);
-}
-
 TEST(StandardKernelIntegrationTest, MainAndCacheCopiesHonorExactBoundaries) {
   verify_copy_kernel_boundaries(memory_copy_loop_asm);
   verify_copy_kernel_boundaries(memory_copy_cache_loop_asm);
@@ -405,20 +334,14 @@ TEST(StandardKernelIntegrationTest, StandardAndPatternKernelsPreserveCalleeSaved
   };
   std::vector<KernelCase> cases = {
       {"read", reinterpret_cast<uintptr_t>(memory_read_loop_asm), {src, kSize, 0, 0, 0, 0}},
-      {"write", reinterpret_cast<uintptr_t>(memory_write_loop_asm), {dst, kSize, 0, 0, 0, 0}},
       {"copy", reinterpret_cast<uintptr_t>(memory_copy_loop_asm), {dst, src, kSize, 0, 0, 0}},
       {"read_cache", reinterpret_cast<uintptr_t>(memory_read_cache_loop_asm), {src, kSize, 0, 0, 0, 0}},
-      {"write_cache", reinterpret_cast<uintptr_t>(memory_write_cache_loop_asm), {dst, kSize, 0, 0, 0, 0}},
       {"copy_cache", reinterpret_cast<uintptr_t>(memory_copy_cache_loop_asm), {dst, src, kSize, 0, 0, 0}},
       {"read_reverse", reinterpret_cast<uintptr_t>(memory_read_reverse_loop_asm), {src, kSize, 0, 0, 0, 0}},
-      {"write_reverse", reinterpret_cast<uintptr_t>(memory_write_reverse_loop_asm), {dst, kSize, 0, 0, 0, 0}},
       {"copy_reverse", reinterpret_cast<uintptr_t>(memory_copy_reverse_loop_asm), {dst, src, kSize, 0, 0, 0}},
       {"read_random",
        reinterpret_cast<uintptr_t>(memory_read_random_loop_asm),
        {src, index_data, indices.size(), 0, 0, 0}},
-      {"write_random",
-       reinterpret_cast<uintptr_t>(memory_write_random_loop_asm),
-       {dst, index_data, indices.size(), 0, 0, 0}},
       {"copy_random",
        reinterpret_cast<uintptr_t>(memory_copy_random_loop_asm),
        {dst, src, index_data, indices.size(), 0, 0}},
@@ -429,9 +352,6 @@ TEST(StandardKernelIntegrationTest, StandardAndPatternKernelsPreserveCalleeSaved
     cases.push_back({"read_strided",
                      reinterpret_cast<uintptr_t>(memory_read_strided_phased_loop_asm),
                      {src, span, stride, 2, 0, 0}});
-    cases.push_back({"write_strided",
-                     reinterpret_cast<uintptr_t>(memory_write_strided_phased_loop_asm),
-                     {dst, span, stride, 2, 0, 0}});
     cases.push_back({"copy_strided",
                      reinterpret_cast<uintptr_t>(memory_copy_strided_phased_loop_asm),
                      {dst, src, span, stride, 2, 0}});
@@ -463,93 +383,12 @@ void reset_deterministic_executor_timer_ticks() {
   deterministic_executor_timer_tick = 0;
 }
 
-struct ThreadExitTickProbe {
-  std::atomic<uint64_t>* observed_tick;
-
-  ~ThreadExitTickProbe() {
-    observed_tick->store(deterministic_executor_timer_tick,
-                         std::memory_order_relaxed);
-  }
-};
-
 using ScopedDeterministicExecutorTimerSystemCalls =
     test_timer_system_calls::ScopedTimerSystemCalls<
         deterministic_executor_timer_ticks,
         reset_deterministic_executor_timer_ticks>;
 
 }  // namespace
-
-TEST(StandardKernelIntegrationTest,
-     ParallelExecutorConsumesAlignedUnevenChunksExactly) {
-  const ScopedDeterministicExecutorTimerSystemCalls timer_system_calls;
-  alignas(Constants::CACHE_LINE_SIZE_BYTES)
-      std::array<unsigned char, 2049> buffer{};
-  auto timer = HighResTimer::create();
-  ASSERT_TRUE(timer.has_value());
-
-  std::array<size_t, 10> observed_offsets{};
-  std::array<size_t, 10> observed_sizes{};
-  std::array<std::atomic<bool>, 10> executed;
-  for (std::atomic<bool>& flag : executed) {
-    flag.store(false, std::memory_order_relaxed);
-  }
-  auto make_work = [&](size_t offset, size_t size, int iterations,
-                       size_t worker_index) {
-    observed_offsets[worker_index] = offset;
-    observed_sizes[worker_index] = size;
-    EXPECT_EQ(iterations, 1);
-    return [&, worker_index] {
-      executed[worker_index].store(true, std::memory_order_relaxed);
-    };
-  };
-  ParallelExecutionMetadata metadata;
-  const double elapsed = run_parallel_test_common(
-      buffer.data(), buffer.size(), 1, 10, *timer, "partition-test", make_work,
-      nullptr, &metadata);
-
-  EXPECT_DOUBLE_EQ(elapsed, 100.0 / 1e9);
-  EXPECT_EQ(metadata.created_workers, 10);
-  EXPECT_FALSE(metadata.worker_startup_failed);
-
-  size_t covered = 0;
-  for (size_t index = 0; index < observed_offsets.size(); ++index) {
-    EXPECT_EQ(observed_offsets[index], covered);
-    EXPECT_GT(observed_sizes[index], 0u);
-    EXPECT_TRUE(executed[index].load(std::memory_order_relaxed));
-    covered += observed_sizes[index];
-    if (index + 1 < observed_offsets.size()) {
-      const uintptr_t boundary_address =
-          reinterpret_cast<uintptr_t>(buffer.data()) + covered;
-      EXPECT_EQ(boundary_address % Constants::CACHE_LINE_SIZE_BYTES, 0u);
-    }
-  }
-  EXPECT_EQ(covered, buffer.size());
-}
-
-TEST(StandardKernelIntegrationTest, ParallelTimingStopsBeforeWorkerTeardown) {
-  const ScopedDeterministicExecutorTimerSystemCalls timer_system_calls;
-  std::array<unsigned char, 4096> buffer{};
-  auto timer = HighResTimer::create();
-  ASSERT_TRUE(timer.has_value());
-
-  uint64_t tick_during_work = 0;
-  std::atomic<uint64_t> tick_at_worker_teardown{0};
-  auto make_work = [&](size_t, size_t, int, size_t) {
-    return [&] {
-      thread_local ThreadExitTickProbe probe{&tick_at_worker_teardown};
-      static_cast<void>(probe);
-      tick_during_work = deterministic_executor_timer_tick;
-    };
-  };
-
-  const double measured_duration = run_parallel_test_common(
-      buffer.data(), buffer.size(), 1, 1, *timer, "timing_test", make_work);
-
-  EXPECT_DOUBLE_EQ(measured_duration, 100.0 / 1e9);
-  EXPECT_EQ(tick_during_work, 100u);
-  EXPECT_EQ(tick_at_worker_teardown.load(std::memory_order_relaxed), 200u);
-  EXPECT_EQ(deterministic_executor_timer_tick, 200u);
-}
 
 TEST(StandardKernelIntegrationTest,
      LatencySamplingClampsAndContinuesFromPriorTerminalPointer) {
@@ -592,127 +431,4 @@ TEST(StandardKernelIntegrationTest,
   verify_sampling(3, {3, 2, 2}, {100.0 / 3.0, 50.0, 50.0});
   verify_sampling(100, {1, 1, 1, 1, 1, 1, 1},
                   {100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0});
-}
-
-TEST(StandardKernelIntegrationTest, WorkerStartupFailureIsDeterministicAndNotMeasured) {
-  alignas(64) std::array<unsigned char, 4096> buffer{};
-  auto timer = HighResTimer::create();
-  ASSERT_TRUE(timer.has_value());
-  ParallelExecutionMetadata metadata;
-  ParallelExecutionTestControl control;
-  control.fail_before_worker_index = 1;
-  auto make_work = [](size_t, size_t, int, size_t) {
-    return [] {};
-  };
-
-  const double elapsed = run_parallel_test_common(
-      buffer.data(), buffer.size(), 1, 2, *timer, "startup-injection",
-      make_work, nullptr, &metadata, &control);
-
-  EXPECT_EQ(elapsed, 0.0);
-  EXPECT_TRUE(metadata.worker_startup_failed);
-  EXPECT_EQ(metadata.requested_workers, 2);
-  EXPECT_EQ(metadata.created_workers, 1);
-  EXPECT_EQ(metadata.qos_successful_workers + metadata.qos_failed_workers, 1u);
-  EXPECT_FALSE(metadata.timing_snapshot.has_value());
-}
-
-namespace {
-std::atomic<uint64_t> deterministic_kernel_ticks{0};
-
-void reset_deterministic_kernel_ticks() {
-  deterministic_kernel_ticks.store(0, std::memory_order_relaxed);
-}
-
-uint64_t next_deterministic_kernel_ticks() {
-  const uint64_t call =
-      deterministic_kernel_ticks.fetch_add(1, std::memory_order_relaxed);
-  return call == 0 ? 1000ULL : 2500ULL;
-}
-}  // namespace
-
-TEST(StandardKernelIntegrationTest, ParallelExecutionMetadataPropagatesMachTimingSnapshot) {
-  test_timer_system_calls::ScopedTimerSystemCalls<
-      next_deterministic_kernel_ticks, reset_deterministic_kernel_ticks>
-      scoped_timer;
-
-  alignas(64) std::array<unsigned char, 4096> buffer{};
-  auto timer = HighResTimer::create();
-  ASSERT_TRUE(timer.has_value());
-
-  ParallelExecutionMetadata metadata;
-  auto make_work = [](size_t, size_t, int, size_t) {
-    return [] {};
-  };
-
-  const double elapsed = run_parallel_test_common(
-      buffer.data(), buffer.size(), 1, 2, *timer, "timing-snapshot",
-      make_work, nullptr, &metadata);
-
-  EXPECT_GT(elapsed, 0.0);
-  EXPECT_FALSE(metadata.worker_startup_failed);
-  ASSERT_TRUE(metadata.timing_snapshot.has_value());
-  ASSERT_TRUE(timer->last_snapshot.has_value());
-  EXPECT_EQ(metadata.timing_snapshot->start_ticks, 1000ULL);
-  EXPECT_EQ(metadata.timing_snapshot->stop_ticks, 2500ULL);
-  EXPECT_EQ(metadata.timing_snapshot->delta_ticks, 1500ULL);
-  EXPECT_EQ(metadata.timing_snapshot->numer, 1u);
-  EXPECT_EQ(metadata.timing_snapshot->denom, 1u);
-}
-
-TEST(StandardKernelIntegrationTest, ParallelExecutionEarlyReturnsLeaveTimingSnapshotNullopt) {
-  alignas(64) std::array<unsigned char, 4096> buffer{};
-  auto timer = HighResTimer::create();
-  ASSERT_TRUE(timer.has_value());
-  auto make_work = [](size_t, size_t, int, size_t) {
-    return [] {};
-  };
-
-  ParallelExecutionMetadata metadata;
-  metadata.timing_snapshot = MachTimingSnapshot{1, 2, 1, 1, 1};
-  EXPECT_EQ(run_parallel_test_common(buffer.data(), 0, 1, 2, *timer, "zero-size",
-                                     make_work, nullptr, &metadata),
-            0.0);
-  EXPECT_FALSE(metadata.timing_snapshot.has_value());
-
-  metadata.timing_snapshot = MachTimingSnapshot{1, 2, 1, 1, 1};
-  EXPECT_EQ(run_parallel_test_common(buffer.data(), buffer.size(), 1, 0, *timer,
-                                     "zero-threads", make_work, nullptr, &metadata),
-            0.0);
-  EXPECT_FALSE(metadata.timing_snapshot.has_value());
-
-  const std::vector<size_t> invalid_boundaries = {0, 100};
-  metadata.timing_snapshot = MachTimingSnapshot{1, 2, 1, 1, 1};
-  EXPECT_EQ(run_parallel_test_common(buffer.data(), buffer.size(), 1, 1, *timer,
-                                     "bad-boundaries", make_work,
-                                     &invalid_boundaries, &metadata),
-            0.0);
-  EXPECT_FALSE(metadata.timing_snapshot.has_value());
-
-  ParallelExecutionTestControl fail_first;
-  fail_first.fail_before_worker_index = 0;
-  metadata.timing_snapshot = MachTimingSnapshot{1, 2, 1, 1, 1};
-  EXPECT_EQ(run_parallel_test_common(buffer.data(), buffer.size(), 1, 2, *timer,
-                                     "fail-first", make_work, nullptr,
-                                     &metadata, &fail_first),
-            0.0);
-  EXPECT_TRUE(metadata.worker_startup_failed);
-  EXPECT_FALSE(metadata.timing_snapshot.has_value());
-
-  const std::vector<size_t> single_boundary = {0};
-  metadata.timing_snapshot = MachTimingSnapshot{1, 2, 1, 1, 1};
-  EXPECT_EQ(run_parallel_test_indexed_with_boundaries(
-                buffer.data(), buffer.size(), 1, *timer, single_boundary,
-                [](void*, size_t, int, size_t) {}, "bad-indexed", &metadata),
-            0.0);
-  EXPECT_FALSE(metadata.timing_snapshot.has_value());
-
-  metadata.timing_snapshot = MachTimingSnapshot{1, 2, 1, 1, 1};
-  EXPECT_EQ(run_parallel_test_copy_indexed_with_boundaries(
-                buffer.data(), buffer.data(), buffer.size(), 1, *timer,
-                single_boundary,
-                [](void*, void*, size_t, int, size_t) {}, "bad-copy-indexed",
-                &metadata),
-            0.0);
-  EXPECT_FALSE(metadata.timing_snapshot.has_value());
 }

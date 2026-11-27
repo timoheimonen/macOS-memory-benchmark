@@ -18,9 +18,8 @@
  * @file memory_utils.cpp
  * @brief Memory utility implementations
  *
- * Provides implementations for memory buffer initialization and latency chain setup.
- * Includes functions for creating pointer-chasing chains for latency measurements
- * and initializing source/destination buffers with test patterns.
+ * Provides implementations for latency chain setup, including creating
+ * pointer-chasing chains for latency measurements.
  */
 
 #include "core/memory/memory_utils.h"
@@ -31,7 +30,6 @@
 #include <optional>
 #include <random>    // Needed for std::random_device, std::mt19937_64
 #include <algorithm> // Needed for std::shuffle
-#include <cstring>   // Needed for memset
 #include <cctype>
 #include <iostream>  // Needed for std::cout, std::cerr
 #include <cstdlib>   // Needed for EXIT_SUCCESS, EXIT_FAILURE
@@ -238,8 +236,6 @@ bool latency_chain_mode_uses_locality(LatencyChainMode mode) {
  * @note The buffer must be large enough to hold at least 2 pointers at the given stride.
  * @note Uses std::random_device by default; an explicit seed makes chain order reproducible.
  * @note All pointer locations are bounds-checked to prevent buffer overruns.
- *
- * @see initialize_buffers() for buffer initialization
  */
 static int setup_latency_chain_impl(void *buffer, size_t buffer_size, size_t stride,
                                     size_t tlb_locality_bytes,
@@ -368,57 +364,4 @@ int setup_latency_chain(void* buffer, size_t buffer_size, size_t stride,
                         LatencyChainMode mode,
                         uint64_t deterministic_seed) {
   return setup_latency_chain_impl(buffer, buffer_size, stride, tlb_locality_bytes, mode, deterministic_seed);
-}
-
-/**
- * @brief Fills source and destination buffers with initial data.
- *
- * Initializes two buffers for bandwidth testing:
- * - Source buffer: Filled with a repeating pattern (0-255) to provide deterministic data
- * - Destination buffer: Zeroed using memset to ensure clean starting state
- *
- * This initialization ensures that bandwidth tests start with known buffer states and
- * can detect errors in memory operations by comparing expected vs actual values.
- *
- * @param[out] src_buffer   Pointer to the source buffer. Must be non-null.
- *                          Will be filled with pattern (i % 256) for each byte i.
- * @param[out] dst_buffer   Pointer to the destination buffer. Must be non-null.
- *                          Will be zeroed.
- * @param[in]  buffer_size  Size of each buffer in bytes. Must be non-zero.
- *
- * @return EXIT_SUCCESS (0) on success
- * @return EXIT_FAILURE (1) if either buffer is null or buffer_size is zero
- *
- * @note Both buffers must be pre-allocated to at least buffer_size bytes.
- * @note The source pattern (i % 256) creates a repeating 0-255 byte sequence.
- *
- * @see setup_latency_chain() for latency buffer setup
- */
-int initialize_buffers(void *src_buffer, void *dst_buffer, size_t buffer_size)
-{
-    // Validate input parameters
-    if (src_buffer == nullptr) {
-        std::cerr << Messages::error_prefix() << Messages::error_source_buffer_null() << std::endl;
-        return EXIT_FAILURE;
-    }
-    
-    if (dst_buffer == nullptr) {
-        std::cerr << Messages::error_prefix() << Messages::error_destination_buffer_null() << std::endl;
-        return EXIT_FAILURE;
-    }
-    
-    if (buffer_size == 0) {
-        std::cerr << Messages::error_prefix() << Messages::error_buffer_size_zero_generic() << std::endl;
-        return EXIT_FAILURE;
-    }
-    
-    // Fill the source buffer with a repeating byte pattern (0-255).
-    for (size_t i = 0; i < buffer_size; ++i)
-    {
-        static_cast<char *>(src_buffer)[i] = (char)(i % 256);
-    }
-    // Fill the destination buffer with zeros using memset.
-    memset(dst_buffer, 0, buffer_size);
-    
-    return EXIT_SUCCESS;
 }

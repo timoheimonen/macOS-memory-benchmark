@@ -651,54 +651,6 @@ TEST(ConfigTest, ParseAnalyzeTlbDefaultsExplicitAndInvalidOptions) {
   }
 }
 
-TEST(ConfigTest, CalculateBufferSizesAndAccessCounts) {
-  struct BufferSizeCase {
-    bool use_custom_cache_size;
-    size_t l1_cache_size;
-    size_t l2_cache_size;
-    size_t custom_cache_size;
-    size_t expected_l1_buffer_size;
-    size_t expected_l2_buffer_size;
-    size_t expected_custom_buffer_size;
-  };
-  constexpr size_t kL1Size = 128 * Constants::BYTES_PER_KB;
-  constexpr size_t kL2Size = 4 * Constants::BYTES_PER_MB;
-  constexpr size_t kCustomSize = 256 * Constants::BYTES_PER_KB;
-  const BufferSizeCase buffer_cases[] = {
-      {false, kL1Size, kL2Size, 0, kL1Size, kL2Size, 0},
-      {true, 0, 0, kCustomSize, 0, 0, kCustomSize},
-  };
-  for (const BufferSizeCase& test_case : buffer_cases) {
-    SCOPED_TRACE(test_case.use_custom_cache_size ? "custom" : "standard");
-    BenchmarkConfig config;
-    config.use_custom_cache_size = test_case.use_custom_cache_size;
-    config.l1_cache_size = test_case.l1_cache_size;
-    config.l2_cache_size = test_case.l2_cache_size;
-    config.custom_cache_size_bytes = test_case.custom_cache_size;
-    calculate_buffer_sizes(config);
-    EXPECT_EQ(config.l1_buffer_size, test_case.expected_l1_buffer_size);
-    EXPECT_EQ(config.l2_buffer_size, test_case.expected_l2_buffer_size);
-    EXPECT_EQ(config.custom_buffer_size, test_case.expected_custom_buffer_size);
-  }
-
-  struct AccessCountCase {
-    unsigned long buffer_size_mb;
-    size_t expected_accesses;
-  };
-  const AccessCountCase access_cases[] = {
-      {256, Constants::BASE_LATENCY_ACCESSES / 2},
-      {Constants::DEFAULT_BUFFER_SIZE_MB, Constants::BASE_LATENCY_ACCESSES},
-      {1024, Constants::BASE_LATENCY_ACCESSES * 2},
-  };
-  for (const AccessCountCase& test_case : access_cases) {
-    SCOPED_TRACE(test_case.buffer_size_mb);
-    BenchmarkConfig config;
-    config.buffer_size_mb = test_case.buffer_size_mb;
-    calculate_access_counts(config);
-    EXPECT_EQ(config.lat_num_accesses, test_case.expected_accesses);
-  }
-}
-
 TEST(ConfigTest, ValidateAnalyzeTlbWorksWithZeroBufferSize) {
   BenchmarkConfig config;
   config.analyze_tlb = true;

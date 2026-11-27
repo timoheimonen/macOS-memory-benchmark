@@ -73,7 +73,6 @@ const std::string& reason_sweep_empty_value();
 std::string reason_unsupported_sweep_parameter(const std::string& parameter);
 std::string reason_unsupported_core_to_core_sweep_parameter(const std::string& parameter);
 std::string error_buffer_size_calculation(unsigned long size_mb);
-std::string error_buffer_size_too_small(size_t size_bytes);
 std::string error_cache_size_invalid(long long min_kb, long long max_kb, long long max_mb);
 std::string error_iterations_invalid(long long value, long long min_val, long long max_val);
 std::string error_buffersize_invalid(long long value, unsigned long max_val);
@@ -107,7 +106,6 @@ std::string error_madvise_failed(const std::string& buffer_name);
 std::string error_munmap_failed();
 std::string error_sysctlbyname_failed(const std::string& operation, const std::string& key);
 std::string error_mach_timebase_info_failed(const std::string& error_details);
-std::string error_benchmark_loop(int loop, const std::string& error);
 std::string error_file_write_failed(const std::string& file_path, const std::string& error_details);
 std::string error_json_stdout_write_failed(const std::string& error_details);
 const std::string& json_stdout_reason_stream_unavailable();
@@ -120,33 +118,13 @@ std::string error_command_execution_exception(const std::string& command_name,
                                               const std::string& error_details);
 std::string error_file_permission_denied(const std::string& file_path);
 std::string error_file_directory_creation_failed(const std::string& dir_path, const std::string& error_details);
-std::string error_stride_too_small();
-std::string error_indices_empty();
-std::string error_index_out_of_bounds(size_t index, size_t index_value, size_t buffer_size);
-std::string error_index_not_aligned(size_t index, size_t index_value);
-std::string error_buffer_too_small_strided(size_t min_bytes);
 std::string error_buffer_size_zero(const std::string& buffer_name);
-const std::string& error_main_buffer_size_zero();
-const std::string& error_buffer_size_overflow_calculation();
-const std::string& error_total_memory_overflow();
-std::string error_total_memory_exceeds_limit(unsigned long total_mb, unsigned long max_mb);
-const std::string& error_main_buffers_not_allocated();
 const std::string& error_buffer_pointer_null_latency_chain();
 const std::string& error_stride_zero_latency_chain();
 std::string error_buffer_stride_invalid_latency_chain(size_t num_pointers, size_t buffer_size, size_t stride);
 const std::string& error_buffer_too_small_for_pointers();
 std::string error_offset_exceeds_bounds(size_t offset, size_t max_offset);
 std::string error_next_pointer_offset_exceeds_bounds(size_t offset, size_t max_offset);
-const std::string& error_source_buffer_null();
-const std::string& error_destination_buffer_null();
-const std::string& error_buffer_size_zero_generic();
-const std::string& error_calculated_custom_buffer_size_zero();
-const std::string& error_l1_cache_size_overflow();
-const std::string& error_l2_cache_size_overflow();
-const std::string& error_calculated_l1_buffer_size_zero();
-const std::string& error_calculated_l2_buffer_size_zero();
-const std::string& error_latency_access_count_overflow();
-const std::string& error_latency_access_count_negative();
 std::string error_mutually_exclusive_modes(const std::string& mode1, const std::string& mode2);
 const std::string& error_gpu_bandwidth_must_be_used_alone();
 std::string error_gpu_buffer_size_below_minimum(unsigned long requested_mb,
@@ -184,12 +162,7 @@ std::string error_sweep_nested_run_exception(const std::string& error_details);
 
 // --- Warning Messages ---
 const std::string& warning_prefix();
-const std::string& warning_cannot_get_memory();
-std::string warning_buffer_size_exceeds_limit(unsigned long requested_mb, unsigned long limit_mb);
 std::string warning_qos_failed(int code);
-std::string warning_qos_failed_worker_thread(int code);
-std::string warning_qos_failed_benchmark_worker(const std::string& worker_name,
-                                                int code);
 std::string warning_madvise_random_failed(const std::string& buffer_name, const std::string& error_msg);
 std::string warning_tlb_mlock_failed(int error_code,
                                      const std::string& error_message);
@@ -201,15 +174,9 @@ const std::string& warning_l1_cache_size_detection_failed();
 const std::string& warning_l2_cache_size_detection_failed_m1();
 const std::string& warning_l2_cache_size_detection_failed_m2_m3_m4_m5();
 const std::string& warning_l2_cache_size_detection_failed_generic();
-std::string warning_threads_capped(int requested, int max_cores);
 std::string warning_benchmark_high_cv(const std::string& metric_name,
                                       double cv_pct,
                                       double threshold_pct);
-
-// --- Info Messages ---
-std::string info_setting_max_fallback(unsigned long max_mb);
-std::string info_calculated_max_less_than_min(unsigned long max_mb, unsigned long min_mb);
-std::string info_custom_cache_rounded_up(unsigned long original_kb, unsigned long rounded_kb);
 
 // --- Main Program Messages ---
 std::string msg_done_total_time(double total_time_sec);
@@ -467,31 +434,8 @@ std::string usage_example(const std::string& prog_name);
 std::string config_header(const std::string& version);
 std::string config_copyright();
 std::string config_license();
-std::string config_buffer_size(double buffer_size_mib, unsigned long buffer_size_mb);
-std::string config_total_allocation(double total_mib);
-std::string config_iterations(int iterations);
-std::string config_loop_count(int loop_count);
-std::string config_non_cacheable(bool use_non_cacheable);
-std::string config_latency_stride(size_t stride_bytes);
-std::string config_latency_chain_mode(const std::string& mode_name);
-std::string config_latency_tlb_locality(size_t locality_bytes);
-std::string config_processor_name(const std::string& cpu_name);
-std::string config_processor_name_error();
-std::string config_performance_cores(int perf_cores);
-std::string config_efficiency_cores(int eff_cores);
-std::string config_total_cores(int num_threads);
-std::string config_benchmark_threads(int num_threads);
-
-// --- Cache Info Messages ---
-std::string cache_info_header();
-std::string cache_size_custom(size_t size_bytes);
-std::string cache_size_custom_disabled();
-std::string cache_size_l1(size_t size_bytes);
-std::string cache_size_l2(size_t size_bytes);
 
 // --- Statistics Messages ---
-std::string statistics_header(int loop_count);
-std::string statistics_header(int requested_loop_count, size_t measured_loop_count);
 std::string statistics_average(double value, int precision = 3);
 std::string statistics_median_p50(double value, int precision = 3);
 std::string statistics_p90(double value, int precision = 3);
@@ -502,11 +446,7 @@ std::string statistics_min(double value, int precision = 3);
 std::string statistics_max(double value, int precision = 3);
 std::string statistics_coefficient_of_variation(double value, int precision = 1);
 std::string statistics_median_absolute_deviation(double value, int precision = 3);
-std::string statistics_cache_read();
-std::string statistics_cache_write();
-std::string statistics_cache_copy();
 std::string statistics_median_p50_from_samples(double value, size_t sample_count, int precision = 2);
-std::string statistics_footer();
 
 } // namespace Messages
 

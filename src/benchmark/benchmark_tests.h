@@ -19,8 +19,7 @@
  * @author Timo Heimonen <timo.heimonen@proton.me>
  * @date 2025
  *
- * This header provides functions to execute various memory benchmark tests
- * including read, write, copy, and latency measurements.
+ * This header provides functions to execute latency benchmark measurements.
  */
 #ifndef BENCHMARK_TESTS_H
 #define BENCHMARK_TESTS_H
@@ -39,29 +38,6 @@ struct LatencyMeasurementTestHooks {
 };
 
 // --- Benchmark Test Functions ---
-
-/**
- * @brief Run write benchmark test
- * @param buffer Pointer to buffer to write to
- * @param size Size of buffer in bytes
- * @param iterations Number of iterations to run
- * @param num_threads Number of threads to use
- * @param timer Reference to high-resolution timer
- * @return Total elapsed time in seconds
- */
-double run_write_test(void* buffer, size_t size, int iterations, int num_threads, HighResTimer& timer);
-
-/**
- * @brief Run copy benchmark test
- * @param dst Pointer to destination buffer
- * @param src Pointer to source buffer
- * @param size Size of buffers in bytes
- * @param iterations Number of iterations to run
- * @param num_threads Number of threads to use
- * @param timer Reference to high-resolution timer
- * @return Total elapsed time in seconds
- */
-double run_copy_test(void* dst, void* src, size_t size, int iterations, int num_threads, HighResTimer& timer);
 
 /**
  * @brief Run latency benchmark test

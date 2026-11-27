@@ -128,12 +128,6 @@ std::string error_buffer_size_calculation(unsigned long size_mb) {
   return oss.str();
 }
 
-std::string error_buffer_size_too_small(size_t size_bytes) {
-  std::ostringstream oss;
-  oss << "Final buffer size (" << size_bytes << " bytes) is too small.";
-  return oss.str();
-}
-
 std::string error_cache_size_invalid(long long min_kb, long long max_kb, long long max_mb) {
   std::ostringstream oss;
   oss << "cache-size invalid (must be between " << min_kb << " KB and " << max_kb 
@@ -311,12 +305,6 @@ std::string error_mach_timebase_info_failed(const std::string& error_details) {
   return "mach_timebase_info failed: " + error_details;
 }
 
-std::string error_benchmark_loop(int loop, const std::string& error) {
-  std::ostringstream oss;
-  oss << "Error during benchmark loop " << loop << ": " << error;
-  return oss.str();
-}
-
 std::string error_file_write_failed(const std::string& file_path, const std::string& error_details) {
   return "Failed to write file \"" + file_path + "\": " + error_details;
 }
@@ -372,60 +360,8 @@ std::string error_file_directory_creation_failed(const std::string& dir_path, co
   return "Failed to create directory \"" + dir_path + "\": " + error_details;
 }
 
-std::string error_stride_too_small() {
-  return "stride must be >= 32 bytes";
-}
-
-std::string error_indices_empty() {
-  return "indices vector is empty";
-}
-
-std::string error_index_out_of_bounds(size_t index, size_t index_value, size_t buffer_size) {
-  std::ostringstream oss;
-  oss << "index " << index << " (" << index_value << ") exceeds buffer size " << buffer_size;
-  return oss.str();
-}
-
-std::string error_index_not_aligned(size_t index, size_t index_value) {
-  std::ostringstream oss;
-  oss << "index " << index << " (" << index_value << ") is not 32-byte aligned";
-  return oss.str();
-}
-
-std::string error_buffer_too_small_strided(size_t min_bytes) {
-  std::ostringstream oss;
-  oss << "Buffer too small for strided access (minimum " << min_bytes << " bytes)";
-  return oss.str();
-}
-
 std::string error_buffer_size_zero(const std::string& buffer_name) {
   return "Buffer size is zero for " + buffer_name;
-}
-
-const std::string& error_main_buffer_size_zero() {
-  static const std::string msg = "Main buffer size is zero";
-  return msg;
-}
-
-const std::string& error_buffer_size_overflow_calculation() {
-  static const std::string msg = "Buffer size too large, would overflow when calculating total memory";
-  return msg;
-}
-
-const std::string& error_total_memory_overflow() {
-  static const std::string msg = "Total memory requirement would overflow";
-  return msg;
-}
-
-std::string error_total_memory_exceeds_limit(unsigned long total_mb, unsigned long max_mb) {
-  std::ostringstream oss;
-  oss << "Total memory requirement (" << total_mb << " MB) exceeds maximum allowed (" << max_mb << " MB)";
-  return oss.str();
-}
-
-const std::string& error_main_buffers_not_allocated() {
-  static const std::string msg = "Main buffers not allocated";
-  return msg;
 }
 
 const std::string& error_buffer_pointer_null_latency_chain() {
@@ -460,56 +396,6 @@ std::string error_next_pointer_offset_exceeds_bounds(size_t offset, size_t max_o
   std::ostringstream oss;
   oss << "Next pointer offset exceeds buffer bounds (offset=" << offset << ", max=" << max_offset << ")";
   return oss.str();
-}
-
-const std::string& error_source_buffer_null() {
-  static const std::string msg = "Source buffer pointer is null";
-  return msg;
-}
-
-const std::string& error_destination_buffer_null() {
-  static const std::string msg = "Destination buffer pointer is null";
-  return msg;
-}
-
-const std::string& error_buffer_size_zero_generic() {
-  static const std::string msg = "Buffer size is zero";
-  return msg;
-}
-
-const std::string& error_calculated_custom_buffer_size_zero() {
-  static const std::string msg = "Calculated custom buffer size is zero";
-  return msg;
-}
-
-const std::string& error_l1_cache_size_overflow() {
-  static const std::string msg = "L1 cache size too large, would overflow when calculating buffer size";
-  return msg;
-}
-
-const std::string& error_l2_cache_size_overflow() {
-  static const std::string msg = "L2 cache size too large, would overflow when calculating buffer size";
-  return msg;
-}
-
-const std::string& error_calculated_l1_buffer_size_zero() {
-  static const std::string msg = "Calculated L1 buffer size is zero";
-  return msg;
-}
-
-const std::string& error_calculated_l2_buffer_size_zero() {
-  static const std::string msg = "Calculated L2 buffer size is zero";
-  return msg;
-}
-
-const std::string& error_latency_access_count_overflow() {
-  static const std::string msg = "Calculated latency access count would overflow";
-  return msg;
-}
-
-const std::string& error_latency_access_count_negative() {
-  static const std::string msg = "Calculated latency access count is negative";
-  return msg;
 }
 
 std::string error_mutually_exclusive_modes(const std::string& mode1, const std::string& mode2) {
